@@ -5,7 +5,7 @@
 ETH liquidation map estimator (single-file + SQLite)
 
 功能：
-1. 采集 Binance / Bybit 的 ETHUSDT 实时清算、标记价格、OI
+1. 采集 Binance / Bybit / OKX 的 ETHUSDT 实时清算、标记价格、OI
 2. 落库 SQLite
 3. 计算：
    - 已发生清算统计（1m / 5m / 15m）
@@ -25,6 +25,8 @@ ETH liquidation map estimator (single-file + SQLite)
     DB_PATH=liqmap.db
     REPORT_INTERVAL=5
     RETENTION_MINUTES=240
+    OKX_REST_BASE=https://www.okx.com
+    OKX_WS_PUBLIC=wss://ws.okx.com:8443/ws/v5/public
 """
 
 import os
@@ -38,6 +40,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Optional, Literal, Dict, List, Tuple
 from collections import defaultdict
+import unicodedata
 
 import aiohttp
 import websockets
@@ -55,9 +58,12 @@ LONGEST_BAR_BUCKET = float(os.getenv("LONGEST_BAR_BUCKET", "5"))  # 单个价格
 PRINT_TOP_N_EVENTS = int(os.getenv("PRINT_TOP_N_EVENTS", "8"))
 
 BINANCE_WS_MARK = f"wss://fstream.binance.com/ws/{SYMBOL.lower()}@markPrice@1s"
-BINANCE_WS_FORCE = "wss://fstream.binance.com/ws/!forceOrder@arr"
+BINANCE_WS_FORCE = f"wss://fstream.binance.com/ws/{SYMBOL.lower()}@forceOrder"
 BINANCE_REST = "https://fapi.binance.com"
 BYBIT_WS = "wss://stream.bybit.com/v5/public/linear"
+OKX_REST_BASE = os.getenv("OKX_REST_BASE", "https://www.okx.com").rstrip("/")
+OKX_WS_PUBLIC = os.getenv("OKX_WS_PUBLIC", "wss://ws.okx.com:8443/ws/v5/public")
+OKX_INST_ID = os.getenv("OKX_INST_ID", "ETH-USDT-SWAP")
 
 LEVERAGE_BUCKETS = [
     (5, 0.20),
@@ -104,6 +110,71 @@ def fmt_price(v: float) -> str:
 
 def utc_ts_str(ms: int) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ms / 1000))
+
+def display_width(s) -> int:
+    s = str(s)
+    width = 0
+    for ch in s:
+        width += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return width
+
+def pad_cell(value, width: int, align: str = "left") -> str:
+    s = str(value)
+    pad = max(width - display_width(s), 0)
+    if align == "right":
+        return " " * pad + s
+    if align == "center":
+        left = pad // 2
+        right = pad - left
+        return " " * left + s + " " * right
+    return s + " " * pad
+
+def section_width(title: str, minimum: int = 60) -> int:
+    return max(display_width(title) + 4, minimum)
+
+def render_section_title(title: str, minimum: int = 60) -> str:
+    inner = section_width(title, minimum) - 2
+    return "\n".join([
+        "╔" + "═" * inner + "╗",
+        "║ " + pad_cell(title, inner - 2, "left") + " ║",
+        "╚" + "═" * inner + "╝",
+    ])
+
+def render_table(headers: List[str], rows: List[List[str]], aligns: Optional[List[str]] = None) -> str:
+    if aligns is None:
+        aligns = ["left"] * len(headers)
+
+    widths = []
+    for i, header in enumerate(headers):
+        max_width = display_width(header)
+        for row in rows:
+            if i < len(row):
+                max_width = max(max_width, display_width(row[i]))
+        widths.append(max_width)
+
+    top = "┌" + "┬".join("─" * (w + 2) for w in widths) + "┐"
+    sep = "├" + "┼".join("─" * (w + 2) for w in widths) + "┤"
+    bottom = "└" + "┴".join("─" * (w + 2) for w in widths) + "┘"
+
+    lines = [top]
+    header_line = "│ " + " │ ".join(
+        pad_cell(headers[i], widths[i], "center") for i in range(len(headers))
+    ) + " │"
+    lines.append(header_line)
+    lines.append(sep)
+
+    for row in rows:
+        line = "│ " + " │ ".join(
+            pad_cell(row[i] if i < len(row) else "", widths[i], aligns[i])
+            for i in range(len(headers))
+        ) + " │"
+        lines.append(line)
+
+    lines.append(bottom)
+    return "\n".join(lines)
+
+def print_subtitle(title: str):
+    print(f"\n▸ {title}")
 
 # =========================
 # Data classes
@@ -213,7 +284,10 @@ class SQLiteStore:
         INSERT INTO market_state(exchange, symbol, mark_price, oi_qty, oi_value_usd, funding_rate, updated_ts)
         VALUES(?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(exchange, symbol) DO UPDATE SET
-            mark_price=excluded.mark_price,
+            mark_price=CASE
+                WHEN excluded.mark_price IS NULL OR excluded.mark_price = 0 THEN market_state.mark_price
+                ELSE excluded.mark_price
+            END,
             oi_qty=COALESCE(excluded.oi_qty, market_state.oi_qty),
             oi_value_usd=COALESCE(excluded.oi_value_usd, market_state.oi_value_usd),
             funding_rate=COALESCE(excluded.funding_rate, market_state.funding_rate),
@@ -289,6 +363,28 @@ class SQLiteStore:
                 event_ts=row["event_ts"],
             ))
         return out
+
+    def get_event_diag(self, symbol: str) -> dict:
+        total = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM liquidation_events WHERE symbol=?",
+            (symbol,)
+        ).fetchone()["c"]
+        row = self.conn.execute("""
+        SELECT exchange, side, price, qty, notional_usd, event_ts
+        FROM liquidation_events
+        WHERE symbol=?
+        ORDER BY event_ts DESC
+        LIMIT 1
+        """, (symbol,)).fetchone()
+        return {
+            "total": int(total or 0),
+            "last_exchange": row["exchange"] if row else None,
+            "last_side": row["side"] if row else None,
+            "last_price": row["price"] if row else None,
+            "last_qty": row["qty"] if row else None,
+            "last_notional_usd": row["notional_usd"] if row else None,
+            "last_event_ts": row["event_ts"] if row else None,
+        }
 
     def insert_band_report(self, report_ts: int, symbol: str, current_price: float, rows: List[dict]):
         self.conn.executemany("""
@@ -434,6 +530,12 @@ def build_band_rows(current_price: float, up: Dict[int, float], down: Dict[int, 
         })
     return rows
 
+
+def okx_contract_usd_per_contract(state: Optional[MarketState], fallback_price: float = 0.0) -> float:
+    if state and state.oi_qty and state.oi_qty > 0 and state.oi_value_usd and state.oi_value_usd > 0:
+        return state.oi_value_usd / state.oi_qty
+    return fallback_price if fallback_price > 0 else 0.0
+
 def realized_summary(events: List[LiquidationEvent]) -> dict:
     agg = defaultdict(float)
     for e in events:
@@ -453,61 +555,114 @@ def realized_summary(events: List[LiquidationEvent]) -> dict:
 # =========================
 
 def print_divider(title: str = ""):
-    line = "=" * 96
     if title:
-        print(f"\n{line}\n{title}\n{line}")
+        print()
+        print(render_section_title(title))
     else:
-        print(f"\n{line}")
+        print()
 
 def print_market_states(states: List[MarketState]):
     print_divider("市场状态")
-    print(f"{'交易所':<10} {'标记价':>12} {'OI数量':>16} {'OI价值USD':>16} {'Funding':>12} {'更新时间':>20}")
+    headers = ["交易所", "标记价", "OI数量", "OI价值USD", "Funding", "更新时间"]
+    rows = []
     for s in states:
-        print(
-            f"{s.exchange:<10} "
-            f"{fmt_price(s.mark_price):>12} "
-            f"{(f'{s.oi_qty:.4f}' if s.oi_qty is not None else '-'):>16} "
-            f"{fmt_usd(s.oi_value_usd) if s.oi_value_usd is not None else '-':>16} "
-            f"{(f'{s.funding_rate:.6f}' if s.funding_rate is not None else '-'):>12} "
-            f"{utc_ts_str(s.updated_ts):>20}"
-        )
+        rows.append([
+            s.exchange,
+            fmt_price(s.mark_price),
+            f"{s.oi_qty:.4f}" if s.oi_qty is not None else "-",
+            fmt_usd(s.oi_value_usd) if s.oi_value_usd is not None else "-",
+            f"{s.funding_rate:.6f}" if s.funding_rate is not None else "-",
+            utc_ts_str(s.updated_ts),
+        ])
+    print(render_table(headers, rows, aligns=["left", "right", "right", "right", "right", "right"]))
 
 def print_realized_block(title: str, events: List[LiquidationEvent]):
     print_divider(title)
     summary = realized_summary(events)
+
     if not summary["rows"]:
-        print("暂无数据")
+        print(render_table(["状态"], [["暂无数据"]], aligns=["center"]))
         return
 
-    print(f"{'交易所':<10} {'被清算方向':<10} {'名义价值':>16}")
+    print_subtitle("汇总")
+    summary_rows = []
     for row in summary["rows"]:
-        print(f"{row['exchange']:<10} {row['side']:<10} {fmt_usd(row['notional_usd']):>16}")
+        summary_rows.append([
+            row["exchange"],
+            row["side"],
+            fmt_usd(row["notional_usd"]),
+        ])
+    print(render_table(
+        ["交易所", "被清算方向", "名义价值"],
+        summary_rows,
+        aligns=["left", "left", "right"],
+    ))
 
-    print("\n最近大额事件：")
-    print(f"{'时间':<20} {'交易所':<10} {'方向':<8} {'价格':>12} {'数量':>14} {'名义价值':>16}")
+    print_subtitle("最近大额事件")
+    detail_rows = []
     for e in sorted(events, key=lambda x: x.notional_usd, reverse=True)[:PRINT_TOP_N_EVENTS]:
-        print(
-            f"{utc_ts_str(e.event_ts):<20} {e.exchange:<10} {e.side:<8} "
-            f"{fmt_price(e.price):>12} {e.qty:>14.4f} {fmt_usd(e.notional_usd):>16}"
-        )
+        detail_rows.append([
+            utc_ts_str(e.event_ts),
+            e.exchange,
+            e.side,
+            fmt_price(e.price),
+            f"{e.qty:.4f}",
+            fmt_usd(e.notional_usd),
+        ])
+    print(render_table(
+        ["时间", "交易所", "方向", "价格", "数量", "名义价值"],
+        detail_rows,
+        aligns=["left", "left", "left", "right", "right", "right"],
+    ))
 
 def print_band_table(current_price: float, rows: List[dict], longest_short: Tuple[Optional[float], float], longest_long: Tuple[Optional[float], float]):
     print_divider(f"{SYMBOL} 清算热区速报  当前价={fmt_price(current_price)}")
-    print(f"{'点数阈值':<10} {'上方空单价':>12} {'上方空单规模':>18} {'下方多单价':>12} {'下方多单规模':>18}")
+
+    band_rows = []
     for row in rows:
-        print(
-            f"{str(row['band'])+'点内':<10} "
-            f"{fmt_price(row['up_price']):>12} "
-            f"{fmt_usd(row['up_notional_usd']):>18} "
-            f"{fmt_price(row['down_price']):>12} "
-            f"{fmt_usd(row['down_notional_usd']):>18}"
-        )
+        band_rows.append([
+            f"{row['band']}点内",
+            fmt_price(row['up_price']),
+            fmt_usd(row['up_notional_usd']),
+            fmt_price(row['down_price']),
+            fmt_usd(row['down_notional_usd']),
+        ])
+
+    print(render_table(
+        ["点数阈值", "上方空单价", "上方空单规模", "下方多单价", "下方多单规模"],
+        band_rows,
+        aligns=["left", "right", "right", "right", "right"],
+    ))
 
     short_price, short_notional = longest_short
     long_price, long_notional = longest_long
-    print("\n最长柱：")
-    print(f"  上方空单: 价格={fmt_price(short_price) if short_price is not None else '-'}  规模={fmt_usd(short_notional)}")
-    print(f"  下方多单: 价格={fmt_price(long_price) if long_price is not None else '-'}  规模={fmt_usd(long_notional)}")
+
+    print_subtitle("最长柱")
+    print(render_table(
+        ["方向", "价格", "规模"],
+        [
+            ["上方空单", fmt_price(short_price) if short_price is not None else "-", fmt_usd(short_notional)],
+            ["下方多单", fmt_price(long_price) if long_price is not None else "-", fmt_usd(long_notional)],
+        ],
+        aligns=["left", "right", "right"],
+    ))
+
+
+def print_event_diag(diag: dict):
+    print_divider("清算流诊断")
+    print(render_table(
+        ["指标", "值"],
+        [
+            ["累计事件数", str(diag.get("total", 0))],
+            ["最近事件交易所", diag.get("last_exchange") or "-"],
+            ["最近事件方向", diag.get("last_side") or "-"],
+            ["最近事件价格", fmt_price(diag.get("last_price")) if diag.get("last_price") is not None else "-"],
+            ["最近事件数量", f"{diag.get('last_qty'):.4f}" if diag.get("last_qty") is not None else "-"],
+            ["最近事件名义价值", fmt_usd(diag.get("last_notional_usd")) if diag.get("last_notional_usd") is not None else "-"],
+            ["最近事件时间", utc_ts_str(diag.get("last_event_ts")) if diag.get("last_event_ts") is not None else "-"],
+        ],
+        aligns=["left", "left"],
+    ))
 
 # =========================
 # Normalizers
@@ -561,6 +716,49 @@ def normalize_bybit_all_liq(msg: dict, mark_price: float) -> List[LiquidationEve
         ))
     return out
 
+
+def normalize_okx_liquidation_orders(msg: dict, market_state: Optional[MarketState]) -> List[LiquidationEvent]:
+    data = msg.get("data", [])
+    rows = data if isinstance(data, list) else [data]
+    out = []
+
+    mark_price = market_state.mark_price if market_state else 0.0
+    contract_usd = okx_contract_usd_per_contract(market_state, mark_price)
+
+    for row in rows:
+        if row.get("instId") != OKX_INST_ID:
+            continue
+
+        details = row.get("details", [])
+        detail_rows = details if isinstance(details, list) else [details]
+        for detail in detail_rows:
+            pos_side = str(detail.get("posSide", "")).lower()
+            raw_side = str(detail.get("side", "")).lower()
+
+            if pos_side in ("long", "short"):
+                side = pos_side
+            else:
+                side = "short" if raw_side == "buy" else "long"
+
+            qty = safe_float(detail.get("sz"))
+            price = safe_float(detail.get("bkPx"), mark_price)
+            per_contract_usd = contract_usd if contract_usd > 0 else price
+            notional_usd = qty * per_contract_usd
+
+            out.append(LiquidationEvent(
+                exchange="okx",
+                symbol=SYMBOL,
+                side=side,
+                raw_side=f"{pos_side}:{raw_side}",
+                qty=qty,
+                price=price,
+                mark_price=mark_price if mark_price > 0 else price,
+                notional_usd=notional_usd,
+                event_ts=int(safe_float(detail.get("ts"), now_ms())),
+            ))
+
+    return out
+
 # =========================
 # Async tasks
 # =========================
@@ -599,8 +797,6 @@ async def run_binance_force_ws(store: SQLiteStore, stop_event: asyncio.Event):
                         break
                     msg = json.loads(raw)
                     if msg.get("e") != "forceOrder":
-                        continue
-                    if msg.get("o", {}).get("s") != SYMBOL:
                         continue
 
                     s = store.get_market_state("binance", SYMBOL)
@@ -666,13 +862,20 @@ async def run_bybit_ws(store: SQLiteStore, stop_event: asyncio.Event):
                         row = msg.get("data", {})
                         if isinstance(row, list):
                             row = row[0] if row else {}
+
+                        old = store.get_market_state("bybit", SYMBOL)
+                        old_mark = old.mark_price if old else 0.0
+                        old_oi_qty = old.oi_qty if old else None
+                        old_oi_value = old.oi_value_usd if old else None
+                        old_funding = old.funding_rate if old else None
+
                         state = MarketState(
                             exchange="bybit",
                             symbol=row.get("symbol", SYMBOL),
-                            mark_price=safe_float(row.get("markPrice")),
-                            oi_qty=safe_float(row.get("openInterest"), None),
-                            oi_value_usd=safe_float(row.get("openInterestValue"), None),
-                            funding_rate=safe_float(row.get("fundingRate"), None),
+                            mark_price=safe_float(row.get("markPrice"), old_mark),
+                            oi_qty=safe_float(row.get("openInterest"), old_oi_qty),
+                            oi_value_usd=safe_float(row.get("openInterestValue"), old_oi_value),
+                            funding_rate=safe_float(row.get("fundingRate"), old_funding),
                             updated_ts=int(msg.get("ts", now_ms())),
                         )
                         store.upsert_market_state(state)
@@ -687,6 +890,137 @@ async def run_bybit_ws(store: SQLiteStore, stop_event: asyncio.Event):
         except Exception as e:
             print(f"[bybit] reconnect after error: {e}")
             await asyncio.sleep(2)
+
+
+
+
+async def run_okx_ws(store: SQLiteStore, stop_event: asyncio.Event):
+    while not stop_event.is_set():
+        try:
+            async with websockets.connect(OKX_WS_PUBLIC, ping_interval=20, ping_timeout=20) as ws:
+                print("[okx] connected")
+                sub = {
+                    "op": "subscribe",
+                    "args": [
+                        {"channel": "mark-price", "instId": OKX_INST_ID},
+                        {"channel": "tickers", "instId": OKX_INST_ID},
+                        {"channel": "liquidation-orders", "instType": "SWAP"},
+                    ],
+                }
+                await ws.send(json.dumps(sub))
+
+                async for raw in ws:
+                    if stop_event.is_set():
+                        break
+
+                    if raw == "pong":
+                        continue
+
+                    msg = json.loads(raw)
+
+                    if msg.get("event") in {"subscribe", "unsubscribe"}:
+                        continue
+                    if msg.get("event") == "error":
+                        print(f"[okx] ws error: {msg}")
+                        continue
+
+                    arg = msg.get("arg", {})
+                    channel = arg.get("channel")
+                    data = msg.get("data", [])
+                    rows = data if isinstance(data, list) else [data]
+                    if not rows:
+                        continue
+
+                    if channel == "liquidation-orders":
+                        state = store.get_market_state("okx", SYMBOL)
+                        events = normalize_okx_liquidation_orders(msg, state)
+                        for event in events:
+                            store.insert_liquidation_event(event)
+                        continue
+
+                    old = store.get_market_state("okx", SYMBOL)
+                    old_mark = old.mark_price if old else 0.0
+                    old_oi_qty = old.oi_qty if old else None
+                    old_oi_value = old.oi_value_usd if old else None
+                    old_funding = old.funding_rate if old else None
+
+                    for row in rows:
+                        mark_price = old_mark
+                        if channel == "mark-price":
+                            mark_price = safe_float(row.get("markPx"), old_mark)
+                        elif channel == "tickers":
+                            mark_price = safe_float(
+                                row.get("markPx"),
+                                safe_float(row.get("last"), old_mark)
+                            )
+
+                        state = MarketState(
+                            exchange="okx",
+                            symbol=SYMBOL,
+                            mark_price=mark_price,
+                            oi_qty=old_oi_qty,
+                            oi_value_usd=old_oi_value,
+                            funding_rate=old_funding,
+                            updated_ts=int(safe_float(row.get("ts"), msg.get("ts", now_ms()))),
+                        )
+                        store.upsert_market_state(state)
+        except Exception as e:
+            print(f"[okx] reconnect after error: {e}")
+            await asyncio.sleep(2)
+
+
+async def poll_okx_public_metrics(store: SQLiteStore, stop_event: asyncio.Event, interval: int = 10):
+    async with aiohttp.ClientSession() as session:
+        while not stop_event.is_set():
+            try:
+                old = store.get_market_state("okx", SYMBOL)
+                mark_price = old.mark_price if old else 0.0
+                old_oi_qty = old.oi_qty if old else None
+                old_oi_value = old.oi_value_usd if old else None
+                old_funding = old.funding_rate if old else None
+
+                oi_qty = old_oi_qty
+                oi_value_usd = old_oi_value
+                funding_rate = old_funding
+                updated_ts = now_ms()
+
+                oi_url = f"{OKX_REST_BASE}/api/v5/public/open-interest"
+                oi_params = {"instType": "SWAP", "instId": OKX_INST_ID}
+                async with session.get(oi_url, params=oi_params, timeout=10) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+                oi_rows = data.get("data", []) if isinstance(data, dict) else []
+                if oi_rows:
+                    row = oi_rows[0]
+                    oi_qty = safe_float(row.get("oi"), old_oi_qty)
+                    oi_value_usd = safe_float(row.get("oiUsd"), old_oi_value)
+                    updated_ts = int(safe_float(row.get("ts"), updated_ts))
+
+                fr_url = f"{OKX_REST_BASE}/api/v5/public/funding-rate"
+                fr_params = {"instId": OKX_INST_ID}
+                async with session.get(fr_url, params=fr_params, timeout=10) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+                fr_rows = data.get("data", []) if isinstance(data, dict) else []
+                if fr_rows:
+                    fr_row = fr_rows[0]
+                    funding_rate = safe_float(fr_row.get("fundingRate"), old_funding)
+                    updated_ts = int(safe_float(fr_row.get("ts"), updated_ts))
+
+                state = MarketState(
+                    exchange="okx",
+                    symbol=SYMBOL,
+                    mark_price=mark_price,
+                    oi_qty=oi_qty,
+                    oi_value_usd=oi_value_usd,
+                    funding_rate=funding_rate,
+                    updated_ts=updated_ts,
+                )
+                store.upsert_market_state(state)
+            except Exception as e:
+                print(f"[okx-rest] error: {e}")
+
+            await asyncio.sleep(interval)
 
 async def report_loop(store: SQLiteStore, stop_event: asyncio.Event):
     while not stop_event.is_set():
@@ -730,13 +1064,21 @@ async def report_loop(store: SQLiteStore, stop_event: asyncio.Event):
 
             print_market_states(states)
             print_band_table(current_price, band_rows, (short_price, short_notional), (long_price, long_notional))
+            print_event_diag(store.get_event_diag(SYMBOL))
             print_realized_block("已发生清算 - 1分钟", events_1m)
             print_realized_block("已发生清算 - 5分钟", events_5m)
             print_realized_block("已发生清算 - 15分钟", events_15m)
 
             print_divider("SQLite")
-            print(f"DB Path: {DB_PATH}")
-            print("表：market_state / liquidation_events / band_reports / longest_bar_reports")
+            print(render_table(
+                ["项目", "值"],
+                [
+                    ["DB Path", DB_PATH],
+                    ["数据表", "market_state / liquidation_events / band_reports / longest_bar_reports"],
+                    ["OKX合约", OKX_INST_ID],
+                ],
+                aligns=["left", "left"],
+            ))
 
         except Exception as e:
             print(f"[report] error: {e}")
@@ -767,6 +1109,8 @@ async def main():
         asyncio.create_task(run_binance_force_ws(store, stop_event)),
         asyncio.create_task(poll_binance_open_interest(store, stop_event)),
         asyncio.create_task(run_bybit_ws(store, stop_event)),
+        asyncio.create_task(run_okx_ws(store, stop_event)),
+        asyncio.create_task(poll_okx_public_metrics(store, stop_event)),
         asyncio.create_task(report_loop(store, stop_event)),
     ]
 
