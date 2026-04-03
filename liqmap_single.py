@@ -31,12 +31,15 @@ ETH liquidation map estimator (single-file + SQLite)
 
 import os
 import sys
+import argparse
 import json
 import math
 import time
 import signal
+import contextlib
 import sqlite3
 import asyncio
+import locale
 from dataclasses import dataclass
 from typing import Optional, Literal, Dict, List, Tuple
 from collections import defaultdict
@@ -44,6 +47,9 @@ import unicodedata
 
 import aiohttp
 import websockets
+
+if os.name == "nt":
+    import msvcrt
 
 # =========================
 # Config
@@ -56,6 +62,8 @@ RETENTION_MINUTES = int(os.getenv("RETENTION_MINUTES", "240"))  # DB event reten
 BANDS = [10, 20, 30, 40, 50, 60, 80, 100, 150]
 LONGEST_BAR_BUCKET = float(os.getenv("LONGEST_BAR_BUCKET", "5"))  # 单个价格桶宽度
 PRINT_TOP_N_EVENTS = int(os.getenv("PRINT_TOP_N_EVENTS", "8"))
+DEFAULT_HEAT_WINDOW_DAYS = 1
+HEAT_WINDOW_KEYS = {"1": 1, "7": 7, "3": 30}
 
 BINANCE_WS_MARK = f"wss://fstream.binance.com/ws/{SYMBOL.lower()}@markPrice@1s"
 BINANCE_WS_FORCE = f"wss://fstream.binance.com/ws/{SYMBOL.lower()}@forceOrder"
@@ -74,6 +82,8 @@ LEVERAGE_BUCKETS = [
 
 ENTRY_OFFSETS = [-0.03, -0.02, -0.01, 0.00, 0.01, 0.02, 0.03]
 ENTRY_OFFSET_WEIGHTS = [0.08, 0.12, 0.18, 0.24, 0.18, 0.12, 0.08]
+
+HEAT_WINDOW_DAYS = DEFAULT_HEAT_WINDOW_DAYS
 
 # =========================
 # Helpers
@@ -110,6 +120,20 @@ def fmt_price(v: float) -> str:
 
 def utc_ts_str(ms: int) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ms / 1000))
+
+def init_utf8_console():
+    os.environ.setdefault("PYTHONUTF8", "1")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    with contextlib.suppress(Exception):
+        if os.name == "nt":
+            os.system("chcp 65001 > NUL")
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is not None and hasattr(stream, "reconfigure"):
+            with contextlib.suppress(Exception):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+    with contextlib.suppress(Exception):
+        locale.setlocale(locale.LC_ALL, "")
 
 def display_width(s) -> int:
     s = str(s)
@@ -407,6 +431,52 @@ class SQLiteStore:
         """, (report_ts, symbol, side, bucket_size, bucket_price, bucket_notional_usd))
         self.conn.commit()
 
+    def get_band_report_snapshot(self, symbol: str, lookback_days: int) -> List[dict]:
+        cutoff = now_ms() - lookback_days * 24 * 60 * 60 * 1000
+        rows = self.conn.execute("""
+        SELECT band,
+               MAX(report_ts) AS latest_ts,
+               AVG(current_price) AS avg_current_price,
+               AVG(up_notional_usd) AS avg_up_notional_usd,
+               AVG(down_notional_usd) AS avg_down_notional_usd
+        FROM band_reports
+        WHERE symbol=? AND report_ts>=?
+        GROUP BY band
+        ORDER BY band
+        """, (symbol, cutoff)).fetchall()
+        out = []
+        for row in rows:
+            out.append({
+                "band": int(row["band"]),
+                "latest_ts": int(row["latest_ts"] or 0),
+                "current_price": float(row["avg_current_price"] or 0.0),
+                "up_notional_usd": float(row["avg_up_notional_usd"] or 0.0),
+                "down_notional_usd": float(row["avg_down_notional_usd"] or 0.0),
+            })
+        return out
+
+    def get_longest_bar_snapshot(self, symbol: str, lookback_days: int) -> dict:
+        cutoff = now_ms() - lookback_days * 24 * 60 * 60 * 1000
+        rows = self.conn.execute("""
+        SELECT side, bucket_price, AVG(bucket_notional_usd) AS avg_bucket_notional_usd
+        FROM longest_bar_reports
+        WHERE symbol=? AND report_ts>=?
+        GROUP BY side, bucket_price
+        """, (symbol, cutoff)).fetchall()
+        out = {"short": {"price": None, "notional": 0.0}, "long": {"price": None, "notional": 0.0}}
+        best: Dict[str, Dict[str, float]] = {}
+        for row in rows:
+            side = row["side"]
+            bucket_price = float(row["bucket_price"] or 0.0)
+            notional = float(row["avg_bucket_notional_usd"] or 0.0)
+            prev = best.get(side)
+            if prev is None or notional > prev["notional"]:
+                best[side] = {"price": bucket_price, "notional": notional}
+        for side in out:
+            if side in best:
+                out[side] = best[side]
+        return out
+
     def cleanup_old_events(self, retention_minutes: int):
         cutoff = now_ms() - retention_minutes * 60 * 1000
         self.conn.execute("DELETE FROM liquidation_events WHERE event_ts < ?", (cutoff,))
@@ -664,6 +734,44 @@ def print_event_diag(diag: dict):
         aligns=["left", "left"],
     ))
 
+def print_band_snapshot_table(lookback_days: int, rows: List[dict], longest_bar_snapshot: dict):
+    print_divider(f"{SYMBOL} ?????? - {lookback_days}?")
+    if not rows:
+        print(render_table(["??"], [["????????"]], aligns=["center"]))
+        return
+
+    band_rows = []
+    for row in rows:
+        band_rows.append([
+            f"{row['band']}??",
+            fmt_usd(row["up_notional_usd"]),
+            fmt_usd(row["down_notional_usd"]),
+        ])
+    print(render_table(
+        ["????", "??????", "??????"],
+        band_rows,
+        aligns=["left", "right", "right"],
+    ))
+    print_subtitle("?????")
+    print(render_table(
+        ["??", "??", "??"],
+        [
+            ["????", fmt_price(longest_bar_snapshot["short"]["price"]) if longest_bar_snapshot["short"]["price"] is not None else "-", fmt_usd(longest_bar_snapshot["short"]["notional"])],
+            ["????", fmt_price(longest_bar_snapshot["long"]["price"]) if longest_bar_snapshot["long"]["price"] is not None else "-", fmt_usd(longest_bar_snapshot["long"]["notional"])],
+        ],
+        aligns=["left", "right", "right"],
+    ))
+
+
+def current_heat_window_days() -> int:
+    return HEAT_WINDOW_DAYS
+
+
+def set_heat_window_days(value: int):
+    global HEAT_WINDOW_DAYS
+    HEAT_WINDOW_DAYS = value
+
+
 # =========================
 # Normalizers
 # =========================
@@ -765,47 +873,61 @@ def normalize_okx_liquidation_orders(msg: dict, market_state: Optional[MarketSta
 
 async def run_binance_mark_ws(store: SQLiteStore, stop_event: asyncio.Event):
     while not stop_event.is_set():
+        ws = None
         try:
-            async with websockets.connect(BINANCE_WS_MARK, ping_interval=20, ping_timeout=20) as ws:
-                print("[binance-mark] connected")
-                async for raw in ws:
-                    if stop_event.is_set():
-                        break
-                    msg = json.loads(raw)
-                    symbol = msg.get("s")
-                    if symbol != SYMBOL:
-                        continue
-                    state = MarketState(
-                        exchange="binance",
-                        symbol=symbol,
-                        mark_price=safe_float(msg.get("p")),
-                        funding_rate=safe_float(msg.get("r"), None),
-                        updated_ts=int(msg.get("E", now_ms())),
-                    )
-                    store.upsert_market_state(state)
+            ws = await websockets.connect(BINANCE_WS_MARK, ping_interval=20, ping_timeout=20)
+            print("[binance-mark] connected")
+            async for raw in ws:
+                if stop_event.is_set():
+                    break
+                msg = json.loads(raw)
+                symbol = msg.get("s")
+                if symbol != SYMBOL:
+                    continue
+                state = MarketState(
+                    exchange="binance",
+                    symbol=symbol,
+                    mark_price=safe_float(msg.get("p")),
+                    funding_rate=safe_float(msg.get("r"), None),
+                    updated_ts=int(msg.get("E", now_ms())),
+                )
+                store.upsert_market_state(state)
+        except asyncio.CancelledError:
+            break
         except Exception as e:
             print(f"[binance-mark] reconnect after error: {e}")
             await asyncio.sleep(2)
+        finally:
+            if ws is not None:
+                with contextlib.suppress(Exception):
+                    await ws.close()
 
 async def run_binance_force_ws(store: SQLiteStore, stop_event: asyncio.Event):
     while not stop_event.is_set():
+        ws = None
         try:
-            async with websockets.connect(BINANCE_WS_FORCE, ping_interval=20, ping_timeout=20) as ws:
-                print("[binance-force] connected")
-                async for raw in ws:
-                    if stop_event.is_set():
-                        break
-                    msg = json.loads(raw)
-                    if msg.get("e") != "forceOrder":
-                        continue
+            ws = await websockets.connect(BINANCE_WS_FORCE, ping_interval=20, ping_timeout=20)
+            print("[binance-force] connected")
+            async for raw in ws:
+                if stop_event.is_set():
+                    break
+                msg = json.loads(raw)
+                if msg.get("e") != "forceOrder":
+                    continue
 
-                    s = store.get_market_state("binance", SYMBOL)
-                    mark_price = s.mark_price if s else 0.0
-                    event = normalize_binance_force_order(msg, mark_price)
-                    store.insert_liquidation_event(event)
+                s = store.get_market_state("binance", SYMBOL)
+                mark_price = s.mark_price if s else 0.0
+                event = normalize_binance_force_order(msg, mark_price)
+                store.insert_liquidation_event(event)
+        except asyncio.CancelledError:
+            break
         except Exception as e:
             print(f"[binance-force] reconnect after error: {e}")
             await asyncio.sleep(2)
+        finally:
+            if ws is not None:
+                with contextlib.suppress(Exception):
+                    await ws.close()
 
 async def poll_binance_open_interest(store: SQLiteStore, stop_event: asyncio.Event, interval: int = 10):
     async with aiohttp.ClientSession() as session:
@@ -836,137 +958,149 @@ async def poll_binance_open_interest(store: SQLiteStore, stop_event: asyncio.Eve
 
 async def run_bybit_ws(store: SQLiteStore, stop_event: asyncio.Event):
     while not stop_event.is_set():
+        ws = None
         try:
-            async with websockets.connect(BYBIT_WS, ping_interval=20, ping_timeout=20) as ws:
-                print("[bybit] connected")
-                sub = {
-                    "op": "subscribe",
-                    "args": [
-                        f"tickers.{SYMBOL}",
-                        f"allLiquidation.{SYMBOL}",
-                    ],
-                }
-                await ws.send(json.dumps(sub))
+            ws = await websockets.connect(BYBIT_WS, ping_interval=20, ping_timeout=20)
+            print("[bybit] connected")
+            sub = {
+                "op": "subscribe",
+                "args": [
+                    f"tickers.{SYMBOL}",
+                    f"allLiquidation.{SYMBOL}",
+                ],
+            }
+            await ws.send(json.dumps(sub))
+            async for raw in ws:
+                if stop_event.is_set():
+                    break
+                msg = json.loads(raw)
 
-                async for raw in ws:
-                    if stop_event.is_set():
-                        break
-                    msg = json.loads(raw)
+                # 忽略 ack / pong
+                if "op" in msg:
+                    continue
 
-                    # 忽略 ack / pong
-                    if "op" in msg:
-                        continue
+                topic = msg.get("topic", "")
+                if topic == f"tickers.{SYMBOL}":
+                    row = msg.get("data", {})
+                    if isinstance(row, list):
+                        row = row[0] if row else {}
 
-                    topic = msg.get("topic", "")
-                    if topic == f"tickers.{SYMBOL}":
-                        row = msg.get("data", {})
-                        if isinstance(row, list):
-                            row = row[0] if row else {}
+                    old = store.get_market_state("bybit", SYMBOL)
+                    old_mark = old.mark_price if old else 0.0
+                    old_oi_qty = old.oi_qty if old else None
+                    old_oi_value = old.oi_value_usd if old else None
+                    old_funding = old.funding_rate if old else None
 
-                        old = store.get_market_state("bybit", SYMBOL)
-                        old_mark = old.mark_price if old else 0.0
-                        old_oi_qty = old.oi_qty if old else None
-                        old_oi_value = old.oi_value_usd if old else None
-                        old_funding = old.funding_rate if old else None
+                    state = MarketState(
+                        exchange="bybit",
+                        symbol=row.get("symbol", SYMBOL),
+                        mark_price=safe_float(row.get("markPrice"), old_mark),
+                        oi_qty=safe_float(row.get("openInterest"), old_oi_qty),
+                        oi_value_usd=safe_float(row.get("openInterestValue"), old_oi_value),
+                        funding_rate=safe_float(row.get("fundingRate"), old_funding),
+                        updated_ts=int(msg.get("ts", now_ms())),
+                    )
+                    store.upsert_market_state(state)
 
-                        state = MarketState(
-                            exchange="bybit",
-                            symbol=row.get("symbol", SYMBOL),
-                            mark_price=safe_float(row.get("markPrice"), old_mark),
-                            oi_qty=safe_float(row.get("openInterest"), old_oi_qty),
-                            oi_value_usd=safe_float(row.get("openInterestValue"), old_oi_value),
-                            funding_rate=safe_float(row.get("fundingRate"), old_funding),
-                            updated_ts=int(msg.get("ts", now_ms())),
-                        )
-                        store.upsert_market_state(state)
+                elif topic == f"allLiquidation.{SYMBOL}":
+                    s = store.get_market_state("bybit", SYMBOL)
+                    mark_price = s.mark_price if s else 0.0
+                    events = normalize_bybit_all_liq(msg, mark_price)
+                    for event in events:
+                        store.insert_liquidation_event(event)
 
-                    elif topic == f"allLiquidation.{SYMBOL}":
-                        s = store.get_market_state("bybit", SYMBOL)
-                        mark_price = s.mark_price if s else 0.0
-                        events = normalize_bybit_all_liq(msg, mark_price)
-                        for event in events:
-                            store.insert_liquidation_event(event)
-
+        except asyncio.CancelledError:
+            break
         except Exception as e:
             print(f"[bybit] reconnect after error: {e}")
             await asyncio.sleep(2)
+        finally:
+            if ws is not None:
+                with contextlib.suppress(Exception):
+                    await ws.close()
 
 
 
 
 async def run_okx_ws(store: SQLiteStore, stop_event: asyncio.Event):
     while not stop_event.is_set():
+        ws = None
         try:
-            async with websockets.connect(OKX_WS_PUBLIC, ping_interval=20, ping_timeout=20) as ws:
-                print("[okx] connected")
-                sub = {
-                    "op": "subscribe",
-                    "args": [
-                        {"channel": "mark-price", "instId": OKX_INST_ID},
-                        {"channel": "tickers", "instId": OKX_INST_ID},
-                        {"channel": "liquidation-orders", "instType": "SWAP"},
-                    ],
-                }
-                await ws.send(json.dumps(sub))
+            ws = await websockets.connect(OKX_WS_PUBLIC, ping_interval=20, ping_timeout=20)
+            print("[okx] connected")
+            sub = {
+                "op": "subscribe",
+                "args": [
+                    {"channel": "mark-price", "instId": OKX_INST_ID},
+                    {"channel": "tickers", "instId": OKX_INST_ID},
+                    {"channel": "liquidation-orders", "instType": "SWAP"},
+                ],
+            }
+            await ws.send(json.dumps(sub))
 
-                async for raw in ws:
-                    if stop_event.is_set():
-                        break
+            async for raw in ws:
+                if stop_event.is_set():
+                    break
 
-                    if raw == "pong":
-                        continue
+                if raw == "pong":
+                    continue
 
-                    msg = json.loads(raw)
+                msg = json.loads(raw)
 
-                    if msg.get("event") in {"subscribe", "unsubscribe"}:
-                        continue
-                    if msg.get("event") == "error":
-                        print(f"[okx] ws error: {msg}")
-                        continue
+                if msg.get("event") in {"subscribe", "unsubscribe"}:
+                    continue
+                if msg.get("event") == "error":
+                    print(f"[okx] ws error: {msg}")
+                    continue
 
-                    arg = msg.get("arg", {})
-                    channel = arg.get("channel")
-                    data = msg.get("data", [])
-                    rows = data if isinstance(data, list) else [data]
-                    if not rows:
-                        continue
+                arg = msg.get("arg", {})
+                channel = arg.get("channel")
+                data = msg.get("data", [])
+                rows = data if isinstance(data, list) else [data]
+                if not rows:
+                    continue
 
-                    if channel == "liquidation-orders":
-                        state = store.get_market_state("okx", SYMBOL)
-                        events = normalize_okx_liquidation_orders(msg, state)
-                        for event in events:
-                            store.insert_liquidation_event(event)
-                        continue
+                if channel == "liquidation-orders":
+                    state = store.get_market_state("okx", SYMBOL)
+                    events = normalize_okx_liquidation_orders(msg, state)
+                    for event in events:
+                        store.insert_liquidation_event(event)
+                    continue
 
-                    old = store.get_market_state("okx", SYMBOL)
-                    old_mark = old.mark_price if old else 0.0
-                    old_oi_qty = old.oi_qty if old else None
-                    old_oi_value = old.oi_value_usd if old else None
-                    old_funding = old.funding_rate if old else None
+                old = store.get_market_state("okx", SYMBOL)
+                old_mark = old.mark_price if old else 0.0
+                old_oi_qty = old.oi_qty if old else None
+                old_oi_value = old.oi_value_usd if old else None
+                old_funding = old.funding_rate if old else None
 
-                    for row in rows:
-                        mark_price = old_mark
-                        if channel == "mark-price":
-                            mark_price = safe_float(row.get("markPx"), old_mark)
-                        elif channel == "tickers":
-                            mark_price = safe_float(
-                                row.get("markPx"),
-                                safe_float(row.get("last"), old_mark)
-                            )
-
-                        state = MarketState(
-                            exchange="okx",
-                            symbol=SYMBOL,
-                            mark_price=mark_price,
-                            oi_qty=old_oi_qty,
-                            oi_value_usd=old_oi_value,
-                            funding_rate=old_funding,
-                            updated_ts=int(safe_float(row.get("ts"), msg.get("ts", now_ms()))),
+                for row in rows:
+                    mark_price = old_mark
+                    if channel == "mark-price":
+                        mark_price = safe_float(row.get("markPx"), old_mark)
+                    elif channel == "tickers":
+                        mark_price = safe_float(
+                            row.get("markPx"),
+                            safe_float(row.get("last"), old_mark)
                         )
-                        store.upsert_market_state(state)
+
+                    state = MarketState(
+                        exchange="okx",
+                        symbol=SYMBOL,
+                        mark_price=mark_price,
+                        oi_qty=old_oi_qty,
+                        oi_value_usd=old_oi_value,
+                        funding_rate=old_funding,
+                        updated_ts=int(safe_float(row.get("ts"), msg.get("ts", now_ms()))),
+                    )
+                    store.upsert_market_state(state)
+        except asyncio.CancelledError:
+            break
         except Exception as e:
             print(f"[okx] reconnect after error: {e}")
             await asyncio.sleep(2)
+        if ws is not None:
+            with contextlib.suppress(Exception):
+                await ws.close()
 
 
 async def poll_okx_public_metrics(store: SQLiteStore, stop_event: asyncio.Event, interval: int = 10):
@@ -1064,6 +1198,12 @@ async def report_loop(store: SQLiteStore, stop_event: asyncio.Event):
 
             print_market_states(states)
             print_band_table(current_price, band_rows, (short_price, short_notional), (long_price, long_notional))
+
+            heat_window_days = current_heat_window_days()
+            snapshot_rows = store.get_band_report_snapshot(SYMBOL, heat_window_days)
+            longest_snapshot = store.get_longest_bar_snapshot(SYMBOL, heat_window_days)
+            print_band_snapshot_table(heat_window_days, snapshot_rows, longest_snapshot)
+
             print_event_diag(store.get_event_diag(SYMBOL))
             print_realized_block("已发生清算 - 1分钟", events_1m)
             print_realized_block("已发生清算 - 5分钟", events_5m)
@@ -1088,12 +1228,32 @@ async def report_loop(store: SQLiteStore, stop_event: asyncio.Event):
 # Main
 # =========================
 
+async def keyboard_loop(stop_event: asyncio.Event):
+    if os.name != "nt":
+        return
+    while not stop_event.is_set():
+        try:
+            if msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                if ch in ("1", "7", "3"):
+                    set_heat_window_days(HEAT_WINDOW_KEYS[ch])
+                    print(f"\\n[heat-window] 已切换到 {current_heat_window_days()} 天")
+                elif ch in ("q", "Q"):
+                    print("\\n[heat-window] 收到退出命令，准备停止...")
+                    stop_event.set()
+                    break
+            await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            break
+
+
 async def main():
+    init_utf8_console()
     store = SQLiteStore(DB_PATH)
     stop_event = asyncio.Event()
 
     def _handle_stop(*_):
-        print("\n收到退出信号，准备停止...")
+        print("\\n收到退出信号，准备停止...")
         stop_event.set()
 
     if sys.platform != "win32":
@@ -1112,6 +1272,7 @@ async def main():
         asyncio.create_task(run_okx_ws(store, stop_event)),
         asyncio.create_task(poll_okx_public_metrics(store, stop_event)),
         asyncio.create_task(report_loop(store, stop_event)),
+        asyncio.create_task(keyboard_loop(stop_event)),
     ]
 
     try:
@@ -1122,6 +1283,5 @@ async def main():
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-
 if __name__ == "__main__":
     asyncio.run(main())
