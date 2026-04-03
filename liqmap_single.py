@@ -1282,4 +1282,4 @@ async def main():
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 if __name__ == "__main__":
-    asyncio.run(main(parse_args()))
+    asyncio.run(main())
