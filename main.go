@@ -357,30 +357,30 @@ th:first-child,td:first-child{text-align:left}
   <div class="nav-left">
     <div class="brand">ETH Liquidation Map</div>
     <div class="menu">
-      <a href="#" class="active">????</a>
-      <a href="#">????</a>
+      <a href="#" class="active">清算热区</a>
+      <a href="#">清算地图</a>
     </div>
   </div>
   <div class="nav-right">
-    <a href="#" class="upgrade">??</a>
+    <a href="#" class="upgrade">升级</a>
   </div>
 </div>
 <div class="wrap">
 <div class="panel top">
   <div>
-    <h2 style="margin:0 0 6px 0;color:#111827">ETH ????</h2>
-    <div class="hint">? <span class="mono">1</span> / <span class="mono">7</span> / <span class="mono">3</span> ?? 1? / 7? / 30?</div>
+    <h2 style="margin:0 0 6px 0;color:#111827">ETH 清算热区</h2>
+    <div class="hint">按 <span class="mono">1</span> / <span class="mono">7</span> / <span class="mono">3</span> 切换 1天 / 7天 / 30天</div>
   </div>
   <div class="btns">
-    <button data-days="1">1?</button>
-    <button data-days="7">7?</button>
-    <button data-days="30">30?</button>
+    <button data-days="1">1天</button>
+    <button data-days="7">7天</button>
+    <button data-days="30">30天</button>
   </div>
 </div>
 <div class="grid">
   <div class="panel"><div id="status">loading...</div></div>
-  <div class="panel"><h3>????</h3><div id="market"></div></div>
-  <div class="panel"><h3>??????</h3><div id="bands"></div></div>
+  <div class="panel"><h3>市场状态</h3><div id="market"></div></div>
+  <div class="panel"><h3>清算热区速报</h3><div id="bands"></div></div>
 </div>
 </div>
 <script>
@@ -396,7 +396,7 @@ function renderActive(){
 }
 function fmt(n){ return Number(n).toLocaleString('zh-CN',{maximumFractionDigits:1}) }
 function renderTable(rows, headers){
-  if(!rows || !rows.length) return '<div class="hint">????</div>';
+  if(!rows || !rows.length) return '<div class="hint">暂无数据</div>';
   let html = '<table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>';
   for(const r of rows) html += '<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>';
   return html + '</tbody></table>';
@@ -406,13 +406,13 @@ async function load(){
   const d = await r.json();
   currentDays = d.window_days || currentDays;
   renderActive();
-  document.getElementById('status').textContent = '???: '+fmt(d.current_price)+' | ??: '+d.window_days+'? | ????: '+new Date(d.generated_at).toLocaleString();
+  document.getElementById('status').textContent = '当前价: '+fmt(d.current_price)+' | 周期: '+d.window_days+'天 | 更新时间: '+new Date(d.generated_at).toLocaleString();
   document.getElementById('market').innerHTML = renderTable((d.states||[]).map(s=>[
     s.exchange, fmt(s.mark_price), s.oi_qty ? fmt(s.oi_qty) : '-', s.oi_value_usd ? fmt(s.oi_value_usd) : '-', s.funding_rate ?? '-'
-  ]), ['???','???','OI??','OI??USD','Funding']);
+  ]), ['交易所','标记价','OI数量','OI价值USD','Funding']);
   document.getElementById('bands').innerHTML = renderTable((d.bands||[]).map(b=>[
-    b.band+'??', fmt(b.up_notional_usd), fmt(b.down_notional_usd), fmt(b.up_price), fmt(b.down_price)
-  ]), ['????','??????','??????','????','????']);
+    b.band+'点内', fmt(b.up_notional_usd), fmt(b.down_notional_usd), fmt(b.up_price), fmt(b.down_price)
+  ]), ['点数阈值','上方空单均值','下方多单均值','上方价格','下方价格']);
 }
 document.querySelectorAll('button[data-days]').forEach(b=>b.onclick=()=>setWindow(Number(b.dataset.days)));
 document.addEventListener('keydown',e=>{ if(e.key==='1') setWindow(1); if(e.key==='7') setWindow(7); if(e.key==='3') setWindow(30); });
