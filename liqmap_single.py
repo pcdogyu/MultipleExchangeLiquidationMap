@@ -752,13 +752,6 @@ def print_band_snapshot_table(lookback_days: int, rows: List[dict], longest_bar_
         band_rows,
         aligns=["left", "right", "right"],
     ))
-
-def current_heat_window_days() -> int:
-    return HEAT_WINDOW_DAYS
-
-def set_heat_window_days(value: int):
-    global HEAT_WINDOW_DAYS
-    HEAT_WINDOW_DAYS = value
     print_subtitle("?????")
     print(render_table(
         ["??", "??", "??"],
@@ -768,6 +761,15 @@ def set_heat_window_days(value: int):
         ],
         aligns=["left", "right", "right"],
     ))
+
+
+def current_heat_window_days() -> int:
+    return HEAT_WINDOW_DAYS
+
+
+def set_heat_window_days(value: int):
+    global HEAT_WINDOW_DAYS
+    HEAT_WINDOW_DAYS = value
 
 
 # =========================
