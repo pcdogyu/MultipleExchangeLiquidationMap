@@ -3,7 +3,7 @@
 ## English
 
 ### Overview
-This project is a **single-file Python terminal application** for monitoring ETH derivatives liquidation activity and estimating nearby liquidation pressure.
+This project is a **Go application with a web dashboard** for monitoring ETH derivatives liquidation activity and estimating nearby liquidation pressure.
 
 It currently integrates data from:
 
@@ -55,7 +55,7 @@ The script creates these tables automatically:
 ---
 
 ### Requirements
-- Python 3.10+
+- Go 1.21+
 - Internet access
 - Recommended OS:
   - Linux
@@ -95,7 +95,7 @@ liqmap.db
 Run with default settings:
 
 ```bash
-python liqmap_single_okx_fixed.py
+go run .
 ```
 
 Run with custom environment variables:
@@ -108,7 +108,7 @@ RETENTION_MINUTES=240 \
 OKX_REST_BASE=https://www.okx.com \
 OKX_WS_PUBLIC=wss://ws.okx.com:8443/ws/v5/public \
 OKX_INST_ID=ETH-USDT-SWAP \
-python liqmap_single_okx_fixed.py
+go run .
 ```
 
 Windows PowerShell example:
@@ -248,7 +248,7 @@ If needed, you can manually clean or archive old rows from `band_reports` and `l
 ---
 
 ### 运行要求
-- Python 3.10+
+- Go 1.21+
 - 可访问互联网
 - 推荐系统：
   - Linux
@@ -288,7 +288,7 @@ liqmap.db
 使用默认参数直接运行：
 
 ```bash
-python liqmap_single_okx_fixed.py
+go run .
 ```
 
 使用自定义环境变量运行：
@@ -301,7 +301,7 @@ RETENTION_MINUTES=240 \
 OKX_REST_BASE=https://www.okx.com \
 OKX_WS_PUBLIC=wss://ws.okx.com:8443/ws/v5/public \
 OKX_INST_ID=ETH-USDT-SWAP \
-python liqmap_single_okx_fixed.py
+go run .
 ```
 
 Windows PowerShell 示例：
