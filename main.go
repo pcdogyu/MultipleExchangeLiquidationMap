@@ -774,7 +774,7 @@ func (a *App) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		cutoff := time.Now().Add(-1 * time.Hour).UnixMilli()
+		cutoff := time.Now().Add(-30 * time.Minute).UnixMilli()
 		rows, err := a.db.Query(`SELECT side, price, peak_notional_usd, duration_ms, event_ts, mode
 			FROM price_wall_events
 			WHERE event_ts>=?
@@ -1484,35 +1484,35 @@ func toFloatAny(v any) float64 {
 
 func classifyImbalance(up, down float64) (string, float64) {
 	if up <= 0 && down <= 0 {
-		return "鏆傛棤鏄庢樉澶辫　", 1
+		return "暂无明显失衡", 1
 	}
 	if up >= down {
 		ratio := up / math.Max(down, 1e-9)
 		if ratio >= 1.25 {
-			return "涓婃柟鍋忓己", ratio
+			return "上方偏强", ratio
 		}
-		return "鍩烘湰鍧囪　", ratio
+		return "基本均衡", ratio
 	}
 	ratio := down / math.Max(up, 1e-9)
 	if ratio >= 1.25 {
-		return "涓嬫柟鍋忓己", ratio
+		return "下方偏强", ratio
 	}
-	return "鍩烘湰鍧囪　", ratio
+	return "基本均衡", ratio
 }
 
 func inferShortBias(up, down float64) string {
 	total := up + down
 	if total <= 0 {
-		return "鏆傛棤鏁版嵁"
+		return "暂无数据"
 	}
 	delta := (up - down) / total
 	if delta >= 0.18 {
-		return "鍋忎笂鎵?"
+		return "偏上杀"
 	}
 	if delta <= -0.18 {
-		return "鍋忎笅鎵?"
+		return "偏下杀"
 	}
-	return "鍩烘湰鍧囪　"
+	return "基本均衡"
 }
 
 func normalizeExchangeName(ex string) string {
@@ -1707,9 +1707,9 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 		{Band: 100, UpNotionalUSD: b100.UpNotionalUSD, DownNotionalUSD: b100.DownNotionalUSD, Ratio: ratio100, Verdict: verdict100},
 	}
 	density := []DensityLayer{
-		{Label: "0-20鐐?", UpNotionalUSD: math.Max(0, b20.UpNotionalUSD), DownNotionalUSD: math.Max(0, b20.DownNotionalUSD)},
-		{Label: "20-50鐐?", UpNotionalUSD: math.Max(0, b50.UpNotionalUSD-b20.UpNotionalUSD), DownNotionalUSD: math.Max(0, b50.DownNotionalUSD-b20.DownNotionalUSD)},
-		{Label: "50-100鐐?", UpNotionalUSD: math.Max(0, b100.UpNotionalUSD-b50.UpNotionalUSD), DownNotionalUSD: math.Max(0, b100.DownNotionalUSD-b50.DownNotionalUSD)},
+		{Label: "0-20点", UpNotionalUSD: math.Max(0, b20.UpNotionalUSD), DownNotionalUSD: math.Max(0, b20.DownNotionalUSD)},
+		{Label: "20-50点", UpNotionalUSD: math.Max(0, b50.UpNotionalUSD-b20.UpNotionalUSD), DownNotionalUSD: math.Max(0, b50.DownNotionalUSD-b20.DownNotionalUSD)},
+		{Label: "50-100点", UpNotionalUSD: math.Max(0, b100.UpNotionalUSD-b50.UpNotionalUSD), DownNotionalUSD: math.Max(0, b100.DownNotionalUSD-b50.DownNotionalUSD)},
 	}
 
 	market := MarketSummary{}
@@ -1765,11 +1765,11 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 		distDown = math.Abs(currentPrice - longPrice)
 	}
 	if distUp < distDown {
-		core.NearestSide = "娑撳﹥鏌熼弴纾嬬箮"
+		core.NearestSide = "上方强区"
 		core.NearestDistance = distUp
 		core.NearestStrongPrice = shortPrice
 	} else if distDown < math.MaxFloat64 {
-		core.NearestSide = "娑撳鏌熼弴纾嬬箮"
+		core.NearestSide = "下方强区"
 		core.NearestDistance = distDown
 		core.NearestStrongPrice = longPrice
 	}
@@ -1796,9 +1796,9 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 	}
 
 	alert := AlertSummary{
-		Level:       "鐢瓕顫夐惄鎴炲付",
+		Level:       "常规监控",
 		Recent1mUSD: a.sumLiquidationNotionalSince(symbol, nowTS-60*1000),
-		Suggestion:  fmt.Sprintf("%.1f / %.1f 娑撱倓鏅堕幓鎺楁嫛妞嬪酣娅?", b20.UpPrice, b20.DownPrice),
+		Suggestion:  fmt.Sprintf("%.1f / %.1f 关注上下关键价位", b20.UpPrice, b20.DownPrice),
 	}
 	if len(events) > 0 {
 		e := events[0]
@@ -1807,15 +1807,15 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 		alert.RecentPrice = e.Price
 	}
 	if core.NearestDistance > 0 && core.NearestDistance <= 35 {
-		alert.Level = "涓磋繎寮烘煴棰勮"
+		alert.Level = "临近强区预警"
 	} else if alert.Recent1mUSD >= 2_000_000 {
-		alert.Level = "娉㈠姩鏀惧ぇ棰勮"
+		alert.Level = "波动放大预警"
 	}
-	if verdict20 == "涓婃柟鍋忓己" {
-		alert.Suggestion = fmt.Sprintf("%.1f / %.1f 涓婁笅鍙屽悜鎻掗拡椋庨櫓", b20.UpPrice, b20.DownPrice)
+	if verdict20 == "上方偏强" {
+		alert.Suggestion = fmt.Sprintf("%.1f / %.1f 警惕上下双向插针风险", b20.UpPrice, b20.DownPrice)
 	}
-	if verdict20 == "涓嬫柟鍋忓己" {
-		alert.Suggestion = fmt.Sprintf("%.1f / %.1f 涓嬫柟娴佸姩鎬ч闄╂洿楂?", b20.UpPrice, b20.DownPrice)
+	if verdict20 == "下方偏强" {
+		alert.Suggestion = fmt.Sprintf("%.1f / %.1f 下方流动性风险更高", b20.UpPrice, b20.DownPrice)
 	}
 
 	return HeatZoneAnalytics{
@@ -3437,7 +3437,7 @@ function fmtEventTime(ts){try{return new Date(ts).toLocaleTimeString('zh-CN',{ho
 function fmtDur(ms){const s=Math.max(0,Math.round(Number(ms||0)/1000));return s+'s';}
 function eventTable(list){if(!list||!list.length)return '<div class=\"small\">暂无事件</div>';let h='<table><thead><tr><th>价格</th><th>峰值</th><th>持续时间</th><th>时间</th></tr></thead><tbody>';for(const e of list.slice(0,8)){h+='<tr><td>'+fmtPrice(e.price)+'</td><td>'+fmtAmount(e.peak)+'</td><td>'+fmtDur(e.dur_ms)+'</td><td>'+fmtEventTime(e.ts)+'</td></tr>';}return h+'</tbody></table>';}
 function renderEventTables(){const be=document.getElementById('bidEvents'),ae=document.getElementById('askEvents');if(be)be.innerHTML=eventTable(persistedEvents.bid||[]);if(ae)ae.innerHTML=eventTable(persistedEvents.ask||[]);}
-function setPersistedEvents(rows){const cutoff=Date.now()-60*60*1000;const bid=[],ask=[];for(const r of (rows||[])){const ts=Number(r.event_ts||0);if(ts<cutoff)continue;const side=(r.side||'').toLowerCase();const item={price:Number(r.price||0),peak:Number(r.peak||0),dur_ms:Number(r.duration_ms||0),ts:ts};if(side==='bid')bid.push(item);if(side==='ask')ask.push(item);}persistedEvents.bid=bid.slice(0,8);persistedEvents.ask=ask.slice(0,8);}
+function setPersistedEvents(rows){const cutoff=Date.now()-30*60*1000;const bid=[],ask=[];for(const r of (rows||[])){const ts=Number(r.event_ts||0);if(ts<cutoff)continue;const side=(r.side||'').toLowerCase();const item={price:Number(r.price||0),peak:Number(r.peak||0),dur_ms:Number(r.duration_ms||0),ts:ts};if(side==='bid')bid.push(item);if(side==='ask')ask.push(item);}persistedEvents.bid=bid.slice(0,8);persistedEvents.ask=ask.slice(0,8);}
 function syncDepthCanvas(c){const rect=c.getBoundingClientRect();const dpr=window.devicePixelRatio||1;const W=Math.max(320,Math.floor(rect.width));const H=Math.max(240,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return{x,W,H};}
 function clampDepthView(minP,maxP){if(!depthState||!(depthState.fullMax>depthState.fullMin))return[minP,maxP];const fullMin=depthState.fullMin,fullMax=depthState.fullMax,fullSpan=Math.max(1e-6,fullMax-fullMin);const minSpan=Math.max(2,fullSpan*0.05);let span=Math.max(minSpan,maxP-minP);span=Math.min(fullSpan,span);let vMin=minP,vMax=vMin+span;if(vMin<fullMin){vMin=fullMin;vMax=vMin+span;}if(vMax>fullMax){vMax=fullMax;vMin=vMax-span;}return[vMin,vMax];}
 function initDepthView(allPrices,cur){const rawMin=Math.min(...allPrices,cur),rawMax=Math.max(...allPrices,cur);const rawSpan=Math.max(2,rawMax-rawMin);const pad=Math.max(1,rawSpan*0.06);const dataMin=rawMin-pad,dataMax=rawMax+pad;if(!depthState||!(depthState.fullMax>depthState.fullMin)){depthState={fullMin:dataMin,fullMax:dataMax,viewMin:dataMin,viewMax:dataMax,padL:64,padR:24,padT:20,padB:44,W:0,H:0};[depthState.viewMin,depthState.viewMax]=clampDepthView(depthState.viewMin,depthState.viewMax);return;}depthState.fullMin=dataMin;depthState.fullMax=dataMax;const span=(depthState.viewMax>depthState.viewMin)?(depthState.viewMax-depthState.viewMin):(dataMax-dataMin);let vMin=cur-span/2,vMax=cur+span/2;[vMin,vMax]=clampDepthView(vMin,vMax);depthState.viewMin=vMin;depthState.viewMax=vMax;}
