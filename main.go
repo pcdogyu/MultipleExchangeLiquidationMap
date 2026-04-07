@@ -247,6 +247,7 @@ func main() {
 	}
 	app.startCollector(context.Background())
 	app.startOrderBookSync(context.Background())
+	app.startLiquidationSync(context.Background())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", app.handleIndex)
 	mux.HandleFunc("/map", app.handleMap)
@@ -688,7 +689,8 @@ func (a *App) collectAndStore(symbol string) error {
 			return err
 		}
 	}
-	return a.insertBandAndLongest(symbol, snapshots, now)
+	_ = now
+	return nil
 }
 
 func (a *App) upsertMarketState(s Snapshot) error {
@@ -982,7 +984,7 @@ func (a *App) buildDashboard(days int) (Dashboard, error) {
 	currentPrice := averageMarkPrice(states)
 	currentPrice = math.Round(currentPrice*10) / 10
 	cutoff := windowCutoff(time.Now(), days)
-	bands, short, long, err := a.loadHeatSnapshot(defaultSymbol, cutoff)
+	bands, short, long, err := a.buildHeatFromLiquidationEvents(defaultSymbol, currentPrice, cutoff)
 	if err != nil {
 		return Dashboard{}, err
 	}
@@ -1001,6 +1003,98 @@ func (a *App) buildDashboard(days int) (Dashboard, error) {
 		LongestLong:  long,
 		Events:       a.loadRecentEvents(defaultSymbol, eventsCutoff),
 	}, nil
+}
+
+func (a *App) buildHeatFromLiquidationEvents(symbol string, currentPrice float64, cutoff int64) ([]BandRow, []any, []any, error) {
+	if currentPrice <= 0 {
+		return []BandRow{}, []any{"-", 0}, []any{"-", 0}, nil
+	}
+	rows, err := a.db.Query(`SELECT side, price, notional_usd FROM liquidation_events WHERE symbol=? AND event_ts>=?`, symbol, cutoff)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer rows.Close()
+	type ev struct {
+		side     string
+		price    float64
+		notional float64
+	}
+	events := make([]ev, 0, 1024)
+	for rows.Next() {
+		var side string
+		var price, notional float64
+		if err := rows.Scan(&side, &price, &notional); err != nil {
+			continue
+		}
+		if price <= 0 || notional <= 0 {
+			continue
+		}
+		events = append(events, ev{side: strings.ToLower(strings.TrimSpace(side)), price: price, notional: notional})
+	}
+	out := make([]BandRow, 0, len(bandSizes))
+	prevUpTotal := 0.0
+	prevDownTotal := 0.0
+	maxShortPrice := 0.0
+	maxLongPrice := 0.0
+	maxShortNotional := 0.0
+	maxLongNotional := 0.0
+	for _, band := range bandSizes {
+		b := float64(band)
+		upPrice := math.Round((currentPrice+b)*10) / 10
+		downPrice := math.Round((currentPrice-b)*10) / 10
+		upTotal := 0.0
+		downTotal := 0.0
+		for _, e := range events {
+			if e.price < downPrice || e.price > upPrice {
+				continue
+			}
+			switch e.side {
+			case "short":
+				if e.price >= currentPrice {
+					upTotal += e.notional
+				}
+			case "long":
+				if e.price <= currentPrice {
+					downTotal += e.notional
+				}
+			default:
+				if e.price >= currentPrice {
+					upTotal += e.notional
+				}
+				if e.price <= currentPrice {
+					downTotal += e.notional
+				}
+			}
+		}
+		out = append(out, BandRow{
+			Band:            band,
+			UpPrice:         upPrice,
+			UpNotionalUSD:   upTotal,
+			DownPrice:       downPrice,
+			DownNotionalUSD: downTotal,
+		})
+		upInc := math.Max(0, upTotal-prevUpTotal)
+		downInc := math.Max(0, downTotal-prevDownTotal)
+		prevUpTotal = upTotal
+		prevDownTotal = downTotal
+		if upInc > maxShortNotional {
+			maxShortNotional = upInc
+			maxShortPrice = upPrice
+		}
+		if downInc > maxLongNotional {
+			maxLongNotional = downInc
+			maxLongPrice = downPrice
+		}
+	}
+	short := []any{"-", 0}
+	if maxShortPrice > 0 {
+		short = []any{maxShortPrice, maxShortNotional}
+	}
+	long := []any{"-", 0}
+	if maxLongPrice > 0 {
+		long = []any{maxLongPrice, maxLongNotional}
+	}
+	return out, short, long, nil
 }
 
 func (a *App) loadMarketStates(symbol string) ([]MarketState, error) {
@@ -1456,6 +1550,218 @@ func (a *App) startOrderBookSync(ctx context.Context) {
 	go a.syncBinanceOrderBook(ctx, "ETHUSDT")
 	go a.syncBybitOrderBook(ctx, "ETHUSDT")
 	go a.syncOKXOrderBook(ctx, "ETH-USDT-SWAP")
+}
+
+func normalizeLiquidationSide(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	switch s {
+	case "buy", "b", "short":
+		return "short"
+	case "sell", "s", "long":
+		return "long"
+	default:
+		return s
+	}
+}
+
+func (a *App) insertLiquidationEvent(exchange, symbol, side string, price, qty, markPrice float64, eventTS int64) {
+	if price <= 0 || qty <= 0 {
+		return
+	}
+	if markPrice <= 0 {
+		markPrice = price
+	}
+	if eventTS <= 0 {
+		eventTS = time.Now().UnixMilli()
+	}
+	notional := price * qty
+	side = normalizeLiquidationSide(side)
+	_, _ = a.db.Exec(`INSERT INTO liquidation_events(exchange, symbol, side, raw_side, qty, price, mark_price, notional_usd, event_ts, inserted_ts)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		exchange, symbol, side, side, qty, price, markPrice, notional, eventTS, time.Now().UnixMilli())
+}
+
+func (a *App) startLiquidationSync(ctx context.Context) {
+	go a.syncBinanceLiquidations(ctx, "ETHUSDT")
+	go a.syncBybitLiquidations(ctx, "ETHUSDT")
+	go a.syncOKXLiquidations(ctx, "ETH-USDT-SWAP")
+}
+
+func (a *App) syncBinanceLiquidations(ctx context.Context, symbol string) {
+	wsURL := "wss://fstream.binance.com/ws/" + strings.ToLower(symbol) + "@forceOrder"
+	for {
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			if a.debug {
+				log.Printf("binance liquidation ws dial err: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+				continue
+			}
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				_ = conn.Close()
+				return
+			default:
+			}
+			var msg map[string]any
+			if err := conn.ReadJSON(&msg); err != nil {
+				break
+			}
+			o, ok := msg["o"].(map[string]any)
+			if !ok {
+				continue
+			}
+			side := fmt.Sprint(o["S"])
+			price := parseAnyFloat(o["ap"])
+			if price <= 0 {
+				price = parseAnyFloat(o["p"])
+			}
+			qty := parseAnyFloat(o["q"])
+			if qty <= 0 {
+				qty = parseAnyFloat(o["z"])
+			}
+			ts := int64(parseAnyFloat(o["T"]))
+			a.insertLiquidationEvent("binance", symbol, side, price, qty, 0, ts)
+		}
+		_ = conn.Close()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func (a *App) syncBybitLiquidations(ctx context.Context, symbol string) {
+	for {
+		conn, _, err := websocket.DefaultDialer.Dial("wss://stream.bybit.com/v5/public/linear", nil)
+		if err != nil {
+			if a.debug {
+				log.Printf("bybit liquidation ws dial err: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+				continue
+			}
+		}
+		sub := map[string]any{"op": "subscribe", "args": []string{"allLiquidation." + symbol}}
+		if err := conn.WriteJSON(sub); err != nil {
+			_ = conn.Close()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+				continue
+			}
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				_ = conn.Close()
+				return
+			default:
+			}
+			var msg map[string]any
+			if err := conn.ReadJSON(&msg); err != nil {
+				break
+			}
+			dataArr, ok := msg["data"].([]any)
+			if !ok {
+				continue
+			}
+			for _, it := range dataArr {
+				row, ok := it.(map[string]any)
+				if !ok {
+					continue
+				}
+				side := fmt.Sprint(row["S"])
+				price := parseAnyFloat(row["p"])
+				qty := parseAnyFloat(row["v"])
+				if qty <= 0 {
+					qty = parseAnyFloat(row["q"])
+				}
+				ts := int64(parseAnyFloat(row["T"]))
+				a.insertLiquidationEvent("bybit", symbol, side, price, qty, 0, ts)
+			}
+		}
+		_ = conn.Close()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func (a *App) syncOKXLiquidations(ctx context.Context, instID string) {
+	for {
+		conn, _, err := websocket.DefaultDialer.Dial("wss://ws.okx.com:8443/ws/v5/public", nil)
+		if err != nil {
+			if a.debug {
+				log.Printf("okx liquidation ws dial err: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+				continue
+			}
+		}
+		sub := map[string]any{"op": "subscribe", "args": []map[string]string{{"channel": "liquidation-orders", "instType": "SWAP", "instId": instID}}}
+		if err := conn.WriteJSON(sub); err != nil {
+			_ = conn.Close()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+				continue
+			}
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				_ = conn.Close()
+				return
+			default:
+			}
+			var msg map[string]any
+			if err := conn.ReadJSON(&msg); err != nil {
+				break
+			}
+			dataArr, ok := msg["data"].([]any)
+			if !ok {
+				continue
+			}
+			for _, it := range dataArr {
+				row, ok := it.(map[string]any)
+				if !ok {
+					continue
+				}
+				side := fmt.Sprint(row["side"])
+				price := parseAnyFloat(row["bkPx"])
+				if price <= 0 {
+					price = parseAnyFloat(row["px"])
+				}
+				qty := parseAnyFloat(row["sz"])
+				ts := int64(parseAnyFloat(row["ts"]))
+				a.insertLiquidationEvent("okx", defaultSymbol, side, price, qty, 0, ts)
+			}
+		}
+		_ = conn.Close()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 func (a *App) syncBinanceOrderBook(ctx context.Context, symbol string) {
