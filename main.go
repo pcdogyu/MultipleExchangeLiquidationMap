@@ -654,7 +654,8 @@ func (a *App) insertBandAndLongest(symbol string, snapshots []Snapshot, nowTS in
 		avgFunding += s.FundingRate
 	}
 	avgFunding /= float64(len(snapshots))
-	current := weightedPrice(states)
+	current := averageSnapshotPrice(snapshots)
+	current = math.Round(current*10) / 10
 	if current <= 0 {
 		return nil
 	}
@@ -896,7 +897,8 @@ func (a *App) buildDashboard(days int) (Dashboard, error) {
 	if err != nil {
 		return Dashboard{}, err
 	}
-	currentPrice := weightedPrice(states)
+	currentPrice := averageMarkPrice(states)
+	currentPrice = math.Round(currentPrice*10) / 10
 	cutoff := windowCutoff(time.Now(), days)
 	bands, short, long, err := a.loadHeatSnapshot(defaultSymbol, cutoff)
 	if err != nil {
@@ -947,25 +949,36 @@ func (a *App) loadMarketStates(symbol string) ([]MarketState, error) {
 	return out, nil
 }
 
-func weightedPrice(states []MarketState) float64 {
-	var sumPrice, sumWeight float64
+func averageMarkPrice(states []MarketState) float64 {
+	var sumPrice float64
+	var cnt int
 	for _, s := range states {
 		if s.MarkPrice <= 0 {
 			continue
 		}
-		w := 1.0
-		if s.OIValueUSD != nil && *s.OIValueUSD > 0 {
-			w = *s.OIValueUSD
-		} else if s.OIQty != nil && *s.OIQty > 0 {
-			w = *s.OIQty * s.MarkPrice
-		}
-		sumPrice += s.MarkPrice * w
-		sumWeight += w
+		sumPrice += s.MarkPrice
+		cnt++
 	}
-	if sumWeight == 0 {
+	if cnt == 0 {
 		return 0
 	}
-	return sumPrice / sumWeight
+	return sumPrice / float64(cnt)
+}
+
+func averageSnapshotPrice(snapshots []Snapshot) float64 {
+	var sum float64
+	var cnt int
+	for _, s := range snapshots {
+		if s.MarkPrice <= 0 {
+			continue
+		}
+		sum += s.MarkPrice
+		cnt++
+	}
+	if cnt == 0 {
+		return 0
+	}
+	return sum / float64(cnt)
 }
 
 func (a *App) loadHeatSnapshot(symbol string, cutoff int64) ([]BandRow, []any, []any, error) {
