@@ -438,14 +438,26 @@ func (a *App) handleUpgradePull(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	cmd := exec.Command("git", "pull", "--ff-only")
-	cmd.Dir = getenv("APP_ROOT", ".")
-	out, err := cmd.CombinedOutput()
-	resp := map[string]any{
-		"output": string(out),
+	root := getenv("APP_ROOT", ".")
+	pullCmd := exec.Command("git", "pull", "--ff-only")
+	pullCmd.Dir = root
+	pullOut, pullErr := pullCmd.CombinedOutput()
+	if pullErr != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error":  pullErr.Error(),
+			"output": "[git pull]\n" + string(pullOut),
+		})
+		return
 	}
-	if err != nil {
-		resp["error"] = err.Error()
+	buildCmd := exec.Command("go", "build", ".")
+	buildCmd.Dir = root
+	buildOut, buildErr := buildCmd.CombinedOutput()
+	resp := map[string]any{
+		"output": "[git pull]\n" + string(pullOut) + "\n[go build]\n" + string(buildOut),
+	}
+	if buildErr != nil {
+		resp["error"] = buildErr.Error()
 		w.WriteHeader(http.StatusBadGateway)
 	}
 	_ = json.NewEncoder(w).Encode(resp)
