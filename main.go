@@ -713,7 +713,7 @@ func (a *App) handleUpgradePull(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	upgradeCmd := exec.Command("bash", "-lc", "rm -f /tmp/liqmap-upgrade.exit; : >/tmp/liqmap-upgrade.log; systemd-run --unit=liqmap-upgrade --collect /bin/bash -lc 'cd /opt/MultipleExchangeLiquidationMap && echo [git fetch] && git fetch --all --prune && echo [git reset] && git reset --hard origin/golang && echo [go build] && go build . && echo [restart service] && systemctl restart liqmap.service; ec=$?; echo $ec >/tmp/liqmap-upgrade.exit; exit $ec' >>/tmp/liqmap-upgrade.log 2>&1")
+	upgradeCmd := exec.Command("bash", "-lc", "rm -f /tmp/liqmap-upgrade.exit; : >/tmp/liqmap-upgrade.log; systemd-run --unit=liqmap-upgrade --collect /bin/bash -lc 'cd /opt/MultipleExchangeLiquidationMap && echo [git fetch] && git fetch --all --prune && echo [git reset] && git reset --hard origin/golang && echo [go build] && go build -o multipleexchangeliquidationmap.exe . && echo [restart service] && systemctl restart liqmap.service && echo [service status] && systemctl status liqmap.service --no-pager; ec=$?; echo $ec >/tmp/liqmap-upgrade.exit; exit $ec' >>/tmp/liqmap-upgrade.log 2>&1")
 	out, err := upgradeCmd.CombinedOutput()
 	if err != nil {
 		w.WriteHeader(http.StatusBadGateway)
