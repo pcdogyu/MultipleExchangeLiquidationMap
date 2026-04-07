@@ -154,6 +154,16 @@ func initDB(db *sql.DB) error {
 			updated_ts INTEGER NOT NULL,
 			PRIMARY KEY(exchange, symbol)
 		);`,
+		`CREATE TABLE IF NOT EXISTS oi_snapshots (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			exchange TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			mark_price REAL NOT NULL,
+			oi_value_usd REAL NOT NULL,
+			funding_rate REAL,
+			updated_ts INTEGER NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_oi_snapshots_symbol_ts ON oi_snapshots(symbol, updated_ts);`,
 		`CREATE TABLE IF NOT EXISTS liquidation_events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			exchange TEXT NOT NULL,
@@ -261,6 +271,7 @@ func main() {
 	mux.HandleFunc("/map", app.handleMap)
 	mux.HandleFunc("/channel", app.handleChannel)
 	mux.HandleFunc("/api/dashboard", app.handleDashboard)
+	mux.HandleFunc("/api/model/liquidation-map", app.handleModelLiquidationMap)
 	mux.HandleFunc("/api/orderbook", app.handleOrderBook)
 	mux.HandleFunc("/api/coinglass/map", app.handleCoinGlassMap)
 	mux.HandleFunc("/api/window", app.handleWindow)
@@ -341,6 +352,46 @@ func (a *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(dash)
+}
+
+func (a *App) handleModelLiquidationMap(w http.ResponseWriter, r *http.Request) {
+	if a.debug {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	lookbackMin := 360
+	if raw := strings.TrimSpace(r.URL.Query().Get("lookback_min")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 60 && n <= 1440 {
+			lookbackMin = n
+		}
+	}
+	bucketMin := 5
+	if raw := strings.TrimSpace(r.URL.Query().Get("bucket_min")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 30 {
+			bucketMin = n
+		}
+	}
+	priceStep := 5.0
+	if raw := strings.TrimSpace(r.URL.Query().Get("price_step")); raw != "" {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil && v >= 1 && v <= 50 {
+			priceStep = v
+		}
+	}
+	priceRange := 400.0
+	if raw := strings.TrimSpace(r.URL.Query().Get("price_range")); raw != "" {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil && v >= 100 && v <= 1000 {
+			priceRange = v
+		}
+	}
+	resp, err := a.buildModelLiquidationMap(defaultSymbol, lookbackMin, bucketMin, priceStep, priceRange)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (a *App) handleCoinGlassMap(w http.ResponseWriter, r *http.Request) {
@@ -758,9 +809,19 @@ func (a *App) collectAndStore(symbol string) error {
 		if err := a.upsertMarketState(s); err != nil {
 			return err
 		}
+		_ = a.insertOISnapshot(s)
 	}
 	_ = now
 	return nil
+}
+
+func (a *App) insertOISnapshot(s Snapshot) error {
+	if s.MarkPrice <= 0 || s.OIValueUSD <= 0 {
+		return nil
+	}
+	_, err := a.db.Exec(`INSERT INTO oi_snapshots(exchange, symbol, mark_price, oi_value_usd, funding_rate, updated_ts)
+		VALUES(?, ?, ?, ?, ?, ?)`, strings.ToLower(strings.TrimSpace(s.Exchange)), s.Symbol, s.MarkPrice, s.OIValueUSD, s.FundingRate, s.UpdatedTS)
+	return err
 }
 
 func (a *App) upsertMarketState(s Snapshot) error {
@@ -1225,6 +1286,180 @@ func averageSnapshotPrice(snapshots []Snapshot) float64 {
 		return 0
 	}
 	return sum / float64(cnt)
+}
+
+func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int, priceStep, priceRange float64) (map[string]any, error) {
+	now := time.Now().UnixMilli()
+	lookbackMS := int64(lookbackMin) * 60 * 1000
+	start := now - lookbackMS
+	states, err := a.loadMarketStates(symbol)
+	if err != nil {
+		return nil, err
+	}
+	current := averageMarkPrice(states)
+	if current <= 0 {
+		return map[string]any{
+			"generated_at":   now,
+			"current_price":  0,
+			"lookback_min":   lookbackMin,
+			"bucket_min":     bucketMin,
+			"price_step":     priceStep,
+			"price_range":    priceRange,
+			"times":          []int64{},
+			"prices":         []float64{},
+			"intensity_grid": [][]float64{},
+			"max_intensity":  0.0,
+		}, nil
+	}
+	current = math.Round(current*10) / 10
+
+	type snap struct {
+		ex      string
+		mark    float64
+		oi      float64
+		funding float64
+		ts      int64
+	}
+	rows, err := a.db.Query(`SELECT LOWER(exchange), mark_price, oi_value_usd, funding_rate, updated_ts
+		FROM oi_snapshots WHERE symbol=? AND updated_ts>=? ORDER BY exchange, updated_ts`, symbol, start)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	snaps := make([]snap, 0, 4096)
+	for rows.Next() {
+		var s snap
+		var funding sql.NullFloat64
+		if err := rows.Scan(&s.ex, &s.mark, &s.oi, &funding, &s.ts); err != nil {
+			continue
+		}
+		if funding.Valid {
+			s.funding = funding.Float64
+		}
+		if s.mark <= 0 || s.oi <= 0 {
+			continue
+		}
+		snaps = append(snaps, s)
+	}
+
+	type contrib struct {
+		ts        int64
+		liqPrice  float64
+		intensity float64
+		side      string
+	}
+	contribs := make([]contrib, 0, len(snaps)*6)
+	prevOI := map[string]float64{}
+	levs := []float64{20, 50, 100}
+	weights := []float64{0.30, 0.40, 0.30}
+	mm := 0.005
+	for _, s := range snaps {
+		prev, ok := prevOI[s.ex]
+		prevOI[s.ex] = s.oi
+		if !ok {
+			continue
+		}
+		delta := s.oi - prev
+		if delta <= 0 {
+			continue
+		}
+		longShare := clamp(0.5+s.funding*7000, 0.2, 0.8)
+		shortShare := 1 - longShare
+		for i, lev := range levs {
+			w := weights[i]
+			longAmt := delta * longShare * w
+			shortAmt := delta * shortShare * w
+			liqLong := s.mark * (1 - 1/lev + mm)
+			liqShort := s.mark * (1 + 1/lev - mm)
+			if liqLong > 0 && longAmt > 0 {
+				contribs = append(contribs, contrib{ts: s.ts, liqPrice: liqLong, intensity: longAmt, side: "long"})
+			}
+			if liqShort > 0 && shortAmt > 0 {
+				contribs = append(contribs, contrib{ts: s.ts, liqPrice: liqShort, intensity: shortAmt, side: "short"})
+			}
+		}
+	}
+
+	bucketMS := int64(bucketMin) * 60 * 1000
+	baseStart := (start / bucketMS) * bucketMS
+	cols := int((now-baseStart)/bucketMS) + 1
+	if cols < 2 {
+		cols = 2
+	}
+	times := make([]int64, cols)
+	for i := 0; i < cols; i++ {
+		times[i] = baseStart + int64(i)*bucketMS
+	}
+
+	pMin := math.Round((current-priceRange)/priceStep) * priceStep
+	pMax := math.Round((current+priceRange)/priceStep) * priceStep
+	if pMin <= 0 {
+		pMin = priceStep
+	}
+	rowsN := int(math.Round((pMax-pMin)/priceStep)) + 1
+	if rowsN < 20 {
+		rowsN = 20
+	}
+	prices := make([]float64, rowsN)
+	for i := 0; i < rowsN; i++ {
+		prices[i] = pMin + float64(i)*priceStep
+	}
+	grid := make([][]float64, rowsN)
+	for i := range grid {
+		grid[i] = make([]float64, cols)
+	}
+
+	for _, c := range contribs {
+		if c.ts < baseStart || c.ts > now {
+			continue
+		}
+		// remove triggered zones
+		if c.side == "long" && current <= c.liqPrice {
+			continue
+		}
+		if c.side == "short" && current >= c.liqPrice {
+			continue
+		}
+		col := int((c.ts - baseStart) / bucketMS)
+		if col < 0 || col >= cols {
+			continue
+		}
+		row := int(math.Round((c.liqPrice - pMin) / priceStep))
+		if row < 0 || row >= rowsN {
+			continue
+		}
+		age := float64(now-c.ts) / float64(lookbackMS)
+		decay := math.Exp(-2.2 * age)
+		v := c.intensity * decay
+		grid[row][col] += v
+		if row > 0 {
+			grid[row-1][col] += v * 0.28
+		}
+		if row < rowsN-1 {
+			grid[row+1][col] += v * 0.28
+		}
+	}
+
+	maxV := 0.0
+	for i := range grid {
+		for j := range grid[i] {
+			if grid[i][j] > maxV {
+				maxV = grid[i][j]
+			}
+		}
+	}
+	return map[string]any{
+		"generated_at":   now,
+		"current_price":  current,
+		"lookback_min":   lookbackMin,
+		"bucket_min":     bucketMin,
+		"price_step":     priceStep,
+		"price_range":    priceRange,
+		"times":          times,
+		"prices":         prices,
+		"intensity_grid": grid,
+		"max_intensity":  maxV,
+	}, nil
 }
 
 func (a *App) loadHeatSnapshot(symbol string, cutoff int64) ([]BandRow, []any, []any, error) {
@@ -2308,19 +2543,25 @@ th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:center}
 .heat-table thead .col-down-price,.heat-table thead .col-down-size{background:var(--right-head)}
 .heat-table .col-up-size,.heat-table .col-down-size{color:var(--accent);font-weight:700}
 .panel h3,.top h2,.top .hint{text-align:center}
+.heatmap-wrap{border:1px solid var(--line);border-radius:10px;background:#fff;padding:10px}
+#liqHeatMap{width:100%;height:320px;display:block;border:1px solid var(--line);border-radius:8px;background:#fff}
 </style></head><body>
 <div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/" class="active">&#28165;&#31639;&#28909;&#21306;</a><a href="/map">&#30424;&#21475;&#27719;&#24635;</a><a href="/channel">&#28040;&#24687;&#36890;&#36947;</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel top"><div><h2 style="margin:0 0 6px 0;color:#111827">ETH &#28165;&#31639;&#28909;&#21306;</h2><div class="hint">&#25353; <span class="mono">0</span> / <span class="mono">1</span> / <span class="mono">7</span> / <span class="mono">3</span> &#20999;&#25442; &#26085;&#20869; / 1&#22825; / 7&#22825; / 30&#22825;</div></div><div class="btns"><button data-days="0">&#26085;&#20869;</button><button data-days="1">1&#22825;</button><button data-days="7">7&#22825;</button><button data-days="30">30&#22825;</button></div></div>
 <div class="panel"><div id="status">loading...</div></div>
-<div class="grid"><div class="panel"><h3>&#24066;&#22330;&#29366;&#24577;</h3><div id="market"></div></div><div class="panel"><h3>&#28165;&#31639;&#28909;&#21306;&#36895;&#25253;</h3><div id="bands"></div></div></div></div>
+<div class="grid"><div class="panel"><h3>&#24066;&#22330;&#29366;&#24577;</h3><div id="market"></div></div><div class="panel"><h3>&#28165;&#31639;&#28909;&#21306;&#36895;&#25253;</h3><div id="bands"></div></div><div class="panel"><h3>ETH清算地图（OI增量模型）</h3><div class="heatmap-wrap"><canvas id="liqHeatMap" width="1400" height="320"></canvas><div class="hint">X轴: 时间 | Y轴: 价格 | 颜色: 清算强度（越亮越高）</div></div></div></div></div>
 <script>
 let currentDays=1;
+let liqMapData=null;
 function windowLabel(v){return Number(v)===0?'\u65e5\u5185':(Number(v)+'\u5929')}
 async function setWindow(days){currentDays=days;await fetch('/api/window',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days})});renderActive();load();}
 function renderActive(){document.querySelectorAll('button[data-days]').forEach(b=>b.classList.toggle('active',Number(b.dataset.days)===currentDays));}
 function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1})}
 function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'\u4ebf';if(a>=1e6)return (n/1e6).toFixed(2)+'\u767e\u4e07';return (n/1e4).toFixed(2)+'\u4e07';}
 function fmt4(n){return Number(n).toFixed(8)}
+function fitCanvas(id){const c=document.getElementById(id);if(!c)return null;const dpr=window.devicePixelRatio||1;const rect=c.getBoundingClientRect();const W=Math.max(320,Math.floor(rect.width));const H=Math.max(220,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return {c,x,W,H};}
+function heatColor(v,max){if(!(max>0)||!(v>0))return 'rgb(248,250,252)';let t=Math.max(0,Math.min(1,v/max));t=Math.pow(t,0.55);let r,g,b;if(t<0.5){const k=t/0.5;r=Math.round(15+(46-15)*k);g=Math.round(23+(163-23)*k);b=Math.round(42+(242-42)*k);}else{const k=(t-0.5)/0.5;r=Math.round(46+(250-46)*k);g=Math.round(163+(204-163)*k);b=Math.round(242+(21-242)*k);}return 'rgb('+r+','+g+','+b+')';}
+function drawLiqHeat(){const v=fitCanvas('liqHeatMap');if(!v)return;const {x,W,H}=v;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);const d=liqMapData;if(!d||!d.times||!d.prices||!d.intensity_grid||!d.times.length||!d.prices.length){x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const padL=58,padR=16,padT=10,padB=34,pw=W-padL-padR,ph=H-padT-padB;const cols=d.times.length,rows=d.prices.length,cw=pw/cols,ch=ph/rows;const max=Number(d.max_intensity||0);for(let ri=0;ri<rows;ri++){for(let ci=0;ci<cols;ci++){const val=Number((d.intensity_grid[ri]||[])[ci]||0);const y=padT+(rows-1-ri)*ch;const xx=padL+ci*cw;x.fillStyle=heatColor(val,max);x.fillRect(xx,y,Math.ceil(cw)+1,Math.ceil(ch)+1);}}x.strokeStyle='#e2e8f0';x.strokeRect(padL,padT,pw,ph);x.fillStyle='#475569';x.font='12px sans-serif';for(let i=0;i<=5;i++){const idx=Math.floor((rows-1)*(i/5));const p=Number(d.prices[idx]||0);const y=padT+(rows-1-idx)*ch;x.fillText(fmtPrice(p),6,y+4);}for(let i=0;i<=6;i++){const idx=Math.floor((cols-1)*(i/6));const ts=Number(d.times[idx]||0);const t=new Date(ts).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false});const xx=padL+idx*cw;x.fillStyle='#64748b';x.fillText(t,Math.max(padL,xx-18),H-10);}const cp=Number(d.current_price||0);if(cp>0){const yi=Math.round((cp-Number(d.prices[0]))/Number(d.price_step||5));if(yi>=0&&yi<rows){const y=padT+(rows-1-yi)*ch;x.strokeStyle='rgba(220,38,38,0.9)';x.setLineDash([5,4]);x.beginPath();x.moveTo(padL,y);x.lineTo(padL+pw,y);x.stroke();x.setLineDash([]);x.fillStyle='#111827';x.fillText('当前价:'+fmtPrice(cp),padL+4,Math.max(12,y-6));}}}
 function renderTable(rows,headers){if(!rows||!rows.length)return '<div class="hint">\u6682\u65e0\u6570\u636e</div>';let html='<table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>';for(const r of rows) html+='<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>';return html+'</tbody></table>';}
 function renderHeatReport(d){
   const bands = d.bands || [];
@@ -2354,16 +2595,17 @@ function renderHeatReport(d){
   return html;
 }
 async function load(){
-  const r=await fetch('/api/dashboard');
-  const d=await r.json();
+  const [r,m]=await Promise.all([fetch('/api/dashboard'),fetch('/api/model/liquidation-map?lookback_min=360&bucket_min=5&price_step=5&price_range=400')]);
+  const d=await r.json(); liqMapData=await m.json().catch(()=>null);
   currentDays=(d.window_days===0||d.window_days)?d.window_days:currentDays;
   renderActive();
   document.getElementById('status').textContent='\u5f53\u524d\u4ef7: '+fmtPrice(d.current_price)+' | \u5468\u671f: '+windowLabel(d.window_days)+' | \u66f4\u65b0\u65f6\u95f4: '+new Date(d.generated_at).toLocaleString();
   document.getElementById('market').innerHTML=renderTable((d.states||[]).map(s=>[s.exchange,fmtPrice(s.mark_price),s.oi_qty?fmtAmount(s.oi_qty*s.mark_price):'-',s.oi_value_usd?fmtAmount(s.oi_value_usd):'-',s.funding_rate==null?'-':fmt4(s.funding_rate)]),['\u4ea4\u6613\u6240','\u6807\u8bb0\u4ef7','OI\u6570\u91cf','OI\u4ef7\u503cUSD','Funding']);
   document.getElementById('bands').innerHTML=renderHeatReport(d);
+  drawLiqHeat();
 }
 async function doUpgrade(event){if(event)event.preventDefault();const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({output:'',error:'response parse failed'}));alert((d.error?('\u62c9\u53d6\u5931\u8d25: '+d.error+'\n'):'\u62c9\u53d6\u5b8c\u6210\n')+(d.output||''));return false;}
-document.querySelectorAll('button[data-days]').forEach(b=>b.onclick=()=>setWindow(Number(b.dataset.days)));document.addEventListener('keydown',e=>{if(e.key==='0')setWindow(0);if(e.key==='1')setWindow(1);if(e.key==='7')setWindow(7);if(e.key==='3')setWindow(30);});setInterval(load,5000);load();
+document.querySelectorAll('button[data-days]').forEach(b=>b.onclick=()=>setWindow(Number(b.dataset.days)));document.addEventListener('keydown',e=>{if(e.key==='0')setWindow(0);if(e.key==='1')setWindow(1);if(e.key==='7')setWindow(7);if(e.key==='3')setWindow(30);});window.addEventListener('resize',()=>drawLiqHeat());setInterval(load,5000);load();
 </script></body></html>`
 
 const mapHTML = `<!doctype html>
