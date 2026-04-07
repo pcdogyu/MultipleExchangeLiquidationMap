@@ -3291,34 +3291,55 @@ function fmt4(n){return Number(n).toFixed(8)}
 function fitCanvas(id){const c=document.getElementById(id);if(!c)return null;const dpr=window.devicePixelRatio||1;const rect=c.getBoundingClientRect();const W=Math.max(320,Math.floor(rect.width));const H=Math.max(220,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return {c,x,W,H};}
 function heatColor(v,max){if(!(max>0)||!(v>0))return 'rgb(248,250,252)';let t=Math.max(0,Math.min(1,v/max));t=Math.pow(t,0.55);let r,g,b;if(t<0.5){const k=t/0.5;r=Math.round(15+(46-15)*k);g=Math.round(23+(163-23)*k);b=Math.round(42+(242-42)*k);}else{const k=(t-0.5)/0.5;r=Math.round(46+(250-46)*k);g=Math.round(163+(204-163)*k);b=Math.round(242+(21-242)*k);}return 'rgb('+r+','+g+','+b+')';}
 function drawLiqHeat(){const v=fitCanvas('liqHeatMap');if(!v)return;const {x,W,H}=v;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);const d=liqMapData;if(!d||!d.prices||!d.intensity_grid||!d.prices.length){x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const rows=d.prices.length,cols=((d.intensity_grid&&d.intensity_grid[0])?d.intensity_grid[0].length:0);if(rows<2||cols<1){x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const pts=[];for(let ri=0;ri<rows;ri++){const p=Number(d.prices[ri]||0);if(!(p>0))continue;let s=0;for(let ci=0;ci<cols;ci++)s+=Math.max(0,Number((d.intensity_grid[ri]||[])[ci]||0));if(s>0)pts.push({p:p,v:s});}if(!pts.length){x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const padL=66,padR=20,padT=16,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;const minP=pts[0].p,maxP=pts[pts.length-1].p,span=Math.max(1e-6,maxP-minP),maxV=Math.max(1,...pts.map(it=>it.v));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxV)*ph;x.strokeStyle='#e2e8f0';x.strokeRect(padL,padT,pw,ph);x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4),val=maxV*(1-i/4);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#475569';x.fillText(fmtAmount(val),6,y+4);}const minLabelGap=12;const approxLabelW=Math.max(36,x.measureText(fmtPrice(minP)).width,x.measureText(fmtPrice(maxP)).width);const maxTicks=Math.max(2,Math.floor(pw/(approxLabelW+minLabelGap)));const tickCount=Math.max(2,Math.min(10,maxTicks));for(let i=0;i<=tickCount;i++){const p=minP+span*(i/tickCount),px=sx(p);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(px,by);x.lineTo(px,by+4);x.stroke();const label=fmtPrice(p);const lw=x.measureText(label).width;const tx=Math.max(padL,Math.min(px-lw/2,W-padR-lw));x.fillStyle='#64748b';x.fillText(label,tx,by+18);}const barW=Math.max(2,Math.min(12,pw/Math.max(40,pts.length)));const cp=Number(d.current_price||0);for(const it of pts){const px=sx(it.p),y=sy(it.v);const leftSide=(cp>0)?(it.p<=cp):(it.p<=(minP+maxP)/2);x.fillStyle=leftSide?'rgba(249,115,22,0.78)':'rgba(125,211,252,0.78)';x.fillRect(px-barW/2,y,barW,by-y);}x.lineWidth=1;if(cp>=minP&&cp<=maxP){const cpX=sx(cp);x.strokeStyle='rgba(220,38,38,0.9)';x.setLineDash([5,4]);x.beginPath();x.moveTo(cpX,padT);x.lineTo(cpX,by);x.stroke();x.setLineDash([]);x.fillStyle='#111827';const txt='当前价:'+fmtPrice(cp);const tw=x.measureText(txt).width;x.fillText(txt,Math.max(padL,Math.min(cpX+4,W-padR-tw)),padT+12);}x.fillStyle='#475569';x.fillText('清算金额',padL,padT-4);const xt='价格';const xtw=x.measureText(xt).width;x.fillText(xt,padL+pw/2-xtw/2,H-8);} function renderTable(rows,headers){if(!rows||!rows.length)return '<div class="hint">\u6682\u65e0\u6570\u636e</div>';let html='<table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>';for(const r of rows) html+='<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>';return html+'</tbody></table>';}
+function buildHeatBandsFromModel(model){
+  if(!model||!model.prices||!model.intensity_grid||!model.prices.length) return [];
+  const rows=model.prices.length, cols=((model.intensity_grid&&model.intensity_grid[0])?model.intensity_grid[0].length:0);
+  if(rows<1||cols<1) return [];
+  const cp=Number(model.current_price||0);
+  if(!(cp>0)) return [];
+  const pts=[];
+  for(let ri=0;ri<rows;ri++){
+    const p=Number(model.prices[ri]||0);
+    if(!(p>0)) continue;
+    let s=0;
+    for(let ci=0;ci<cols;ci++) s+=Math.max(0,Number((model.intensity_grid[ri]||[])[ci]||0));
+    if(s>0) pts.push({price:p,notional:s});
+  }
+  if(!pts.length) return [];
+  const showBands=[10,20,30,40,50,60,80,100,150];
+  return showBands.map(band=>{
+    let upPrice=0,upNotional=0,upMax=0,downPrice=0,downNotional=0,downMax=0;
+    for(const pt of pts){
+      const dist=pt.price-cp;
+      if(dist>=0&&dist<=band){
+        upNotional+=pt.notional;
+        if(pt.notional>upMax){upMax=pt.notional;upPrice=pt.price;}
+      }
+      if(dist<=0&&Math.abs(dist)<=band){
+        downNotional+=pt.notional;
+        if(pt.notional>downMax){downMax=pt.notional;downPrice=pt.price;}
+      }
+    }
+    return {band,up_price:upPrice,up_notional_usd:upNotional,down_price:downPrice,down_notional_usd:downNotional};
+  });
+}
 function renderHeatReport(d){
-  const bands = d.bands || [];
+  const bands = buildHeatBandsFromModel(liqMapData);
   if(!bands.length) return '<div class="hint">\u6682\u65e0\u6570\u636e</div>';
-  const showBands = [10,20,30,40,50,60,80,100,150];
-  const bandMap = new Map(bands.map(b=>[Number(b.band), b]));
   let html = '<table class="heat-table"><thead>' +
     '<tr><th rowspan="2" class="col-threshold">\u70b9\u6570\u9608\u503c</th><th colspan="2">\u4e0a\u65b9\u7a7a\u5355</th><th colspan="2">\u4e0b\u65b9\u591a\u5355</th></tr>' +
     '<tr><th class="col-up-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-up-size">\u6e05\u7b97\u89c4\u6a21</th><th class="col-down-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-down-size">\u6e05\u7b97\u89c4\u6a21</th></tr>' +
     '</thead><tbody>';
   const toScale = n => {n=Number(n||0);const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'亿';if(a>=1e4)return (n/1e4).toFixed(2)+'万';return n.toFixed(2);};
-  for(const band of showBands){
-    const b = bandMap.get(band);
-    if(!b) continue;
+  for(const b of bands){
     html += '<tr>' +
       '<td class="col-threshold">'+b.band+'\u70b9\u5185</td>' +
-      '<td class="col-up-price">'+fmtPrice(b.up_price)+'</td>' +
+      '<td class="col-up-price">'+(Number(b.up_price)>0?fmtPrice(b.up_price):'-')+'</td>' +
       '<td class="col-up-size">'+toScale(b.up_notional_usd)+'</td>' +
-      '<td class="col-down-price">'+fmtPrice(b.down_price)+'</td>' +
+      '<td class="col-down-price">'+(Number(b.down_price)>0?fmtPrice(b.down_price):'-')+'</td>' +
       '<td class="col-down-size">'+toScale(b.down_notional_usd)+'</td>' +
       '</tr>';
   }
-  const ls = d.longest_short || [];
-  const ll = d.longest_long || [];
-  const sp = (ls.length>=1 && ls[0] !== '-') ? fmtPrice(ls[0]) : '-';
-  const sn = (ls.length>=2) ? toScale(ls[1]) : '-';
-  const lp = (ll.length>=1 && ll[0] !== '-') ? fmtPrice(ll[0]) : '-';
-  const ln = (ll.length>=2) ? toScale(ll[1]) : '-';
-  html += '<tr><td class="col-threshold">\u6700\u957f\u67f1</td><td class="col-up-price">'+sp+'</td><td class="col-up-size">'+sn+'</td><td class="col-down-price">'+lp+'</td><td class="col-down-size">'+ln+'</td></tr>';
   html += '</tbody></table>';
   return html;
 }
