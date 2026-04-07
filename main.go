@@ -166,6 +166,8 @@ func initDB(db *sql.DB) error {
 			event_ts INTEGER NOT NULL,
 			inserted_ts INTEGER NOT NULL
 		);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_liquidation_events_uniq
+			ON liquidation_events(exchange, symbol, side, price, qty, event_ts);`,
 		`CREATE TABLE IF NOT EXISTS band_reports (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			report_ts INTEGER NOT NULL,
@@ -1576,7 +1578,7 @@ func normalizeLiquidationSide(raw string) string {
 	}
 }
 
-func (a *App) insertLiquidationEvent(exchange, symbol, side string, price, qty, markPrice float64, eventTS int64) {
+func (a *App) insertLiquidationEvent(exchange, symbol, side, rawSide string, price, qty, markPrice float64, eventTS int64) {
 	if price <= 0 || qty <= 0 {
 		return
 	}
@@ -1587,16 +1589,90 @@ func (a *App) insertLiquidationEvent(exchange, symbol, side string, price, qty, 
 		eventTS = time.Now().UnixMilli()
 	}
 	notional := price * qty
-	side = normalizeLiquidationSide(side)
-	_, _ = a.db.Exec(`INSERT INTO liquidation_events(exchange, symbol, side, raw_side, qty, price, mark_price, notional_usd, event_ts, inserted_ts)
+	normSide := normalizeLiquidationSide(side)
+	if normSide == "" {
+		normSide = normalizeLiquidationSide(rawSide)
+	}
+	_, _ = a.db.Exec(`INSERT OR IGNORE INTO liquidation_events(exchange, symbol, side, raw_side, qty, price, mark_price, notional_usd, event_ts, inserted_ts)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		exchange, symbol, side, side, qty, price, markPrice, notional, eventTS, time.Now().UnixMilli())
+		exchange, symbol, normSide, rawSide, qty, price, markPrice, notional, eventTS, time.Now().UnixMilli())
 }
 
 func (a *App) startLiquidationSync(ctx context.Context) {
+	okxCtVal := a.fetchOKXContractValue("ETH-USDT-SWAP")
+	if okxCtVal <= 0 {
+		okxCtVal = 1
+	}
+	go a.backfillOKXLiquidations(ctx, "ETH-USDT-SWAP", okxCtVal, 24)
 	go a.syncBinanceLiquidations(ctx, "ETHUSDT")
 	go a.syncBybitLiquidations(ctx, "ETHUSDT")
-	go a.syncOKXLiquidations(ctx, "ETH-USDT-SWAP")
+	go a.syncOKXLiquidations(ctx, "ETH-USDT-SWAP", okxCtVal)
+}
+
+func (a *App) fetchOKXContractValue(instID string) float64 {
+	var resp struct {
+		Code string `json:"code"`
+		Data []struct {
+			CtVal string `json:"ctVal"`
+		} `json:"data"`
+	}
+	if err := a.fetchJSON("https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId="+instID, &resp); err != nil {
+		return 1
+	}
+	if len(resp.Data) == 0 {
+		return 1
+	}
+	v := parseFloat(resp.Data[0].CtVal)
+	if v <= 0 {
+		return 1
+	}
+	return v
+}
+
+func (a *App) backfillOKXLiquidations(ctx context.Context, instID string, ctVal float64, lookbackHours int) {
+	var resp struct {
+		Code string `json:"code"`
+		Data []struct {
+			Details []struct {
+				BkPx    string `json:"bkPx"`
+				Side    string `json:"side"`
+				PosSide string `json:"posSide"`
+				Sz      string `json:"sz"`
+				TS      string `json:"ts"`
+				Time    int64  `json:"time"`
+			} `json:"details"`
+		} `json:"data"`
+	}
+	if err := a.fetchJSON("https://www.okx.com/api/v5/public/liquidation-orders?instType=SWAP&state=filled&uly=ETH-USDT", &resp); err != nil {
+		if a.debug {
+			log.Printf("okx liquidation backfill err: %v", err)
+		}
+		return
+	}
+	cutoff := time.Now().Add(-time.Duration(lookbackHours) * time.Hour).UnixMilli()
+	for _, grp := range resp.Data {
+		for _, d := range grp.Details {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			ts := int64(parseAnyFloat(d.TS))
+			if ts <= 0 {
+				ts = d.Time
+			}
+			if ts < cutoff {
+				continue
+			}
+			price := parseFloat(d.BkPx)
+			qty := parseFloat(d.Sz) * ctVal
+			side := d.PosSide
+			if side == "" {
+				side = d.Side
+			}
+			a.insertLiquidationEvent("okx", defaultSymbol, side, d.Side, price, qty, 0, ts)
+		}
+	}
 }
 
 func (a *App) syncBinanceLiquidations(ctx context.Context, symbol string) {
@@ -1639,7 +1715,7 @@ func (a *App) syncBinanceLiquidations(ctx context.Context, symbol string) {
 				qty = parseAnyFloat(o["z"])
 			}
 			ts := int64(parseAnyFloat(o["T"]))
-			a.insertLiquidationEvent("binance", symbol, side, price, qty, 0, ts)
+			a.insertLiquidationEvent("binance", symbol, side, side, price, qty, 0, ts)
 		}
 		_ = conn.Close()
 		select {
@@ -1701,7 +1777,7 @@ func (a *App) syncBybitLiquidations(ctx context.Context, symbol string) {
 					qty = parseAnyFloat(row["q"])
 				}
 				ts := int64(parseAnyFloat(row["T"]))
-				a.insertLiquidationEvent("bybit", symbol, side, price, qty, 0, ts)
+				a.insertLiquidationEvent("bybit", symbol, side, side, price, qty, 0, ts)
 			}
 		}
 		_ = conn.Close()
@@ -1713,7 +1789,7 @@ func (a *App) syncBybitLiquidations(ctx context.Context, symbol string) {
 	}
 }
 
-func (a *App) syncOKXLiquidations(ctx context.Context, instID string) {
+func (a *App) syncOKXLiquidations(ctx context.Context, instID string, ctVal float64) {
 	for {
 		conn, _, err := websocket.DefaultDialer.Dial("wss://ws.okx.com:8443/ws/v5/public", nil)
 		if err != nil {
@@ -1762,9 +1838,13 @@ func (a *App) syncOKXLiquidations(ctx context.Context, instID string) {
 				if price <= 0 {
 					price = parseAnyFloat(row["px"])
 				}
-				qty := parseAnyFloat(row["sz"])
+				qty := parseAnyFloat(row["sz"]) * ctVal
 				ts := int64(parseAnyFloat(row["ts"]))
-				a.insertLiquidationEvent("okx", defaultSymbol, side, price, qty, 0, ts)
+				posSide := fmt.Sprint(row["posSide"])
+				if strings.TrimSpace(posSide) == "" {
+					posSide = side
+				}
+				a.insertLiquidationEvent("okx", defaultSymbol, posSide, side, price, qty, 0, ts)
 			}
 		}
 		_ = conn.Close()
@@ -2183,7 +2263,7 @@ function renderHeatReport(d){
     '<tr><th rowspan="2" class="col-threshold">\u70b9\u6570\u9608\u503c</th><th colspan="2">\u4e0a\u65b9\u7a7a\u5355</th><th colspan="2">\u4e0b\u65b9\u591a\u5355</th></tr>' +
     '<tr><th class="col-up-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-up-size">\u6e05\u7b97\u89c4\u6a21</th><th class="col-down-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-down-size">\u6e05\u7b97\u89c4\u6a21</th></tr>' +
     '</thead><tbody>';
-  const toScale = n => {n=Number(n||0);const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(1)+'亿';if(a>=1e4)return (n/1e4).toFixed(1)+'万';return n.toFixed(0);};
+  const toScale = n => {n=Number(n||0);const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'亿';if(a>=1e4)return (n/1e4).toFixed(2)+'万';return n.toFixed(2);};
   for(const band of showBands){
     const b = bandMap.get(band);
     if(!b) continue;
