@@ -91,6 +91,7 @@ type App struct {
 	mu         sync.RWMutex
 	windowDays int
 	debug      bool
+	lastNotify int64
 }
 
 type Level struct {
@@ -254,6 +255,7 @@ func main() {
 	app.startCollector(rootCtx)
 	app.startOrderBookSync(rootCtx)
 	app.startLiquidationSync(rootCtx)
+	app.startTelegramNotifier(rootCtx)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", app.handleIndex)
 	mux.HandleFunc("/map", app.handleMap)
@@ -561,6 +563,10 @@ func (a *App) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) sendTelegramTestMessage() error {
+	return a.sendTelegramText("ETH Liquidation Map test message")
+}
+
+func (a *App) sendTelegramText(text string) error {
 	token := strings.TrimSpace(a.getSetting("telegram_bot_token"))
 	channel := strings.TrimSpace(a.getSetting("telegram_channel"))
 	if token == "" || channel == "" {
@@ -570,7 +576,7 @@ func (a *App) sendTelegramTestMessage() error {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
 	payload := map[string]string{
 		"chat_id": channel,
-		"text":    "ETH Liquidation Map test message",
+		"text":    text,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -597,6 +603,56 @@ func (a *App) sendTelegramTestMessage() error {
 		return fmt.Errorf("telegram api returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
 	}
 	return nil
+}
+
+func (a *App) startTelegramNotifier(ctx context.Context) {
+	go func() {
+		tk := time.NewTicker(30 * time.Second)
+		defer tk.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tk.C:
+				interval := a.loadSettings().NotifyIntervalMin
+				if interval <= 0 {
+					interval = 15
+				}
+				now := time.Now().UnixMilli()
+				if now-a.lastNotify < int64(interval)*60*1000 {
+					continue
+				}
+				dash, err := a.buildDashboard(1)
+				if err != nil || len(dash.Bands) == 0 {
+					continue
+				}
+				msg := a.buildHeatReportMessage(dash)
+				if err := a.sendTelegramText(msg); err != nil {
+					if a.debug {
+						log.Printf("telegram auto send failed: %v", err)
+					}
+					continue
+				}
+				a.lastNotify = now
+			}
+		}
+	}()
+}
+
+func (a *App) buildHeatReportMessage(d Dashboard) string {
+	showBands := map[int]bool{10: true, 20: true, 30: true, 40: true, 50: true, 60: true, 80: true, 100: true, 150: true}
+	lines := []string{
+		"清算热区速报",
+		"当前价: " + fmt.Sprintf("%.1f", d.CurrentPrice),
+		"周期: 1天",
+	}
+	for _, b := range d.Bands {
+		if !showBands[b.Band] {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%d点内 上方%.1f %.2f万 | 下方%.1f %.2f万", b.Band, b.UpPrice, b.UpNotionalUSD/1e4, b.DownPrice, b.DownNotionalUSD/1e4))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func maskSensitive(s string) string {
@@ -2446,11 +2502,11 @@ const channelHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>&#28040;&#24687;&#36890;&#36947;</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#fff;border-bottom:1px solid #d9e0ea;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#111827}.menu a{color:#4b5563;text-decoration:none;font-size:14px;margin-right:18px}.menu a.active{color:#111827;font-weight:700}.upgrade{color:#111827;font-weight:700;text-decoration:none}.wrap{max-width:900px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.small{font-size:12px;color:#6b7280}button.primary{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}</style></head>
 <body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">&#28165;&#31639;&#28909;&#21306;</a><a href="/map">&#30424;&#21475;&#27719;&#24635;</a><a href="/channel" class="active">&#28040;&#24687;&#36890;&#36947;</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><h2 style="margin-top:0">Telegram &#28040;&#24687;&#36890;&#36947;</h2><div class="small">保存后会自动脱敏显示，仅保留前 4 位和后 4 位。点击“测试”可发送 Telegram 测试消息。</div><div style="margin-top:14px"><label>Telegram Bot Token</label><input id="token" autocomplete="off" placeholder="123456:ABC..."></div><div style="margin-top:14px"><label>Telegram Channel / Chat ID</label><input id="channel" autocomplete="off" placeholder="@mychannel 或 -100123456789"></div><div style="margin-top:16px" class="row"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="testTelegram()">测试</button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
+<div class="wrap"><div class="panel"><h2 style="margin-top:0">Telegram &#28040;&#24687;&#36890;&#36947;</h2><div class="small">默认每隔 15 分钟自动发送清算热区速报到 Telegram，可在下方调整间隔。</div><div style="margin-top:14px"><label>Telegram Bot Token</label><input id="token" autocomplete="off" placeholder="123456:ABC..."></div><div style="margin-top:14px"><label>Telegram Channel / Chat ID</label><input id="channel" autocomplete="off" placeholder="@mychannel 或 -100123456789"></div><div style="margin-top:14px"><label>发送间隔(分钟)</label><input id="notify-interval" type="number" min="1" step="1" placeholder="15"></div><div style="margin-top:16px" class="row"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="testTelegram()">测试</button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
 <script>
 let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},tokenDirty=false,channelDirty=false;
 function maskSensitive(v){v=(v||'').trim();if(!v)return '';if(v.length<=8)return v;return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}function syncInputs(){const t=document.getElementById('token'),c=document.getElementById('channel'),n=document.getElementById('notify-interval');if(!tokenDirty)t.value=rawToken?maskSensitive(rawToken):'';if(!channelDirty)c.value=rawChannel?maskSensitive(rawChannel):'';n.value=rawInterval||15;}function currentValue(i,r,d){const v=(i.value||'').trim();if(!d&&r&&v===maskSensitive(r))return r;return v;}document.getElementById('token').addEventListener('input',()=>{tokenDirty=true});document.getElementById('channel').addEventListener('input',()=>{channelDirty=true});syncInputs();
 async function doUpgrade(event){if(event)event.preventDefault();const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({output:'',error:'response parse failed'}));alert((d.error?('\u62c9\u53d6\u5931\u8d25: '+d.error+'\n'):'\u62c9\u53d6\u5b8c\u6210\n')+(d.output||''));return false;}
-async function save(){const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken,tokenDirty),telegram_channel:currentValue(document.getElementById('channel'),rawChannel,channelDirty)};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;tokenDirty=false;channelDirty=false;syncInputs();document.getElementById('msg').textContent='保存成功';}else{document.getElementById('msg').textContent='保存失败';}}
+async function save(){const n=document.getElementById('notify-interval');const iv=Math.max(1,Number((n&&n.value)||rawInterval||15)|0);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken,tokenDirty),telegram_channel:currentValue(document.getElementById('channel'),rawChannel,channelDirty),notify_interval_min:iv};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=iv;tokenDirty=false;channelDirty=false;syncInputs();document.getElementById('msg').textContent='保存成功';}else{document.getElementById('msg').textContent='保存失败';}}
 async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='正在发送测试消息...';const r=await fetch('/api/channel/test',{method:'POST'});msg.textContent=r.ok?'测试消息已发送':('测试失败：'+await r.text());}
 </script></body></html>`
