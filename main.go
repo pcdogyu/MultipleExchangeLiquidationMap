@@ -6,13 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/gorilla/websocket"
 	"html/template"
 	"io"
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,10 +76,35 @@ type EventRow struct {
 type App struct {
 	db         *sql.DB
 	httpClient *http.Client
+	ob         *OrderBookHub
 	mu         sync.RWMutex
 	windowDays int
 	debug      bool
 }
+
+type Level struct {
+	Price float64 `json:"price"`
+	Qty   float64 `json:"qty"`
+}
+
+type OrderBook struct {
+	mu            sync.RWMutex
+	Exchange      string
+	Symbol        string
+	Bids          map[string]float64
+	Asks          map[string]float64
+	LastUpdateID  int64
+	LastSeq       int64
+	UpdatedTS     int64
+	LastSnapshot  int64
+	LastWSEventTS int64
+}
+
+type OrderBookHub struct {
+	books map[string]*OrderBook
+}
+
+var errResnapshot = errors.New("periodic resnapshot")
 
 type Snapshot struct {
 	Exchange    string
@@ -193,15 +221,19 @@ func main() {
 		httpClient: &http.Client{
 			Timeout: 12 * time.Second,
 		},
+		ob:         newOrderBookHub(),
 		windowDays: defaultWindowDays,
 		debug:      debug,
 	}
 	app.startCollector(context.Background())
+	app.startOrderBookSync(context.Background())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", app.handleIndex)
 	mux.HandleFunc("/map", app.handleMap)
 	mux.HandleFunc("/channel", app.handleChannel)
 	mux.HandleFunc("/api/dashboard", app.handleDashboard)
+	mux.HandleFunc("/api/orderbook", app.handleOrderBook)
+	mux.HandleFunc("/api/coinglass/map", app.handleCoinGlassMap)
 	mux.HandleFunc("/api/window", app.handleWindow)
 	mux.HandleFunc("/api/settings", app.handleSettings)
 	mux.HandleFunc("/api/channel/test", app.handleChannelTest)
@@ -271,6 +303,53 @@ func (a *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(dash)
+}
+
+func (a *App) handleCoinGlassMap(w http.ResponseWriter, r *http.Request) {
+	if a.debug {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	apiKey := strings.TrimSpace(os.Getenv("CG_API_KEY"))
+	if apiKey == "" {
+		http.Error(w, "CG_API_KEY is not set", http.StatusBadRequest)
+		return
+	}
+
+	symbol := strings.TrimSpace(r.URL.Query().Get("symbol"))
+	if symbol == "" {
+		symbol = "ETH"
+	}
+	window := strings.TrimSpace(r.URL.Query().Get("window"))
+	if window == "" {
+		window = "1d"
+	}
+
+	url := fmt.Sprintf("https://open-api-v4.coinglass.com/api/futures/liquidation/aggregated-map?symbol=%s&interval=%s", symbol, window)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("CG-API-KEY", apiKey)
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write(body)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(body)
 }
 
 func (a *App) getSetting(key string) string {
@@ -546,7 +625,6 @@ func (a *App) insertBandAndLongest(symbol string, snapshots []Snapshot, nowTS in
 		return nil
 	}
 	states := make([]MarketState, 0, len(snapshots))
-	totalOIUSD := 0.0
 	avgFunding := 0.0
 	for _, s := range snapshots {
 		oiQty := s.OIQty
@@ -561,7 +639,6 @@ func (a *App) insertBandAndLongest(symbol string, snapshots []Snapshot, nowTS in
 			FundingRate: &funding,
 			UpdatedTS:   s.UpdatedTS,
 		})
-		totalOIUSD += s.OIValueUSD
 		avgFunding += s.FundingRate
 	}
 	avgFunding /= float64(len(snapshots))
@@ -569,11 +646,6 @@ func (a *App) insertBandAndLongest(symbol string, snapshots []Snapshot, nowTS in
 	if current <= 0 {
 		return nil
 	}
-	if totalOIUSD <= 0 {
-		totalOIUSD = 1
-	}
-	longBias := clamp(0.5+avgFunding*9000, 0.2, 0.8)
-	shortBias := 1 - longBias
 
 	tx, err := a.db.Begin()
 	if err != nil {
@@ -589,13 +661,46 @@ func (a *App) insertBandAndLongest(symbol string, snapshots []Snapshot, nowTS in
 	var maxLongPrice, maxLongNotional float64
 	var maxShortBand int
 	var maxShortPrice, maxShortNotional float64
+	prevUpTotal := 0.0
+	prevDownTotal := 0.0
+
+	leverageLevels := []float64{8, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100}
+	levelWeights := []float64{0.07, 0.09, 0.11, 0.13, 0.14, 0.13, 0.11, 0.1, 0.07, 0.03, 0.02}
+	weightSum := 0.0
+	for _, w := range levelWeights {
+		weightSum += w
+	}
+	for i := range levelWeights {
+		levelWeights[i] /= weightSum
+	}
 
 	for _, band := range bandSizes {
-		ratio := float64(band) / current
-		levelFactor := 0.004 + 8.5*math.Pow(ratio, 1.08)
-		base := totalOIUSD * levelFactor
-		upNotional := base * shortBias
-		downNotional := base * longBias
+		bandF := float64(band)
+		upNotional := 0.0
+		downNotional := 0.0
+		for _, s := range snapshots {
+			exchangeOI := s.OIValueUSD
+			if exchangeOI <= 0 {
+				continue
+			}
+			// funding > 0 usually means longs are more crowded, so downside liquidation intensity should be higher.
+			longCrowd := clamp(0.52+s.FundingRate*7000, 0.22, 0.82)
+			shortCrowd := 1 - longCrowd
+			for i, lev := range leverageLevels {
+				w := levelWeights[i]
+				dist := current * (0.88 / lev)
+				spread := math.Max(6.0, dist*0.12)
+				cdf := 1.0 / (1.0 + math.Exp(-(bandF-dist)/spread))
+				upNotional += exchangeOI * shortCrowd * w * cdf
+				downNotional += exchangeOI * longCrowd * w * cdf
+			}
+		}
+
+		// global funding tilt to avoid symmetric curves
+		globalLongTilt := clamp(0.5+avgFunding*4000, 0.35, 0.65)
+		downNotional *= (0.8 + 0.4*globalLongTilt)
+		upNotional *= (0.8 + 0.4*(1-globalLongTilt))
+
 		upPrice := current + float64(band)
 		downPrice := current - float64(band)
 		if downPrice <= 0 {
@@ -606,13 +711,18 @@ func (a *App) insertBandAndLongest(symbol string, snapshots []Snapshot, nowTS in
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, nowTS, symbol, current, band, upPrice, upNotional, downPrice, downNotional); err != nil {
 			return err
 		}
-		if upNotional > maxShortNotional {
-			maxShortNotional = upNotional
+		upInc := math.Max(0, upNotional-prevUpTotal)
+		downInc := math.Max(0, downNotional-prevDownTotal)
+		prevUpTotal = upNotional
+		prevDownTotal = downNotional
+
+		if upInc > maxShortNotional {
+			maxShortNotional = upInc
 			maxShortPrice = upPrice
 			maxShortBand = band
 		}
-		if downNotional > maxLongNotional {
-			maxLongNotional = downNotional
+		if downInc > maxLongNotional {
+			maxLongNotional = downInc
 			maxLongPrice = downPrice
 			maxLongBand = band
 		}
@@ -639,6 +749,8 @@ func (a *App) fetchJSON(url string, out any) error {
 	if err != nil {
 		return err
 	}
+	req.Header.Set("User-Agent", "MultipleExchangeLiquidationMap/1.0")
+	req.Header.Set("Accept", "application/json")
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return err
@@ -845,8 +957,16 @@ func weightedPrice(states []MarketState) float64 {
 }
 
 func (a *App) loadHeatSnapshot(symbol string, cutoff int64) ([]BandRow, []any, []any, error) {
+	var latestTS int64
+	if err := a.db.QueryRow(`SELECT report_ts FROM band_reports WHERE symbol=? AND report_ts>=? ORDER BY report_ts DESC LIMIT 1`, symbol, cutoff).Scan(&latestTS); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return []BandRow{}, []any{"-", 0}, []any{"-", 0}, nil
+		}
+		return nil, nil, nil, err
+	}
+
 	rows, err := a.db.Query(`SELECT band, AVG(up_price), AVG(up_notional_usd), AVG(down_price), AVG(down_notional_usd)
-		FROM band_reports WHERE symbol=? AND report_ts>=? GROUP BY band ORDER BY band`, symbol, cutoff)
+		FROM band_reports WHERE symbol=? AND report_ts=? GROUP BY band ORDER BY band`, symbol, latestTS)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -859,14 +979,14 @@ func (a *App) loadHeatSnapshot(symbol string, cutoff int64) ([]BandRow, []any, [
 		}
 		out = append(out, r)
 	}
-	short := a.loadLongestBar(symbol, cutoff, "short")
-	long := a.loadLongestBar(symbol, cutoff, "long")
+	short := a.loadLongestBarAt(symbol, latestTS, "short")
+	long := a.loadLongestBarAt(symbol, latestTS, "long")
 	return out, short, long, nil
 }
 
-func (a *App) loadLongestBar(symbol string, cutoff int64, side string) []any {
+func (a *App) loadLongestBarAt(symbol string, reportTS int64, side string) []any {
 	row := a.db.QueryRow(`SELECT bucket_price, bucket_notional_usd FROM longest_bar_reports
-		WHERE symbol=? AND side=? AND report_ts>=? ORDER BY bucket_notional_usd DESC LIMIT 1`, symbol, side, cutoff)
+		WHERE symbol=? AND side=? AND report_ts=? ORDER BY bucket_notional_usd DESC LIMIT 1`, symbol, side, reportTS)
 	var price, notional sql.NullFloat64
 	if err := row.Scan(&price, &notional); err != nil {
 		return []any{"-", 0}
@@ -900,21 +1020,709 @@ func (a *App) loadRecentEvents(symbol string, cutoff int64) []EventRow {
 	return out
 }
 
+func newOrderBookHub() *OrderBookHub {
+	return &OrderBookHub{
+		books: map[string]*OrderBook{
+			"binance": {Exchange: "binance", Symbol: "ETHUSDT", Bids: map[string]float64{}, Asks: map[string]float64{}},
+			"bybit":   {Exchange: "bybit", Symbol: "ETHUSDT", Bids: map[string]float64{}, Asks: map[string]float64{}},
+			"okx":     {Exchange: "okx", Symbol: "ETH-USDT-SWAP", Bids: map[string]float64{}, Asks: map[string]float64{}},
+		},
+	}
+}
+
+func (h *OrderBookHub) get(exchange string) *OrderBook {
+	return h.books[strings.ToLower(exchange)]
+}
+
+func normalizePriceKey(price float64) string {
+	return strconv.FormatFloat(price, 'f', -1, 64)
+}
+
+func (b *OrderBook) applySide(side map[string]float64, price, qty float64) {
+	if price <= 0 {
+		return
+	}
+	key := normalizePriceKey(price)
+	if qty <= 0 {
+		delete(side, key)
+		return
+	}
+	side[key] = qty
+}
+
+func parseAnyFloat(v any) float64 {
+	switch t := v.(type) {
+	case float64:
+		return t
+	case string:
+		f, _ := strconv.ParseFloat(strings.TrimSpace(t), 64)
+		return f
+	case json.Number:
+		f, _ := t.Float64()
+		return f
+	default:
+		f, _ := strconv.ParseFloat(strings.TrimSpace(fmt.Sprint(v)), 64)
+		return f
+	}
+}
+
+func asPairs(v any) [][2]float64 {
+	rows, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([][2]float64, 0, len(rows))
+	for _, r := range rows {
+		arr, ok := r.([]any)
+		if !ok || len(arr) < 2 {
+			continue
+		}
+		p := parseAnyFloat(arr[0])
+		q := parseAnyFloat(arr[1])
+		if p <= 0 {
+			continue
+		}
+		out = append(out, [2]float64{p, q})
+	}
+	return out
+}
+
+func (b *OrderBook) snapshot(bids [][2]float64, asks [][2]float64, updateID int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.Bids = map[string]float64{}
+	b.Asks = map[string]float64{}
+	for _, lv := range bids {
+		if lv[1] > 0 {
+			b.Bids[normalizePriceKey(lv[0])] = lv[1]
+		}
+	}
+	for _, lv := range asks {
+		if lv[1] > 0 {
+			b.Asks[normalizePriceKey(lv[0])] = lv[1]
+		}
+	}
+	b.LastUpdateID = updateID
+	b.LastSeq = 0
+	now := time.Now().UnixMilli()
+	b.UpdatedTS = now
+	b.LastSnapshot = now
+}
+
+func (b *OrderBook) applyDelta(bids [][2]float64, asks [][2]float64, updateID int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, lv := range bids {
+		b.applySide(b.Bids, lv[0], lv[1])
+	}
+	for _, lv := range asks {
+		b.applySide(b.Asks, lv[0], lv[1])
+	}
+	if updateID > b.LastUpdateID {
+		b.LastUpdateID = updateID
+	}
+	now := time.Now().UnixMilli()
+	b.UpdatedTS = now
+	b.LastWSEventTS = now
+}
+
+func sideTop(side map[string]float64, limit int, bid bool) []Level {
+	out := make([]Level, 0, len(side))
+	for k, q := range side {
+		p, err := strconv.ParseFloat(k, 64)
+		if err != nil || p <= 0 || q <= 0 {
+			continue
+		}
+		out = append(out, Level{Price: p, Qty: q})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if bid {
+			return out[i].Price > out[j].Price
+		}
+		return out[i].Price < out[j].Price
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+func copySide(side map[string]float64) map[string]float64 {
+	out := make(map[string]float64, len(side))
+	for k, v := range side {
+		out[k] = v
+	}
+	return out
+}
+
+func (b *OrderBook) view(limit int) map[string]any {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return map[string]any{
+		"exchange":       b.Exchange,
+		"symbol":         b.Symbol,
+		"last_update_id": b.LastUpdateID,
+		"last_seq":       b.LastSeq,
+		"updated_ts":     b.UpdatedTS,
+		"last_snapshot":  b.LastSnapshot,
+		"last_ws_event":  b.LastWSEventTS,
+		"bids":           sideTop(b.Bids, limit, true),
+		"asks":           sideTop(b.Asks, limit, false),
+	}
+}
+
+func (a *App) handleOrderBook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ex := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("exchange")))
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	if ex != "" {
+		book := a.ob.get(ex)
+		if book == nil {
+			http.Error(w, "unknown exchange", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(book.view(limit))
+		return
+	}
+	weights := a.orderBookWeights()
+	resp := map[string]any{
+		"binance": a.ob.get("binance").view(limit),
+		"bybit":   a.ob.get("bybit").view(limit),
+		"okx":     a.ob.get("okx").view(limit),
+		"weights": weights,
+		"merged":  a.mergedOrderBook(limit, weights),
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (a *App) orderBookWeights() map[string]float64 {
+	weights := map[string]float64{"binance": 1, "bybit": 1, "okx": 1}
+	rows, err := a.db.Query(`SELECT LOWER(exchange), oi_value_usd FROM market_state WHERE symbol=?`, defaultSymbol)
+	if err != nil {
+		return weights
+	}
+	defer rows.Close()
+	sum := 0.0
+	for rows.Next() {
+		var ex string
+		var oi sql.NullFloat64
+		if err := rows.Scan(&ex, &oi); err != nil {
+			continue
+		}
+		if !oi.Valid || oi.Float64 <= 0 {
+			continue
+		}
+		weights[ex] = oi.Float64
+		sum += oi.Float64
+	}
+	if sum <= 0 {
+		weights["binance"], weights["bybit"], weights["okx"] = 1.0/3, 1.0/3, 1.0/3
+		return weights
+	}
+	for k, v := range weights {
+		weights[k] = v / sum
+	}
+	return weights
+}
+
+func (a *App) mergedOrderBook(limit int, weights map[string]float64) map[string]any {
+	type obv struct {
+		ex   string
+		bids []Level
+		asks []Level
+	}
+	makeView := func(ex string) obv {
+		b := a.ob.get(ex)
+		if b == nil {
+			return obv{ex: ex}
+		}
+		b.mu.RLock()
+		bidMap := copySide(b.Bids)
+		askMap := copySide(b.Asks)
+		b.mu.RUnlock()
+		return obv{ex: ex, bids: sideTop(bidMap, 400, true), asks: sideTop(askMap, 400, false)}
+	}
+	views := []obv{makeView("binance"), makeView("bybit"), makeView("okx")}
+	bidMap := map[string]float64{}
+	askMap := map[string]float64{}
+	weightedBestBid := 0.0
+	weightedBestAsk := 0.0
+	sumWBid := 0.0
+	sumWAsk := 0.0
+	for _, v := range views {
+		w := weights[v.ex]
+		if w <= 0 {
+			continue
+		}
+		if len(v.bids) > 0 {
+			weightedBestBid += v.bids[0].Price * w
+			sumWBid += w
+		}
+		if len(v.asks) > 0 {
+			weightedBestAsk += v.asks[0].Price * w
+			sumWAsk += w
+		}
+		for _, lv := range v.bids {
+			key := strconv.FormatFloat(math.Round(lv.Price*10)/10, 'f', 1, 64)
+			bidMap[key] += lv.Qty * w
+		}
+		for _, lv := range v.asks {
+			key := strconv.FormatFloat(math.Round(lv.Price*10)/10, 'f', 1, 64)
+			askMap[key] += lv.Qty * w
+		}
+	}
+	bestBid := 0.0
+	bestAsk := 0.0
+	if sumWBid > 0 {
+		bestBid = weightedBestBid / sumWBid
+	}
+	if sumWAsk > 0 {
+		bestAsk = weightedBestAsk / sumWAsk
+	}
+	mid := 0.0
+	if bestBid > 0 && bestAsk > 0 {
+		mid = (bestBid + bestAsk) / 2
+	}
+	bids := sideTop(bidMap, limit, true)
+	asks := sideTop(askMap, limit, false)
+	return map[string]any{
+		"best_bid":    bestBid,
+		"best_ask":    bestAsk,
+		"mid":         mid,
+		"bids":        bids,
+		"asks":        asks,
+		"depth_curve": buildDepthCurve(bids, asks, mid),
+	}
+}
+
+func buildDepthCurve(bids, asks []Level, mid float64) []map[string]float64 {
+	if mid <= 0 {
+		return nil
+	}
+	steps := []float64{5, 10, 20, 30, 50, 75, 100}
+	out := make([]map[string]float64, 0, len(steps))
+	for _, bps := range steps {
+		bidNotional := 0.0
+		askNotional := 0.0
+		for _, lv := range bids {
+			dist := (mid - lv.Price) / mid * 10000
+			if dist <= bps && dist >= 0 {
+				bidNotional += lv.Price * lv.Qty
+			}
+		}
+		for _, lv := range asks {
+			dist := (lv.Price - mid) / mid * 10000
+			if dist <= bps && dist >= 0 {
+				askNotional += lv.Price * lv.Qty
+			}
+		}
+		out = append(out, map[string]float64{
+			"bps":         bps,
+			"bid_notional": bidNotional,
+			"ask_notional": askNotional,
+		})
+	}
+	return out
+}
+
+func (a *App) startOrderBookSync(ctx context.Context) {
+	go a.syncBinanceOrderBook(ctx, "ETHUSDT")
+	go a.syncBybitOrderBook(ctx, "ETHUSDT")
+	go a.syncOKXOrderBook(ctx, "ETH-USDT-SWAP")
+}
+
+func (a *App) syncBinanceOrderBook(ctx context.Context, symbol string) {
+	book := a.ob.get("binance")
+	if book == nil {
+		return
+	}
+	for {
+		if err := a.loadBinanceSnapshot(symbol); err != nil {
+			if a.debug {
+				log.Printf("binance snapshot err: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
+			continue
+		}
+		if err := a.runBinanceWS(ctx, symbol); err != nil && a.debug {
+			log.Printf("binance ws err: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+		_ = book
+	}
+}
+
+func (a *App) loadBinanceSnapshot(symbol string) error {
+	var resp struct {
+		LastUpdateID int64   `json:"lastUpdateId"`
+		Bids         [][]any `json:"bids"`
+		Asks         [][]any `json:"asks"`
+	}
+	if err := a.fetchJSON("https://api.binance.com/api/v3/depth?symbol="+symbol+"&limit=200", &resp); err != nil {
+		return err
+	}
+	b := a.ob.get("binance")
+	bids := make([][2]float64, 0, len(resp.Bids))
+	for _, r := range resp.Bids {
+		if len(r) < 2 {
+			continue
+		}
+		bids = append(bids, [2]float64{parseAnyFloat(r[0]), parseAnyFloat(r[1])})
+	}
+	asks := make([][2]float64, 0, len(resp.Asks))
+	for _, r := range resp.Asks {
+		if len(r) < 2 {
+			continue
+		}
+		asks = append(asks, [2]float64{parseAnyFloat(r[0]), parseAnyFloat(r[1])})
+	}
+	b.snapshot(bids, asks, resp.LastUpdateID)
+	return nil
+}
+
+func (a *App) runBinanceWS(ctx context.Context, symbol string) error {
+	u := url.URL{Scheme: "wss", Host: "stream.binance.com:9443", Path: "/ws/" + strings.ToLower(symbol) + "@depth@100ms"}
+	return a.runBinanceWSConn(ctx, u.String(), false)
+}
+
+func (a *App) runBinanceWSConn(ctx context.Context, wsURL string, checkPU bool) error {
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		return nil
+	})
+	book := a.ob.get("binance")
+	book.mu.RLock()
+	snapshotID := book.LastUpdateID
+	book.mu.RUnlock()
+	firstApplied := false
+	nextResnapshot := time.Now().Add(5 * time.Minute)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		if time.Now().After(nextResnapshot) {
+			return errResnapshot
+		}
+		var msg map[string]any
+		if err := conn.ReadJSON(&msg); err != nil {
+			return err
+		}
+		uVal := int64(parseAnyFloat(msg["u"]))
+		UVal := int64(parseAnyFloat(msg["U"]))
+		puVal := int64(parseAnyFloat(msg["pu"]))
+		if uVal <= 0 || UVal <= 0 {
+			continue
+		}
+		if !firstApplied {
+			if uVal < snapshotID {
+				continue
+			}
+			if checkPU {
+				if !(UVal <= snapshotID+1 && uVal >= snapshotID+1) {
+					return fmt.Errorf("binance first delta not contiguous: snapshot=%d U=%d u=%d", snapshotID, UVal, uVal)
+				}
+			} else {
+				if uVal <= snapshotID {
+					continue
+				}
+			}
+			firstApplied = true
+		} else {
+			book.mu.RLock()
+			lastID := book.LastUpdateID
+			book.mu.RUnlock()
+			if checkPU && puVal > 0 && puVal != lastID {
+				return fmt.Errorf("binance sequence broken: pu=%d last=%d", puVal, lastID)
+			}
+			if uVal <= lastID {
+				continue
+			}
+		}
+		bids := asPairs(msg["b"])
+		asks := asPairs(msg["a"])
+		book.applyDelta(bids, asks, uVal)
+	}
+}
+
+func (a *App) syncBybitOrderBook(ctx context.Context, symbol string) {
+	for {
+		if err := a.loadBybitSnapshot(symbol); err != nil {
+			if a.debug {
+				log.Printf("bybit snapshot err: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
+			continue
+		}
+		if err := a.runBybitWS(ctx, symbol); err != nil && a.debug {
+			log.Printf("bybit ws err: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func (a *App) loadBybitSnapshot(symbol string) error {
+	var resp struct {
+		RetCode int    `json:"retCode"`
+		RetMsg  string `json:"retMsg"`
+		Result  struct {
+			B [][]any `json:"b"`
+			A [][]any `json:"a"`
+			U int64   `json:"u"`
+		} `json:"result"`
+	}
+	if err := a.fetchJSON("https://api.bybit.com/v5/market/orderbook?category=linear&symbol="+symbol+"&limit=200", &resp); err != nil {
+		return err
+	}
+	if resp.RetCode != 0 {
+		return fmt.Errorf("bybit retCode=%d msg=%s", resp.RetCode, resp.RetMsg)
+	}
+	bids := make([][2]float64, 0, len(resp.Result.B))
+	for _, r := range resp.Result.B {
+		if len(r) < 2 {
+			continue
+		}
+		bids = append(bids, [2]float64{parseAnyFloat(r[0]), parseAnyFloat(r[1])})
+	}
+	asks := make([][2]float64, 0, len(resp.Result.A))
+	for _, r := range resp.Result.A {
+		if len(r) < 2 {
+			continue
+		}
+		asks = append(asks, [2]float64{parseAnyFloat(r[0]), parseAnyFloat(r[1])})
+	}
+	a.ob.get("bybit").snapshot(bids, asks, resp.Result.U)
+	return nil
+}
+
+func (a *App) runBybitWS(ctx context.Context, symbol string) error {
+	conn, _, err := websocket.DefaultDialer.Dial("wss://stream.bybit.com/v5/public/linear", nil)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	sub := map[string]any{"op": "subscribe", "args": []string{"orderbook.50." + symbol}}
+	if err := conn.WriteJSON(sub); err != nil {
+		return err
+	}
+	book := a.ob.get("bybit")
+	nextResnapshot := time.Now().Add(5 * time.Minute)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		if time.Now().After(nextResnapshot) {
+			return errResnapshot
+		}
+		var msg map[string]any
+		if err := conn.ReadJSON(&msg); err != nil {
+			return err
+		}
+		topic, _ := msg["topic"].(string)
+		if !strings.Contains(topic, "orderbook") {
+			continue
+		}
+		data, ok := msg["data"].(map[string]any)
+		if !ok {
+			continue
+		}
+		bids := asPairs(data["b"])
+		asks := asPairs(data["a"])
+		uVal := int64(parseAnyFloat(data["u"]))
+		seqVal := int64(parseAnyFloat(data["seq"]))
+		typ, _ := msg["type"].(string)
+		if strings.EqualFold(typ, "snapshot") {
+			book.snapshot(bids, asks, uVal)
+			book.mu.Lock()
+			book.LastSeq = seqVal
+			book.LastWSEventTS = time.Now().UnixMilli()
+			book.mu.Unlock()
+			continue
+		}
+		book.mu.RLock()
+		lastU := book.LastUpdateID
+		lastSeq := book.LastSeq
+		book.mu.RUnlock()
+		if uVal <= lastU {
+			continue
+		}
+		if seqVal > 0 && lastSeq > 0 && seqVal != lastSeq+1 {
+			return fmt.Errorf("bybit sequence broken: seq=%d last=%d", seqVal, lastSeq)
+		}
+		book.applyDelta(bids, asks, uVal)
+		if seqVal > 0 {
+			book.mu.Lock()
+			book.LastSeq = seqVal
+			book.mu.Unlock()
+		}
+	}
+}
+
+func (a *App) syncOKXOrderBook(ctx context.Context, instID string) {
+	for {
+		if err := a.loadOKXSnapshot(instID); err != nil {
+			if a.debug {
+				log.Printf("okx snapshot err: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
+			continue
+		}
+		if err := a.runOKXWS(ctx, instID); err != nil && a.debug {
+			log.Printf("okx ws err: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func (a *App) loadOKXSnapshot(instID string) error {
+	var resp struct {
+		Code string `json:"code"`
+		Data []struct {
+			Bids [][]any `json:"bids"`
+			Asks [][]any `json:"asks"`
+			TS   string  `json:"ts"`
+		} `json:"data"`
+	}
+	if err := a.fetchJSON("https://www.okx.com/api/v5/market/books?instId="+instID+"&sz=200", &resp); err != nil {
+		return err
+	}
+	if len(resp.Data) == 0 {
+		return errors.New("okx empty books")
+	}
+	d := resp.Data[0]
+	bids := make([][2]float64, 0, len(d.Bids))
+	for _, r := range d.Bids {
+		if len(r) < 2 {
+			continue
+		}
+		bids = append(bids, [2]float64{parseAnyFloat(r[0]), parseAnyFloat(r[1])})
+	}
+	asks := make([][2]float64, 0, len(d.Asks))
+	for _, r := range d.Asks {
+		if len(r) < 2 {
+			continue
+		}
+		asks = append(asks, [2]float64{parseAnyFloat(r[0]), parseAnyFloat(r[1])})
+	}
+	u := int64(parseAnyFloat(d.TS))
+	a.ob.get("okx").snapshot(bids, asks, u)
+	return nil
+}
+
+func (a *App) runOKXWS(ctx context.Context, instID string) error {
+	conn, _, err := websocket.DefaultDialer.Dial("wss://ws.okx.com:8443/ws/v5/public", nil)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	sub := map[string]any{
+		"op":   "subscribe",
+		"args": []map[string]string{{"channel": "books", "instId": instID}},
+	}
+	if err := conn.WriteJSON(sub); err != nil {
+		return err
+	}
+	book := a.ob.get("okx")
+	nextResnapshot := time.Now().Add(5 * time.Minute)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		if time.Now().After(nextResnapshot) {
+			return errResnapshot
+		}
+		var msg map[string]any
+		if err := conn.ReadJSON(&msg); err != nil {
+			return err
+		}
+		dataArr, ok := msg["data"].([]any)
+		if !ok || len(dataArr) == 0 {
+			continue
+		}
+		first, ok := dataArr[0].(map[string]any)
+		if !ok {
+			continue
+		}
+		bids := asPairs(first["bids"])
+		asks := asPairs(first["asks"])
+		ts := int64(parseAnyFloat(first["ts"]))
+		action, _ := msg["action"].(string)
+		if strings.EqualFold(action, "snapshot") {
+			book.snapshot(bids, asks, ts)
+			continue
+		}
+		book.applyDelta(bids, asks, ts)
+	}
+}
+
 const indexHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ETH Liquidation Map</title>
 <style>
-body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
-.nav{height:56px;background:#fff;border-bottom:1px solid #d9e0ea;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
-.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#111827}
-.menu a{color:#4b5563;text-decoration:none;font-size:14px;margin-right:18px}.menu a.active{color:#111827;font-weight:700}
-.upgrade{color:#111827;font-weight:700;text-decoration:none}.wrap{max-width:1200px;margin:0 auto;padding:22px}
+:root{--bg:#e8edf4;--nav:#475a74;--nav-border:#5c708a;--panel:#ffffff;--line:#dfe6ee;--left:#c2cad7;--left-head:#b7c0cf;--right:#efe9cf;--right-head:#e7dfbe;--text:#3b4c63;--accent:#d3873e}
+body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
+.nav{height:56px;background:var(--nav);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
+.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}
+.menu a{color:#d6deea;text-decoration:none;font-size:14px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}
+.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{max-width:1200px;margin:0 auto;padding:22px}
 .top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
-.btns button{margin-right:8px;background:#fff;color:#111827;border:1px solid #cbd5e1;padding:8px 14px;border-radius:8px;cursor:pointer}
-.btns button.active{background:#22c55e;color:#fff;border-color:#22c55e} table{width:100%;border-collapse:collapse}
-th,td{border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:right}th:first-child,td:first-child{text-align:left}
-.grid{display:grid;grid-template-columns:1fr;gap:14px}.hint{color:#6b7280;font-size:12px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.panel{border:1px solid #c8d2df;background:var(--panel);margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.03)}
+#status{background:var(--nav);color:#eef3f9;padding:10px 12px;border-radius:8px;font-weight:700;text-align:center}
+.btns button{margin-right:8px;background:#fff;color:var(--text);border:1px solid #b6c4d5;padding:8px 14px;border-radius:8px;cursor:pointer}
+.btns button.active{background:var(--nav);color:#fff;border-color:var(--nav)} table{width:100%;border-collapse:collapse}
+th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:center}
+.grid{display:grid;grid-template-columns:1fr;gap:14px}.hint{color:#67778d;font-size:12px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.heat-table thead tr:first-child th{background:#d5dce6;font-size:18px}
+.heat-table .col-threshold{background:#d8d9dc}
+.heat-table .col-up-price,.heat-table .col-up-size{background:var(--left)}
+.heat-table .col-down-price,.heat-table .col-down-size{background:var(--right)}
+.heat-table thead .col-up-price,.heat-table thead .col-up-size{background:var(--left-head)}
+.heat-table thead .col-down-price,.heat-table thead .col-down-size{background:var(--right-head)}
+.heat-table .col-up-size,.heat-table .col-down-size{color:var(--accent);font-weight:700}
+.panel h3,.top h2,.top .hint{text-align:center}
 </style></head><body>
 <div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/" class="active">&#28165;&#31639;&#28909;&#21306;</a><a href="/map">&#28165;&#31639;&#22320;&#22270;</a><a href="/channel">&#28040;&#24687;&#36890;&#36947;</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel top"><div><h2 style="margin:0 0 6px 0;color:#111827">ETH &#28165;&#31639;&#28909;&#21306;</h2><div class="hint">&#25353; <span class="mono">0</span> / <span class="mono">1</span> / <span class="mono">7</span> / <span class="mono">3</span> &#20999;&#25442; &#26085;&#20869; / 1&#22825; / 7&#22825; / 30&#22825;</div></div><div class="btns"><button data-days="0">&#26085;&#20869;</button><button data-days="1">1&#22825;</button><button data-days="7">7&#22825;</button><button data-days="30">30&#22825;</button></div></div>
@@ -925,25 +1733,29 @@ let currentDays=1;
 function windowLabel(v){return Number(v)===0?'\u65e5\u5185':(Number(v)+'\u5929')}
 async function setWindow(days){currentDays=days;await fetch('/api/window',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days})});renderActive();load();}
 function renderActive(){document.querySelectorAll('button[data-days]').forEach(b=>b.classList.toggle('active',Number(b.dataset.days)===currentDays));}
-function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{maximumFractionDigits:0})}
+function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1})}
 function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'\u4ebf';if(a>=1e6)return (n/1e6).toFixed(2)+'\u767e\u4e07';return (n/1e4).toFixed(2)+'\u4e07';}
 function fmt4(n){return Number(n).toFixed(8)}
 function renderTable(rows,headers){if(!rows||!rows.length)return '<div class="hint">\u6682\u65e0\u6570\u636e</div>';let html='<table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>';for(const r of rows) html+='<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>';return html+'</tbody></table>';}
 function renderHeatReport(d){
   const bands = d.bands || [];
   if(!bands.length) return '<div class="hint">\u6682\u65e0\u6570\u636e</div>';
-  let html = '<table><thead>' +
-    '<tr><th rowspan="2">\u70b9\u6570\u9608\u503c</th><th colspan="2">\u4e0a\u65b9\u7a7a\u5355</th><th colspan="2">\u4e0b\u65b9\u591a\u5355</th></tr>' +
-    '<tr><th>\u6e05\u7b97\u4ef7\u683c</th><th>\u6e05\u7b97\u89c4\u6a21(\u4ebf)</th><th>\u6e05\u7b97\u4ef7\u683c</th><th>\u6e05\u7b97\u89c4\u6a21(\u4ebf)</th></tr>' +
+  const showBands = [10,20,30,40,50,60,80,100,150];
+  const bandMap = new Map(bands.map(b=>[Number(b.band), b]));
+  let html = '<table class="heat-table"><thead>' +
+    '<tr><th rowspan="2" class="col-threshold">\u70b9\u6570\u9608\u503c</th><th colspan="2">\u4e0a\u65b9\u7a7a\u5355</th><th colspan="2">\u4e0b\u65b9\u591a\u5355</th></tr>' +
+    '<tr><th class="col-up-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-up-size">\u6e05\u7b97\u89c4\u6a21(\u4ebf)</th><th class="col-down-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-down-size">\u6e05\u7b97\u89c4\u6a21(\u4ebf)</th></tr>' +
     '</thead><tbody>';
   const toYi = n => (Number(n||0)/1e8).toFixed(1);
-  for(const b of bands){
+  for(const band of showBands){
+    const b = bandMap.get(band);
+    if(!b) continue;
     html += '<tr>' +
-      '<td>'+b.band+'\u70b9\u5185</td>' +
-      '<td>'+fmtPrice(b.up_price)+'</td>' +
-      '<td>'+toYi(b.up_notional_usd)+'</td>' +
-      '<td>'+fmtPrice(b.down_price)+'</td>' +
-      '<td>'+toYi(b.down_notional_usd)+'</td>' +
+      '<td class="col-threshold">'+b.band+'\u70b9\u5185</td>' +
+      '<td class="col-up-price">'+fmtPrice(b.up_price)+'</td>' +
+      '<td class="col-up-size">'+toYi(b.up_notional_usd)+'</td>' +
+      '<td class="col-down-price">'+fmtPrice(b.down_price)+'</td>' +
+      '<td class="col-down-size">'+toYi(b.down_notional_usd)+'</td>' +
       '</tr>';
   }
   const ls = d.longest_short || [];
@@ -952,7 +1764,7 @@ function renderHeatReport(d){
   const sn = (ls.length>=2) ? toYi(ls[1]) : '-';
   const lp = (ll.length>=1 && ll[0] !== '-') ? fmtPrice(ll[0]) : '-';
   const ln = (ll.length>=2) ? toYi(ll[1]) : '-';
-  html += '<tr><td>\u6700\u957f\u67f1</td><td>'+sp+'</td><td>'+sn+'</td><td>'+lp+'</td><td>'+ln+'</td></tr>';
+  html += '<tr><td class="col-threshold">\u6700\u957f\u67f1</td><td class="col-up-price">'+sp+'</td><td class="col-up-size">'+sn+'</td><td class="col-down-price">'+lp+'</td><td class="col-down-size">'+ln+'</td></tr>';
   html += '</tbody></table>';
   return html;
 }
@@ -970,20 +1782,100 @@ document.querySelectorAll('button[data-days]').forEach(b=>b.onclick=()=>setWindo
 </script></body></html>`
 
 const mapHTML = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>&#28165;&#31639;&#22320;&#22270;</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>清算地图</title>
 <style>
-body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#fff;border-bottom:1px solid #d9e0ea;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#111827}.menu a{color:#4b5563;text-decoration:none;font-size:14px;margin-right:18px}.menu a.active{color:#111827;font-weight:700}.upgrade{color:#111827;font-weight:700;text-decoration:none}.wrap{max-width:1400px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between}.btns button{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:8px 14px;border-radius:8px;cursor:pointer}.btns button.active{background:#22c55e;color:#fff;border-color:#22c55e}.small{font-size:12px;color:#6b7280}canvas{width:100%;height:760px;display:block;border:1px solid #e5e7eb;border-radius:10px;background:#fff}.legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:12px;color:#6b7280;margin-top:10px}.swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px}
+body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
+.nav{height:56px;background:#fff;border-bottom:1px solid #d9e0ea;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
+.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#111827}
+.menu a{color:#4b5563;text-decoration:none;font-size:14px;margin-right:18px}.menu a.active{color:#111827;font-weight:700}
+.upgrade{color:#111827;font-weight:700;text-decoration:none}.wrap{width:100%;max-width:none;margin:0;padding:12px}
+.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:space-between}
+.btns button,.mode button{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:8px 14px;border-radius:8px;cursor:pointer}
+.btns button.active,.mode button.active{background:#22c55e;color:#fff;border-color:#22c55e}
+.small{font-size:12px;color:#6b7280}.legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:12px;color:#6b7280;margin-top:8px}
+.tune{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.tune label{font-size:12px;color:#475569}
+.tune select{height:30px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#111827;padding:0 8px}
+.swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px}
+.meta{font-size:12px;color:#4b5563}.weights{font-size:12px;color:#334155;font-weight:700}
+.chart-wrap{display:flex;gap:14px;align-items:stretch}.chart-main{flex:1;min-width:0}
+canvas{width:100%;height:760px;display:block;border:1px solid #e5e7eb;border-radius:10px;background:#fff}
+.merge-grid{display:grid;grid-template-columns:repeat(3,minmax(180px,1fr));gap:10px;margin-bottom:10px}
+.merge-card{border:1px solid #e2e8f0;border-radius:8px;padding:10px;background:#f8fafc}.merge-label{font-size:12px;color:#64748b}.merge-val{font-size:20px;font-weight:700;color:#0f172a}
+#depthChart{height:312px}
 </style></head><body>
-<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">&#28165;&#31639;&#28909;&#21306;</a><a href="/map" class="active">&#28165;&#31639;&#22320;&#22270;</a><a href="/channel">&#28040;&#24687;&#36890;&#36947;</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><div class="row"><div><h2 style="margin:0;color:#111827">&#28165;&#31639;&#22320;&#22270;</h2><div class="small">按当前价格上下 400 USDT 范围展示堆积清算量（5 USDT 粒度）。</div></div><div class="btns"><button data-days="0">日内</button><button data-days="1">1天</button><button data-days="7">7天</button><button data-days="30">30天</button></div></div><div class="legend"><span><i class="swatch" style="background:#22c55e"></i>上方空单堆积</span><span><i class="swatch" style="background:#ef4444"></i>下方多单堆积</span></div></div><div class="panel"><canvas id="chart" width="1600" height="760"></canvas></div></div>
+<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/map" class="active">清算地图</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a></div></div>
+<div class="wrap">
+  <div class="panel">
+    <div class="row">
+      <div>
+        <h2 style="margin:0;color:#111827">清算地图</h2>
+        <div class="small">基于市场数据 + 杠杆分布模型（Binance / Bybit / OKX 整合）估算清算强度</div>
+      </div>
+      <div class="row"><div class="btns"><button data-days="0">日内</button><button data-days="1">1天</button><button data-days="7">7天</button><button data-days="30">30天</button></div></div>
+    </div>
+    <div id="meta" class="meta"></div>
+    <div id="weights" class="weights"></div>
+    <div class="legend"><span><i class="swatch" style="background:#f59e0b"></i>Binance</span><span><i class="swatch" style="background:#eab308"></i>OKX</span><span><i class="swatch" style="background:#67e8f9"></i>Bybit</span></div>
+    <div class="tune">
+      <label>残影半衰期
+        <select id="halfLifeSel">
+          <option value="60">60秒</option>
+          <option value="120">120秒</option>
+          <option value="180">180秒</option>
+        </select>
+      </label>
+      <label>滚动窗口
+        <select id="rollWinSel">
+          <option value="3">3分钟</option>
+          <option value="5">5分钟</option>
+          <option value="10">10分钟</option>
+        </select>
+      </label>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="row" style="justify-content:flex-start"><h3 style="margin:0">合并盘口（加权）</h3><div class="small">基于三家 OI 权重聚合</div></div>
+    <div id="mergeStats" class="merge-grid"></div>
+    <canvas id="depthChart" width="1600" height="312"></canvas>
+  </div>
+</div>
 <script>
-let currentDays=30,dashboard=null;function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{maximumFractionDigits:0})}function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'\u4ebf';if(a>=1e6)return (n/1e6).toFixed(2)+'\u767e\u4e07';return (n/1e4).toFixed(2)+'\u4e07';}function renderActive(){document.querySelectorAll('button[data-days]').forEach(b=>b.classList.toggle('active',Number(b.dataset.days)===currentDays));}async function setWindow(days){currentDays=days;await fetch('/api/window',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days})});renderActive();await load();}
-function lerp(a,b,t){return a+(b-a)*t}
-function cumulativeValue(rows,d,key){if(!rows.length||d<=0)return 0;if(d<=rows[0].band){return rows[0][key]*(d/rows[0].band);}for(let i=1;i<rows.length;i++){const p=rows[i-1],n=rows[i];if(d<=n.band){const t=(d-p.band)/(n.band-p.band);return lerp(p[key],n[key],t);}}return rows[rows.length-1][key];}
-function draw(){const c=document.getElementById('chart'),x=c.getContext('2d'),W=c.width,H=c.height;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);const bands=((dashboard&&dashboard.bands)||[]).filter(r=>Number(r.band)>0).sort((a,b)=>Number(a.band)-Number(b.band)),price=dashboard?Number(dashboard.current_price||0):0;if(!(price>0)){x.fillStyle='#6b7280';x.font='16px sans-serif';x.fillText('暂无可绘制数据',30,40);return;}const maxRange=400,step=5,min=price-maxRange,max=price+maxRange,pts=[];for(let d=step;d<=maxRange;d+=step){pts.push({price:price+d,buy:cumulativeValue(bands,d,'up_notional_usd'),sell:0});pts.push({price:price-d,buy:0,sell:cumulativeValue(bands,d,'down_notional_usd')});}const mv=Math.max(1,...pts.map(v=>Math.max(v.buy||0,v.sell||0)))*1.15,padL=90,padR=30,padT=50,padB=80,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph,sx=v=>padL+((v-min)/(max-min))*pw;x.strokeStyle='#e5e7eb';x.lineWidth=1;x.font='14px sans-serif';x.fillStyle='#111827';for(let i=0;i<=6;i++){const y=padT+ph*(i/6);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillText(fmtAmount(mv*(1-i/6)),18,y+4);}pts.forEach(v=>{const px=sx(v.price),w=4,bh=(v.buy/mv)*ph,sh=(v.sell/mv)*ph;if(v.buy>0){x.fillStyle='#22c55e';x.fillRect(px-2,by-bh,w,bh);}if(v.sell>0){x.fillStyle='#ef4444';x.fillRect(px-2,by-sh,w,sh);}});const cp=sx(price);x.strokeStyle='#111827';x.setLineDash([8,6]);x.beginPath();x.moveTo(cp,padT);x.lineTo(cp,by);x.stroke();x.setLineDash([]);x.fillStyle='#111827';x.fillText('当前价: '+fmtPrice(price),Math.min(W-padR-160,cp+10),padT+16);for(let i=0;i<=8;i++){const vp=min+(max-min)*(i/8),px=sx(vp);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(px,by);x.lineTo(px,by+6);x.stroke();x.fillStyle='#111827';x.fillText(fmtPrice(vp),px-18,by+24);}x.fillStyle='#6b7280';x.fillText('上下 400 USDT 范围，按 5 USDT 粒度显示堆积清算量',padL,H-18);}
-async function load(){const r=await fetch('/api/dashboard');dashboard=await r.json();currentDays=(dashboard.window_days===0||dashboard.window_days)?dashboard.window_days:currentDays;renderActive();draw();}
-async function doUpgrade(event){if(event)event.preventDefault();const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({output:'',error:'response parse failed'}));alert((d.error?('\u62c9\u53d6\u5931\u8d25: '+d.error+'\n'):'\u62c9\u53d6\u5b8c\u6210\n')+(d.output||''));return false;}
-document.querySelectorAll('button[data-days]').forEach(b=>b.onclick=()=>setWindow(Number(b.dataset.days)));setInterval(load,5000);load();
+let currentDays=30,dashboard=null,orderbook=null,depthState=null,isDraggingDepth=false,depthLastX=0;
+const depthMemory={halfLifeMs:120000,rollingWindowMs:5*60*1000,bidGhost:{},askGhost:{},bidMax:{},askMax:{},lastUpdate:0};
+function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1})}
+function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'亿';if(a>=1e6)return (n/1e6).toFixed(2)+'百万';return (n/1e4).toFixed(2)+'万';}
+function fmtQty(n){n=Number(n);if(!isFinite(n))return '-';return n.toLocaleString('zh-CN',{maximumFractionDigits:2})}
+function windowLabel(v){return Number(v)===0?'日内':(Number(v)+'天')}
+function syncTuneUI(){const h=document.getElementById('halfLifeSel'),r=document.getElementById('rollWinSel');if(h)h.value=String(Math.round(depthMemory.halfLifeMs/1000));if(r)r.value=String(Math.round(depthMemory.rollingWindowMs/60000));}
+function applyTuneFromUI(){const h=document.getElementById('halfLifeSel'),r=document.getElementById('rollWinSel');const hs=Number(h&&h.value||120),rm=Number(r&&r.value||5);depthMemory.halfLifeMs=Math.max(1000,hs*1000);depthMemory.rollingWindowMs=Math.max(60000,rm*60000);try{localStorage.setItem('depth_tune',JSON.stringify({half_life_sec:hs,rolling_min:rm}));}catch(_){ }drawDepth();}
+function loadTuneFromStorage(){try{const raw=localStorage.getItem('depth_tune');if(!raw)return;const t=JSON.parse(raw);const hs=Number(t&&t.half_life_sec||0),rm=Number(t&&t.rolling_min||0);if(hs===60||hs===120||hs===180)depthMemory.halfLifeMs=hs*1000;if(rm===3||rm===5||rm===10)depthMemory.rollingWindowMs=rm*60000;}catch(_){ }}
+function priceKey(v){return Number(v).toFixed(1)}
+function levelMap(levels){const out={};for(const lv of (levels||[])){const p=Number(lv.price||0),q=Number(lv.qty||0);if(!(p>0&&q>0))continue;out[priceKey(p)]=p*q;}return out;}
+function decayGhost(mapObj,f){for(const k of Object.keys(mapObj)){mapObj[k]*=f;if(mapObj[k]<1e-3)delete mapObj[k];}}
+function updateRollingMax(maxObj,curObj,now,windowMs){for(const k of Object.keys(maxObj)){if((now-maxObj[k].ts)>windowMs)delete maxObj[k];}for(const [k,v] of Object.entries(curObj)){const n=Number(v||0);if(!(n>0))continue;const old=maxObj[k];if(!old||n>=old.v)maxObj[k]={v:n,ts:now};}}
+function updateDepthMemory(){const m=orderbook&&orderbook.merged;if(!m)return;const now=Date.now();if(depthMemory.lastUpdate===0)depthMemory.lastUpdate=now;const dt=Math.max(0,now-depthMemory.lastUpdate);depthMemory.lastUpdate=now;const decay=Math.pow(0.5,dt/depthMemory.halfLifeMs);decayGhost(depthMemory.bidGhost,decay);decayGhost(depthMemory.askGhost,decay);const bidNow=levelMap(m.bids),askNow=levelMap(m.asks);for(const [k,v] of Object.entries(bidNow)){depthMemory.bidGhost[k]=Math.max(Number(depthMemory.bidGhost[k]||0),Number(v||0));}for(const [k,v] of Object.entries(askNow)){depthMemory.askGhost[k]=Math.max(Number(depthMemory.askGhost[k]||0),Number(v||0));}updateRollingMax(depthMemory.bidMax,bidNow,now,depthMemory.rollingWindowMs);updateRollingMax(depthMemory.askMax,askNow,now,depthMemory.rollingWindowMs);}
+function renderActive(){document.querySelectorAll('button[data-days]').forEach(b=>b.classList.toggle('active',Number(b.dataset.days)===currentDays));}
+async function setWindow(days){currentDays=days;await fetch('/api/window',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days})});renderActive();await load();}
+function renderMergedPanel(){const el=document.getElementById('mergeStats');const m=orderbook&&orderbook.merged;if(!m){el.innerHTML='<div class=\"small\">暂无合并盘口数据</div>';return;}const spread=(Number(m.best_ask||0)-Number(m.best_bid||0));el.innerHTML='<div class=\"merge-card\"><div class=\"merge-label\">Best Bid</div><div class=\"merge-val\">'+fmtPrice(m.best_bid)+'</div></div>'+'<div class=\"merge-card\"><div class=\"merge-label\">Best Ask</div><div class=\"merge-val\">'+fmtPrice(m.best_ask)+'</div></div>'+'<div class=\"merge-card\"><div class=\"merge-label\">Mid / Spread</div><div class=\"merge-val\">'+fmtPrice(m.mid)+' <span style=\"font-size:12px;color:#64748b\">('+fmtPrice(spread)+')</span></div></div>';}
+function syncDepthCanvas(c){const rect=c.getBoundingClientRect();const dpr=window.devicePixelRatio||1;const W=Math.max(320,Math.floor(rect.width));const H=Math.max(240,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return{x,W,H};}
+function clampDepthView(minP,maxP){if(!depthState||!(depthState.fullMax>depthState.fullMin))return[minP,maxP];const fullMin=depthState.fullMin,fullMax=depthState.fullMax,fullSpan=Math.max(1e-6,fullMax-fullMin);const minSpan=Math.max(2,fullSpan*0.05);let span=Math.max(minSpan,maxP-minP);span=Math.min(fullSpan,span);let vMin=minP,vMax=vMin+span;if(vMin<fullMin){vMin=fullMin;vMax=vMin+span;}if(vMax>fullMax){vMax=fullMax;vMin=vMax-span;}return[vMin,vMax];}
+function initDepthView(allPrices,cur){const dataMin=Math.min(...allPrices,cur),dataMax=Math.max(...allPrices,cur);if(!depthState||!(depthState.fullMax>depthState.fullMin)){const half=Math.max(1,Math.max(cur-dataMin,dataMax-cur));let vMin=cur-half,vMax=cur+half;depthState={fullMin:dataMin,fullMax:dataMax,viewMin:vMin,viewMax:vMax,padL:64,padR:24,padT:20,padB:44,W:0,H:0};[depthState.viewMin,depthState.viewMax]=clampDepthView(depthState.viewMin,depthState.viewMax);return;}depthState.fullMin=dataMin;depthState.fullMax=dataMax;const span=(depthState.viewMax>depthState.viewMin)?(depthState.viewMax-depthState.viewMin):(dataMax-dataMin);const center=(depthState.viewMax>depthState.viewMin)?((depthState.viewMin+depthState.viewMax)/2):cur;let vMin=center-span/2,vMax=center+span/2;[vMin,vMax]=clampDepthView(vMin,vMax);depthState.viewMin=vMin;depthState.viewMax=vMax;}
+function drawDepth(){const c=document.getElementById('depthChart');const v=syncDepthCanvas(c),x=v.x,W=v.W,H=v.H;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);const m=orderbook&&orderbook.merged;const bids=(m&&m.bids)||[];const asks=(m&&m.asks)||[];const cur=Number((dashboard&&dashboard.current_price)||0)||Number((m&&m.mid)||0);if(!(cur>0)||(!bids.length&&!asks.length)){x.fillStyle='#6b7280';x.font='14px sans-serif';x.fillText('暂无盘口柱状数据',20,24);return;}const all=bids.concat(asks).map(v=>({p:Number(v.price||0),n:Number(v.qty||0)*Number(v.price||0)})).filter(v=>v.p>0&&v.n>0);if(!all.length){x.fillStyle='#6b7280';x.font='14px sans-serif';x.fillText('暂无盘口柱状数据',20,24);return;}initDepthView(all.map(v=>v.p),cur);const padL=64,padR=24,padT=20,padB=44,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;depthState.padL=padL;depthState.padR=padR;depthState.padT=padT;depthState.padB=padB;depthState.W=W;depthState.H=H;const minP=depthState.viewMin,maxP=depthState.viewMax,span=Math.max(1e-6,maxP-minP);const bidNow=levelMap(bids),askNow=levelMap(asks);const visible=all.filter(v=>v.p>=minP&&v.p<=maxP);const ghostVals=[];for(const [k,vv] of Object.entries(depthMemory.bidGhost)){const p=Number(k);if(p>=minP&&p<=maxP&&vv>0)ghostVals.push(vv);}for(const [k,vv] of Object.entries(depthMemory.askGhost)){const p=Number(k);if(p>=minP&&p<=maxP&&vv>0)ghostVals.push(vv);}const maxVals=[];for(const [k,o] of Object.entries(depthMemory.bidMax)){const p=Number(k);if(p>=minP&&p<=maxP&&o&&o.v>0)maxVals.push(o.v);}for(const [k,o] of Object.entries(depthMemory.askMax)){const p=Number(k);if(p>=minP&&p<=maxP&&o&&o.v>0)maxVals.push(o.v);}const maxN=Math.max(1,...(visible.length?visible.map(v=>v.n):all.map(v=>v.n)),...(ghostVals.length?ghostVals:[1]),...(maxVals.length?maxVals:[1]));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxN)*ph;x.strokeStyle='#e5e7eb';x.lineWidth=1;x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4),val=maxN*(1-i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#475569';x.fillText(fmtAmount(val),6,y+4);}const tickCount=10;for(let i=0;i<=tickCount;i++){const p=minP+span*(i/tickCount),px=sx(p);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(px,by);x.lineTo(px,by+4);x.stroke();x.fillStyle='#64748b';x.fillText(fmtPrice(p),px-16,by+18);}if(cur>=minP&&cur<=maxP){const cp=sx(cur);x.strokeStyle='#dc2626';x.setLineDash([6,4]);x.beginPath();x.moveTo(cp,padT);x.lineTo(cp,by);x.stroke();x.setLineDash([]);x.fillStyle='#111827';x.fillText('当前价:'+fmtPrice(cur),Math.max(padL,Math.min(cp-34,W-150)),padT-4);}const barCount=Math.max(1,visible.length);const barW=Math.max(1,Math.min(12,pw/Math.max(50,barCount)));for(const [k,n] of Object.entries(depthMemory.bidGhost)){const p=Number(k);if(!(p>=minP&&p<=maxP&&n>0))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(22,163,74,0.18)';x.fillRect(px-barW/2,y,barW,by-y);}for(const [k,n] of Object.entries(depthMemory.askGhost)){const p=Number(k);if(!(p>=minP&&p<=maxP&&n>0))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(220,38,38,0.16)';x.fillRect(px-barW/2,y,barW,by-y);}for(const [k,o] of Object.entries(depthMemory.bidMax)){const p=Number(k),n=Number(o&&o.v||0);if(!(p>=minP&&p<=maxP&&n>0))continue;const px=sx(p),y=sy(n);x.strokeStyle='rgba(22,163,74,0.85)';x.lineWidth=1.3;x.beginPath();x.moveTo(px-barW/2,y);x.lineTo(px+barW/2,y);x.stroke();}for(const [k,o] of Object.entries(depthMemory.askMax)){const p=Number(k),n=Number(o&&o.v||0);if(!(p>=minP&&p<=maxP&&n>0))continue;const px=sx(p),y=sy(n);x.strokeStyle='rgba(220,38,38,0.85)';x.lineWidth=1.3;x.beginPath();x.moveTo(px-barW/2,y);x.lineTo(px+barW/2,y);x.stroke();}x.lineWidth=1;for(const b of bids){const p=Number(b.price||0),n=Number(b.qty||0)*p;if(!(p>=minP&&p<=maxP&&n>0))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(22,163,74,0.75)';x.fillRect(px-barW/2,y,barW,by-y);}for(const a of asks){const p=Number(a.price||0),n=Number(a.qty||0)*p;if(!(p>=minP&&p<=maxP&&n>0))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(220,38,38,0.72)';x.fillRect(px-barW/2,y,barW,by-y);}x.fillStyle='#16a34a';x.fillText('Bid 柱（左侧）',padL,14);x.fillStyle='#dc2626';x.fillText('Ask 柱（右侧）',padL+100,14);x.fillStyle='#64748b';x.fillText('浅色:残影(半衰期'+Math.round(depthMemory.halfLifeMs/1000)+'s)  细线:'+Math.round(depthMemory.rollingWindowMs/60000)+'分钟峰值',padL+220,14);x.fillText('X轴：ETH价格（滚轮缩放 / 拖动平移）',W-190,14);}
+function bindDepthInteraction(){const c=document.getElementById('depthChart');if(!c||c.dataset.bound==='1')return;c.dataset.bound='1';c.addEventListener('wheel',e=>{if(!depthState||!(depthState.viewMax>depthState.viewMin))return;e.preventDefault();const rect=c.getBoundingClientRect();const xPos=e.clientX-rect.left;const s=depthState,pw=s.W-s.padL-s.padR;if(pw<=0)return;const ratio=Math.max(0,Math.min(1,(xPos-s.padL)/pw));const focus=s.viewMin+(s.viewMax-s.viewMin)*ratio;const factor=e.deltaY<0?0.88:1.14;let vMin=focus-(focus-s.viewMin)*factor,vMax=vMin+(s.viewMax-s.viewMin)*factor;[vMin,vMax]=clampDepthView(vMin,vMax);s.viewMin=vMin;s.viewMax=vMax;drawDepth();},{passive:false});c.addEventListener('mousedown',e=>{if(e.button!==0||!depthState)return;isDraggingDepth=true;depthLastX=e.clientX;});window.addEventListener('mousemove',e=>{if(!isDraggingDepth||!depthState)return;const s=depthState,pw=s.W-s.padL-s.padR;if(pw<=0)return;const dx=e.clientX-depthLastX;depthLastX=e.clientX;const dp=(dx/pw)*(s.viewMax-s.viewMin);let vMin=s.viewMin-dp,vMax=s.viewMax-dp;[vMin,vMax]=clampDepthView(vMin,vMax);s.viewMin=vMin;s.viewMax=vMax;drawDepth();});window.addEventListener('mouseup',()=>{isDraggingDepth=false;});window.addEventListener('mouseleave',()=>{isDraggingDepth=false;});window.addEventListener('resize',()=>drawDepth());}
+function buildShares(states){const order=['binance','okx','bybit'];const out={};let total=0;for(const ex of order){const s=(states||[]).find(v=>(v.exchange||'').toLowerCase()===ex);const oi=Number((s&&s.oi_value_usd)||0);out[ex]=oi;total+=oi;}if(total<=0){for(const ex of order)out[ex]=1/order.length;}else{for(const ex of order)out[ex]/=total;}return out;}
+function renderMeta(){if(!dashboard)return;const t=new Date(dashboard.generated_at).toLocaleString();document.getElementById('meta').textContent='口径：估算清算强度（市场数据 + 杠杆分布模型） | 数据源：Binance / Bybit / OKX | 周期：'+windowLabel(dashboard.window_days)+' | 更新时间：'+t+' | 当前价来源：按OI加权';const s=buildShares(dashboard.states);document.getElementById('weights').textContent='三家 OI 占比：Binance '+(s.binance*100).toFixed(1)+'% | Bybit '+(s.bybit*100).toFixed(1)+'% | OKX '+(s.okx*100).toFixed(1)+'%';}
+async function load(){const [r1,r2]=await Promise.all([fetch('/api/dashboard'),fetch('/api/orderbook?limit=60')]);dashboard=await r1.json();orderbook=await r2.json();updateDepthMemory();currentDays=(dashboard.window_days===0||dashboard.window_days)?dashboard.window_days:currentDays;renderActive();renderMeta();renderMergedPanel();drawDepth();}
+async function doUpgrade(event){if(event)event.preventDefault();const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({output:'',error:'response parse failed'}));alert((d.error?('拉取失败: '+d.error+'\n'):'拉取完成\n')+(d.output||''));return false;}
+document.querySelectorAll('button[data-days]').forEach(b=>b.onclick=()=>setWindow(Number(b.dataset.days)));
+loadTuneFromStorage();
+syncTuneUI();
+const hs=document.getElementById('halfLifeSel'),rw=document.getElementById('rollWinSel');
+if(hs)hs.onchange=applyTuneFromUI;
+if(rw)rw.onchange=applyTuneFromUI;
+bindDepthInteraction();
+setInterval(load,5000);load();
 </script></body></html>`
 
 const channelHTML = `<!doctype html>
