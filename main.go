@@ -15,10 +15,12 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -245,9 +247,11 @@ func main() {
 		windowDays: defaultWindowDays,
 		debug:      debug,
 	}
-	app.startCollector(context.Background())
-	app.startOrderBookSync(context.Background())
-	app.startLiquidationSync(context.Background())
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	app.startCollector(rootCtx)
+	app.startOrderBookSync(rootCtx)
+	app.startLiquidationSync(rootCtx)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", app.handleIndex)
 	mux.HandleFunc("/map", app.handleMap)
@@ -261,10 +265,18 @@ func main() {
 	mux.HandleFunc("/api/upgrade/pull", app.handleUpgradePull)
 	mux.HandleFunc("/api/price-events", app.handlePriceEvents)
 
+	srv := &http.Server{Addr: defaultServerAddr, Handler: mux}
+	go func() {
+		<-rootCtx.Done()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+	}()
 	log.Printf("dashboard listening on http://127.0.0.1%s", defaultServerAddr)
-	if err := http.ListenAndServe(defaultServerAddr, mux); err != nil {
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	log.Printf("正常退出")
 }
 
 func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -2169,26 +2181,26 @@ function renderHeatReport(d){
   const bandMap = new Map(bands.map(b=>[Number(b.band), b]));
   let html = '<table class="heat-table"><thead>' +
     '<tr><th rowspan="2" class="col-threshold">\u70b9\u6570\u9608\u503c</th><th colspan="2">\u4e0a\u65b9\u7a7a\u5355</th><th colspan="2">\u4e0b\u65b9\u591a\u5355</th></tr>' +
-    '<tr><th class="col-up-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-up-size">\u6e05\u7b97\u89c4\u6a21(\u4ebf)</th><th class="col-down-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-down-size">\u6e05\u7b97\u89c4\u6a21(\u4ebf)</th></tr>' +
+    '<tr><th class="col-up-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-up-size">\u6e05\u7b97\u89c4\u6a21</th><th class="col-down-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-down-size">\u6e05\u7b97\u89c4\u6a21</th></tr>' +
     '</thead><tbody>';
-  const toYi = n => (Number(n||0)/1e8).toFixed(1);
+  const toScale = n => {n=Number(n||0);const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(1)+'亿';if(a>=1e4)return (n/1e4).toFixed(1)+'万';return n.toFixed(0);};
   for(const band of showBands){
     const b = bandMap.get(band);
     if(!b) continue;
     html += '<tr>' +
       '<td class="col-threshold">'+b.band+'\u70b9\u5185</td>' +
       '<td class="col-up-price">'+fmtPrice(b.up_price)+'</td>' +
-      '<td class="col-up-size">'+toYi(b.up_notional_usd)+'</td>' +
+      '<td class="col-up-size">'+toScale(b.up_notional_usd)+'</td>' +
       '<td class="col-down-price">'+fmtPrice(b.down_price)+'</td>' +
-      '<td class="col-down-size">'+toYi(b.down_notional_usd)+'</td>' +
+      '<td class="col-down-size">'+toScale(b.down_notional_usd)+'</td>' +
       '</tr>';
   }
   const ls = d.longest_short || [];
   const ll = d.longest_long || [];
   const sp = (ls.length>=1 && ls[0] !== '-') ? fmtPrice(ls[0]) : '-';
-  const sn = (ls.length>=2) ? toYi(ls[1]) : '-';
+  const sn = (ls.length>=2) ? toScale(ls[1]) : '-';
   const lp = (ll.length>=1 && ll[0] !== '-') ? fmtPrice(ll[0]) : '-';
-  const ln = (ll.length>=2) ? toYi(ll[1]) : '-';
+  const ln = (ll.length>=2) ? toScale(ll[1]) : '-';
   html += '<tr><td class="col-threshold">\u6700\u957f\u67f1</td><td class="col-up-price">'+sp+'</td><td class="col-up-size">'+sn+'</td><td class="col-down-price">'+lp+'</td><td class="col-down-size">'+ln+'</td></tr>';
   html += '</tbody></table>';
   return html;
