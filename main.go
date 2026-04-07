@@ -73,6 +73,15 @@ type EventRow struct {
 	EventTS     int64   `json:"event_ts"`
 }
 
+type PriceWallEvent struct {
+	Side       string  `json:"side"`
+	Price      float64 `json:"price"`
+	Peak       float64 `json:"peak"`
+	DurationMS int64   `json:"duration_ms"`
+	EventTS    int64   `json:"event_ts"`
+	Mode       string  `json:"mode"`
+}
+
 type App struct {
 	db         *sql.DB
 	httpClient *http.Client
@@ -179,6 +188,17 @@ func initDB(db *sql.DB) error {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS price_wall_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			side TEXT NOT NULL,
+			price REAL NOT NULL,
+			peak_notional_usd REAL NOT NULL,
+			duration_ms INTEGER NOT NULL,
+			event_ts INTEGER NOT NULL,
+			mode TEXT NOT NULL DEFAULT 'weighted',
+			inserted_ts INTEGER NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_price_wall_events_ts ON price_wall_events(event_ts);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -238,6 +258,7 @@ func main() {
 	mux.HandleFunc("/api/settings", app.handleSettings)
 	mux.HandleFunc("/api/channel/test", app.handleChannelTest)
 	mux.HandleFunc("/api/upgrade/pull", app.handleUpgradePull)
+	mux.HandleFunc("/api/price-events", app.handlePriceEvents)
 
 	log.Printf("dashboard listening on http://127.0.0.1%s", defaultServerAddr)
 	if err := http.ListenAndServe(defaultServerAddr, mux); err != nil {
@@ -461,6 +482,67 @@ func (a *App) handleUpgradePull(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	}
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (a *App) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
+	if a.debug {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	switch r.Method {
+	case http.MethodGet:
+		cutoff := time.Now().Add(-1 * time.Hour).UnixMilli()
+		rows, err := a.db.Query(`SELECT side, price, peak_notional_usd, duration_ms, event_ts, mode
+			FROM price_wall_events
+			WHERE event_ts>=?
+			ORDER BY event_ts DESC
+			LIMIT 200`, cutoff)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+		out := make([]PriceWallEvent, 0, 200)
+		for rows.Next() {
+			var e PriceWallEvent
+			if err := rows.Scan(&e.Side, &e.Price, &e.Peak, &e.DurationMS, &e.EventTS, &e.Mode); err != nil {
+				continue
+			}
+			out = append(out, e)
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	case http.MethodPost:
+		var req PriceWallEvent
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		req.Side = strings.ToLower(strings.TrimSpace(req.Side))
+		if req.Side != "bid" && req.Side != "ask" {
+			http.Error(w, "invalid side", http.StatusBadRequest)
+			return
+		}
+		if req.Price <= 0 || req.Peak <= 0 || req.DurationMS <= 0 {
+			http.Error(w, "invalid payload", http.StatusBadRequest)
+			return
+		}
+		req.Mode = strings.ToLower(strings.TrimSpace(req.Mode))
+		if req.Mode != "weighted" && req.Mode != "merged" {
+			req.Mode = "weighted"
+		}
+		if req.EventTS <= 0 {
+			req.EventTS = time.Now().UnixMilli()
+		}
+		_, err := a.db.Exec(`INSERT INTO price_wall_events(side, price, peak_notional_usd, duration_ms, event_ts, mode, inserted_ts)
+			VALUES(?, ?, ?, ?, ?, ?, ?)`,
+			req.Side, req.Price, req.Peak, req.DurationMS, req.EventTS, req.Mode, time.Now().UnixMilli())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (a *App) sendTelegramTestMessage() error {
@@ -1900,7 +1982,7 @@ canvas{width:100%;height:760px;display:block;border:1px solid #e5e7eb;border-rad
   </div>
 </div>
 <script>
-let currentDays=30,currentMode='weighted',dashboard=null,orderbook=null,depthState=null,isDraggingDepth=false,depthLastX=0;
+let currentDays=30,currentMode='weighted',dashboard=null,orderbook=null,depthState=null,isDraggingDepth=false,depthLastX=0,persistedEvents={bid:[],ask:[]};
 const depthMemory={halfLifeMs:120000,rollingWindowMs:5*60*1000,bidGhost:{},askGhost:{},bidMax:{},askMax:{},lastUpdate:0};
 const depthEvents={minPersistMs:3000,linkFactor:0.6,bidTrack:{},askTrack:{},bidList:[],askList:[]};
 function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1})}
@@ -1917,20 +1999,22 @@ function updateRollingMax(maxObj,curObj,now,windowMs){for(const k of Object.keys
 function wallThreshold(levelMapObj){const vals=Object.values(levelMapObj).map(v=>Number(v||0)).filter(v=>v>0).sort((a,b)=>a-b);if(!vals.length)return 1e12;const p=Math.floor(vals.length*0.85);const base=vals[Math.max(0,Math.min(vals.length-1,p))]||0;return Math.max(2.5e5,base);}
 function hasLinkedNeighbor(levelMapObj,key,th){const p=Number(key),step=0.1,l=priceKey(p-step),r=priceKey(p+step),lv=Number(levelMapObj[l]||0),rv=Number(levelMapObj[r]||0);return lv>=th*depthEvents.linkFactor||rv>=th*depthEvents.linkFactor;}
 function trackWalls(side,levelNow,th,now){const track=side==='bid'?depthEvents.bidTrack:depthEvents.askTrack;const live={};for(const [k,vRaw] of Object.entries(levelNow)){const v=Number(vRaw||0);if(v<th)continue;const linked=hasLinkedNeighbor(levelNow,k,th);const old=track[k];if(!old){track[k]={start:now,last:now,peak:v,duration:0,linkedEver:linked,emitted:false};}else{const gap=Math.max(0,now-Number(old.last||now));old.last=now;old.duration=(gap<=15000)?(Number(old.duration||0)+gap):0;old.peak=Math.max(Number(old.peak||0),v);old.linkedEver=Boolean(old.linkedEver||linked);}live[k]=true;}for(const k of Object.keys(track)){if(!live[k]&&now-Number(track[k].last||0)>15000)delete track[k];}}
-function pushPriceEvent(side,price,peak,durMs,ts){const item={price:Number(price),peak:Number(peak),dur_ms:Number(durMs),ts:Number(ts)};const list=side==='bid'?depthEvents.bidList:depthEvents.askList;list.unshift(item);if(list.length>18)list.length=18;}
+async function postPriceEvent(side,item){try{await fetch('/api/price-events',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({side:side,price:item.price,peak:item.peak,duration_ms:item.dur_ms,event_ts:item.ts,mode:currentMode})});}catch(_){ }}
+function pushPriceEvent(side,price,peak,durMs,ts){const item={price:Number(price),peak:Number(peak),dur_ms:Number(durMs),ts:Number(ts)};const list=side==='bid'?depthEvents.bidList:depthEvents.askList;list.unshift(item);if(list.length>18)list.length=18;postPriceEvent(side,item);}
 function emitQualifiedEvents(side,now){const track=side==='bid'?depthEvents.bidTrack:depthEvents.askTrack;for(const [k,t] of Object.entries(track)){if(t.emitted)continue;if(Number(t.duration||0)<depthEvents.minPersistMs)continue;if(!t.linkedEver)continue;t.emitted=true;pushPriceEvent(side,Number(k),Number(t.peak||0),Number(t.duration||0),now);}}
 function computeFilteredMap(side,levelNow,th){const out={};const track=side==='bid'?depthEvents.bidTrack:depthEvents.askTrack;for(const [k,vRaw] of Object.entries(levelNow)){const v=Number(vRaw||0);if(!(v>0))continue;const t=track[k];const strong=Boolean(t&&t.linkedEver&&Number(t.duration||0)>=depthEvents.minPersistMs);const linked=hasLinkedNeighbor(levelNow,k,th);const w=strong?1:(linked?0.35:0.1);out[k]=v*w;}return out;}
 function updateDepthMemory(){const m=orderbook&&orderbook.merged;if(!m)return;const now=Date.now();if(depthMemory.lastUpdate===0)depthMemory.lastUpdate=now;const dt=Math.max(0,now-depthMemory.lastUpdate);depthMemory.lastUpdate=now;const decay=Math.pow(0.5,dt/depthMemory.halfLifeMs);decayGhost(depthMemory.bidGhost,decay);decayGhost(depthMemory.askGhost,decay);const bidNow=levelMap(m.bids),askNow=levelMap(m.asks),bidTh=wallThreshold(bidNow),askTh=wallThreshold(askNow);trackWalls('bid',bidNow,bidTh,now);trackWalls('ask',askNow,askTh,now);emitQualifiedEvents('bid',now);emitQualifiedEvents('ask',now);const bidFiltered=computeFilteredMap('bid',bidNow,bidTh),askFiltered=computeFilteredMap('ask',askNow,askTh);for(const [k,v] of Object.entries(bidFiltered)){depthMemory.bidGhost[k]=Math.max(Number(depthMemory.bidGhost[k]||0),Number(v||0));}for(const [k,v] of Object.entries(askFiltered)){depthMemory.askGhost[k]=Math.max(Number(depthMemory.askGhost[k]||0),Number(v||0));}updateRollingMax(depthMemory.bidMax,bidFiltered,now,depthMemory.rollingWindowMs);updateRollingMax(depthMemory.askMax,askFiltered,now,depthMemory.rollingWindowMs);}
 function renderActive(){document.querySelectorAll('button[data-days]').forEach(b=>b.classList.toggle('active',Number(b.dataset.days)===currentDays));document.querySelectorAll('button[data-mode]').forEach(b=>b.classList.toggle('active',(b.dataset.mode||'')===currentMode));}
 async function setWindow(days){currentDays=days;await fetch('/api/window',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days})});renderActive();await load();}
-function resetDepthMemory(){depthMemory.bidGhost={};depthMemory.askGhost={};depthMemory.bidMax={};depthMemory.askMax={};depthMemory.lastUpdate=0;depthState=null;depthEvents.bidTrack={};depthEvents.askTrack={};depthEvents.bidList=[];depthEvents.askList=[];}
+function resetDepthMemory(){depthMemory.bidGhost={};depthMemory.askGhost={};depthMemory.bidMax={};depthMemory.askMax={};depthMemory.lastUpdate=0;depthState=null;depthEvents.bidTrack={};depthEvents.askTrack={};depthEvents.bidList=[];depthEvents.askList=[];persistedEvents={bid:[],ask:[]};}
 function setMode(mode){const m=(mode==='merged')?'merged':'weighted';if(currentMode===m)return;currentMode=m;resetDepthMemory();try{localStorage.setItem('orderbook_mode',currentMode);}catch(_){ }renderActive();load();}
 function loadModeFromStorage(){try{const m=localStorage.getItem('orderbook_mode');if(m==='weighted'||m==='merged')currentMode=m;}catch(_){ }}
 function renderMergedPanel(){const el=document.getElementById('mergeStats');const m=orderbook&&orderbook.merged;const t=document.getElementById('mergeTitle');const h=document.getElementById('mergeHint');if(t)t.textContent=currentMode==='weighted'?'合并盘口（加权）':'合并盘口（合并）';if(h)h.textContent=currentMode==='weighted'?'基于三家 OI 权重聚合':'三家交易所盘口直接合并（不按 OI 占比）';if(!m){el.innerHTML='<div class=\"small\">暂无合并盘口数据</div>';return;}const spread=(Number(m.best_ask||0)-Number(m.best_bid||0));el.innerHTML='<div class=\"merge-card\"><div class=\"merge-label\">Best Bid</div><div class=\"merge-val\">'+fmtPrice(m.best_bid)+'</div></div>'+'<div class=\"merge-card\"><div class=\"merge-label\">Best Ask</div><div class=\"merge-val\">'+fmtPrice(m.best_ask)+'</div></div>'+'<div class=\"merge-card\"><div class=\"merge-label\">Mid / Spread</div><div class=\"merge-val\">'+fmtPrice(m.mid)+' <span style=\"font-size:12px;color:#64748b\">('+fmtPrice(spread)+')</span></div></div>';}
 function fmtEventTime(ts){try{return new Date(ts).toLocaleTimeString('zh-CN',{hour12:false});}catch(_){return '-';}}
 function fmtDur(ms){const s=Math.max(0,Math.round(Number(ms||0)/1000));return s+'s';}
 function eventTable(list){if(!list||!list.length)return '<div class=\"small\">暂无事件</div>';let h='<table><thead><tr><th>价格</th><th>峰值</th><th>持续</th><th>出现</th></tr></thead><tbody>';for(const e of list.slice(0,8)){h+='<tr><td>'+fmtPrice(e.price)+'</td><td>'+fmtAmount(e.peak)+'</td><td>'+fmtDur(e.dur_ms)+'</td><td>'+fmtEventTime(e.ts)+'</td></tr>';}return h+'</tbody></table>';}
-function renderEventTables(){const be=document.getElementById('bidEvents'),ae=document.getElementById('askEvents');if(be)be.innerHTML=eventTable(depthEvents.bidList);if(ae)ae.innerHTML=eventTable(depthEvents.askList);}
+function renderEventTables(){const be=document.getElementById('bidEvents'),ae=document.getElementById('askEvents');if(be)be.innerHTML=eventTable(persistedEvents.bid||[]);if(ae)ae.innerHTML=eventTable(persistedEvents.ask||[]);}
+function setPersistedEvents(rows){const cutoff=Date.now()-60*60*1000;const bid=[],ask=[];for(const r of (rows||[])){const ts=Number(r.event_ts||0);if(ts<cutoff)continue;const side=(r.side||'').toLowerCase();const item={price:Number(r.price||0),peak:Number(r.peak||0),dur_ms:Number(r.duration_ms||0),ts:ts};if(side==='bid')bid.push(item);if(side==='ask')ask.push(item);}persistedEvents.bid=bid.slice(0,8);persistedEvents.ask=ask.slice(0,8);}
 function syncDepthCanvas(c){const rect=c.getBoundingClientRect();const dpr=window.devicePixelRatio||1;const W=Math.max(320,Math.floor(rect.width));const H=Math.max(240,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return{x,W,H};}
 function clampDepthView(minP,maxP){if(!depthState||!(depthState.fullMax>depthState.fullMin))return[minP,maxP];const fullMin=depthState.fullMin,fullMax=depthState.fullMax,fullSpan=Math.max(1e-6,fullMax-fullMin);const minSpan=Math.max(2,fullSpan*0.05);let span=Math.max(minSpan,maxP-minP);span=Math.min(fullSpan,span);let vMin=minP,vMax=vMin+span;if(vMin<fullMin){vMin=fullMin;vMax=vMin+span;}if(vMax>fullMax){vMax=fullMax;vMin=vMax-span;}return[vMin,vMax];}
 function initDepthView(allPrices,cur){const dataMin=Math.min(...allPrices,cur),dataMax=Math.max(...allPrices,cur);if(!depthState||!(depthState.fullMax>depthState.fullMin)){const half=Math.max(1,Math.max(cur-dataMin,dataMax-cur));let vMin=cur-half,vMax=cur+half;depthState={fullMin:dataMin,fullMax:dataMax,viewMin:vMin,viewMax:vMax,padL:64,padR:24,padT:20,padB:44,W:0,H:0};[depthState.viewMin,depthState.viewMax]=clampDepthView(depthState.viewMin,depthState.viewMax);return;}depthState.fullMin=dataMin;depthState.fullMax=dataMax;const span=(depthState.viewMax>depthState.viewMin)?(depthState.viewMax-depthState.viewMin):(dataMax-dataMin);let vMin=cur-span/2,vMax=cur+span/2;[vMin,vMax]=clampDepthView(vMin,vMax);depthState.viewMin=vMin;depthState.viewMax=vMax;}
@@ -1938,7 +2022,7 @@ function drawDepth(){const c=document.getElementById('depthChart');const v=syncD
 function bindDepthInteraction(){const c=document.getElementById('depthChart');if(!c||c.dataset.bound==='1')return;c.dataset.bound='1';c.addEventListener('wheel',e=>{if(!depthState||!(depthState.viewMax>depthState.viewMin))return;e.preventDefault();const rect=c.getBoundingClientRect();const xPos=e.clientX-rect.left;const s=depthState,pw=s.W-s.padL-s.padR;if(pw<=0)return;const ratio=Math.max(0,Math.min(1,(xPos-s.padL)/pw));const focus=s.viewMin+(s.viewMax-s.viewMin)*ratio;const factor=e.deltaY<0?0.88:1.14;let vMin=focus-(focus-s.viewMin)*factor,vMax=vMin+(s.viewMax-s.viewMin)*factor;[vMin,vMax]=clampDepthView(vMin,vMax);s.viewMin=vMin;s.viewMax=vMax;drawDepth();},{passive:false});c.addEventListener('mousedown',e=>{if(e.button!==0||!depthState)return;isDraggingDepth=true;depthLastX=e.clientX;});window.addEventListener('mousemove',e=>{if(!isDraggingDepth||!depthState)return;const s=depthState,pw=s.W-s.padL-s.padR;if(pw<=0)return;const dx=e.clientX-depthLastX;depthLastX=e.clientX;const dp=(dx/pw)*(s.viewMax-s.viewMin);let vMin=s.viewMin-dp,vMax=s.viewMax-dp;[vMin,vMax]=clampDepthView(vMin,vMax);s.viewMin=vMin;s.viewMax=vMax;drawDepth();});window.addEventListener('mouseup',()=>{isDraggingDepth=false;});window.addEventListener('mouseleave',()=>{isDraggingDepth=false;});window.addEventListener('resize',()=>drawDepth());}
 function buildShares(states){const order=['binance','okx','bybit'];const out={};let total=0;for(const ex of order){const s=(states||[]).find(v=>(v.exchange||'').toLowerCase()===ex);const oi=Number((s&&s.oi_value_usd)||0);out[ex]=oi;total+=oi;}if(total<=0){for(const ex of order)out[ex]=1/order.length;}else{for(const ex of order)out[ex]/=total;}return out;}
 function renderMeta(){if(!dashboard)return;const t=new Date(dashboard.generated_at).toLocaleString();document.getElementById('meta').textContent='口径：估算清算强度（市场数据 + 杠杆分布模型） | 数据源：Binance / Bybit / OKX | 周期：'+windowLabel(dashboard.window_days)+' | 更新时间：'+t+' | 当前价来源：盘口mid';const s=buildShares(dashboard.states);document.getElementById('weights').textContent=currentMode==='weighted'?('三家 OI 占比：Binance '+(s.binance*100).toFixed(1)+'% | Bybit '+(s.bybit*100).toFixed(1)+'% | OKX '+(s.okx*100).toFixed(1)+'%'):'模式：合并（不使用 OI 占比）；三家盘口数量直接求和显示';}
-async function load(){const [r1,r2]=await Promise.all([fetch('/api/dashboard'),fetch('/api/orderbook?limit=60&mode='+encodeURIComponent(currentMode))]);dashboard=await r1.json();orderbook=await r2.json();updateDepthMemory();currentDays=(dashboard.window_days===0||dashboard.window_days)?dashboard.window_days:currentDays;renderActive();renderMeta();renderMergedPanel();drawDepth();renderEventTables();}
+async function load(){const [r1,r2,r3]=await Promise.all([fetch('/api/dashboard'),fetch('/api/orderbook?limit=60&mode='+encodeURIComponent(currentMode)),fetch('/api/price-events')]);dashboard=await r1.json();orderbook=await r2.json();const evts=await r3.json().catch(()=>[]);updateDepthMemory();setPersistedEvents(evts);currentDays=(dashboard.window_days===0||dashboard.window_days)?dashboard.window_days:currentDays;renderActive();renderMeta();renderMergedPanel();drawDepth();renderEventTables();}
 async function doUpgrade(event){if(event)event.preventDefault();const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({output:'',error:'response parse failed'}));alert((d.error?('拉取失败: '+d.error+'\n'):'拉取完成\n')+(d.output||''));return false;}
 document.querySelectorAll('button[data-days]').forEach(b=>b.onclick=()=>setWindow(Number(b.dataset.days)));
 document.querySelectorAll('button[data-mode]').forEach(b=>b.onclick=()=>setMode((b.dataset.mode||'weighted')));
