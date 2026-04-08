@@ -37,6 +37,7 @@ const (
 	defaultBucketMin   = 5
 	defaultPriceStep   = 5.0
 	defaultPriceRange  = 400.0
+	fixedLeverageCSV   = "1,5,10,20,30,50,100"
 )
 
 var bandSizes = []int{10, 20, 30, 40, 50, 60, 80, 100, 125, 150, 175, 200, 250, 300, 350, 400}
@@ -737,7 +738,7 @@ func (a *App) loadModelConfig() ModelConfig {
 		BucketMin:     a.getSettingInt("model_bucket_min", defaultBucketMin),
 		PriceStep:     a.getSettingFloat("model_price_step", defaultPriceStep),
 		PriceRange:    a.getSettingFloat("model_price_range", defaultPriceRange),
-		LeverageCSV:   normalizeCSVInput(a.getSetting("model_leverage_levels")),
+		LeverageCSV:   fixedLeverageCSV,
 		WeightCSV:     normalizeCSVInput(a.getSetting("model_leverage_weights")),
 		MaintMargin:   a.getSettingFloat("model_mm", 0.005),
 		MaintMarginCSV: normalizeCSVInput(a.getSetting("model_mm_csv")),
@@ -746,11 +747,8 @@ func (a *App) loadModelConfig() ModelConfig {
 		DecayK:        a.getSettingFloat("model_decay_k", 2.2),
 		NeighborShare: a.getSettingFloat("model_neighbor_share", 0.28),
 	}
-	if cfg.LeverageCSV == "" {
-		cfg.LeverageCSV = "10,25,50,100"
-	}
 	if cfg.WeightCSV == "" {
-		cfg.WeightCSV = "0.25,0.25,0.25,0.25"
+		cfg.WeightCSV = "0.142857,0.142857,0.142857,0.142857,0.142857,0.142857,0.142857"
 	}
 	return cfg
 }
@@ -780,7 +778,7 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		req.LeverageCSV = normalizeCSVInput(req.LeverageCSV)
+		req.LeverageCSV = fixedLeverageCSV
 		req.WeightCSV = normalizeCSVInput(req.WeightCSV)
 		req.MaintMarginCSV = normalizeCSVInput(req.MaintMarginCSV)
 		req.FundingScaleCSV = normalizeCSVInput(req.FundingScaleCSV)
@@ -818,13 +816,14 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 		if req.NeighborShare < 0 || req.NeighborShare > 1 {
 			req.NeighborShare = 0.28
 		}
-		if len(parseCSVFloats(req.LeverageCSV)) == 0 {
-			req.LeverageCSV = "10,25,50,100"
+		levs := parseCSVFloats(req.LeverageCSV)
+		if len(levs) != 7 {
+			http.Error(w, "fixed leverage tiers expected", http.StatusBadRequest)
+			return
 		}
 		if len(parseCSVFloats(req.WeightCSV)) == 0 {
-			req.WeightCSV = "0.25,0.25,0.25,0.25"
+			req.WeightCSV = "0.142857,0.142857,0.142857,0.142857,0.142857,0.142857,0.142857"
 		}
-		levs := parseCSVFloats(req.LeverageCSV)
 		mmList := parseCSVFloats(req.MaintMarginCSV)
 		for _, v := range mmList {
 			if v <= 0 || v > 0.02 {
@@ -832,19 +831,7 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if len(mmList) == 1 && len(levs) > 1 {
-			v := mmList[0]
-			mmList = make([]float64, len(levs))
-			for i := range mmList {
-				mmList[i] = v
-			}
-			parts := make([]string, len(levs))
-			for i := range parts {
-				parts[i] = fmt.Sprintf("%.6f", v)
-			}
-			req.MaintMarginCSV = strings.Join(parts, ",")
-		}
-		if len(mmList) > 0 && len(mmList) != len(levs) {
+		if len(mmList) != len(levs) {
 			http.Error(w, "maint_margin_csv must match leverage count", http.StatusBadRequest)
 			return
 		}
@@ -855,19 +842,7 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if len(fsList) == 1 && len(levs) > 1 {
-			v := fsList[0]
-			fsList = make([]float64, len(levs))
-			for i := range fsList {
-				fsList[i] = v
-			}
-			parts := make([]string, len(levs))
-			for i := range parts {
-				parts[i] = fmt.Sprintf("%.2f", v)
-			}
-			req.FundingScaleCSV = strings.Join(parts, ",")
-		}
-		if len(fsList) > 0 && len(fsList) != len(levs) {
+		if len(fsList) != len(levs) {
 			http.Error(w, "funding_scale_csv must match leverage count", http.StatusBadRequest)
 			return
 		}
@@ -884,10 +859,6 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := a.setSetting("model_price_range", fmt.Sprintf("%.2f", req.PriceRange)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := a.setSetting("model_leverage_levels", strings.TrimSpace(req.LeverageCSV)); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -4241,10 +4212,24 @@ const configHTML = `<!doctype html>
   <div class="field"><label>时间桶（分钟）</label><input id="bucket" type="number" min="1" max="30" step="1"></div>
   <div class="field"><label>价格步长</label><input id="step" type="number" min="1" max="50" step="0.5"></div>
   <div class="field"><label>价格范围（±）</label><input id="range" type="number" min="100" max="1000" step="10"></div>
-  <div class="field"><label>杠杆档位（逗号分隔）</label><input id="levs" type="text" placeholder="10,25,50,100"></div>
-  <div class="field"><label>杠杆权重（逗号分隔）</label><input id="weights" type="text" placeholder="0.25,0.25,0.25,0.25"></div>
-  <div class="field"><label>维护保证金率（逗号分隔，与杠杆数量一致）</label><input id="mmcsv" type="text" placeholder="0.0100,0.0080,0.0060,0.0050"></div>
-  <div class="field"><label>资金费率缩放系数（逗号分隔，与杠杆数量一致）</label><input id="fundingcsv" type="text" placeholder="7000,7000,7000,7000"></div>
+  <div class="field" style="grid-column:1/-1">
+    <label>杠杆固定档位（1x / 5x / 10x / 20x / 30x / 50x / 100x）</label>
+    <div class="small" style="margin-top:6px">分别配置：权重、维护保证金率、资金费率缩放系数（与杠杆档位一一对应）。</div>
+    <div style="overflow:auto;margin-top:10px">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:#f1f5f9"><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">杠杆</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">权重</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">维护保证金率</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">资金费率缩放系数</th></tr></thead>
+        <tbody>
+          <tr><td style="padding:8px;border:1px solid #e2e8f0">1x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_1" type="number" step="0.01"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_1" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_1" type="number" step="100"></td></tr>
+          <tr><td style="padding:8px;border:1px solid #e2e8f0">5x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_5" type="number" step="0.01"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_5" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_5" type="number" step="100"></td></tr>
+          <tr><td style="padding:8px;border:1px solid #e2e8f0">10x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_10" type="number" step="0.01"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_10" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_10" type="number" step="100"></td></tr>
+          <tr><td style="padding:8px;border:1px solid #e2e8f0">20x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_20" type="number" step="0.01"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_20" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_20" type="number" step="100"></td></tr>
+          <tr><td style="padding:8px;border:1px solid #e2e8f0">30x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_30" type="number" step="0.01"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_30" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_30" type="number" step="100"></td></tr>
+          <tr><td style="padding:8px;border:1px solid #e2e8f0">50x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_50" type="number" step="0.01"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_50" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_50" type="number" step="100"></td></tr>
+          <tr><td style="padding:8px;border:1px solid #e2e8f0">100x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_100" type="number" step="0.01"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_100" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_100" type="number" step="100"></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
   <div class="field"><label>时间衰减系数 k</label><input id="decay" type="number" step="0.1"></div>
   <div class="field"><label>邻近价扩散比例</label><input id="neighbor" type="number" step="0.01"></div>
 </div>
@@ -4255,13 +4240,21 @@ function bind(cfg){
   document.getElementById('bucket').value=cfg.BucketMin||5;
   document.getElementById('step').value=cfg.PriceStep||5;
   document.getElementById('range').value=cfg.PriceRange||400;
-  const levStr=String(cfg.LeverageCSV||'10,25,50,100');
-  document.getElementById('levs').value=levStr;
-  document.getElementById('weights').value=cfg.WeightCSV||'0.25,0.25,0.25,0.25';
-  const levCount=levStr.split(',').map(s=>String(s||'').trim()).filter(s=>s).length||4;
-  const rep=(v)=>Array.from({length:levCount},()=>String(v)).join(',');
-  document.getElementById('mmcsv').value=(cfg.MaintMarginCSV&&String(cfg.MaintMarginCSV).trim())||rep(cfg.MaintMargin||0.005);
-  document.getElementById('fundingcsv').value=(cfg.FundingScaleCSV&&String(cfg.FundingScaleCSV).trim())||rep(cfg.FundingScale||7000);
+  const levs=[1,5,10,20,30,50,100];
+  const w=(String(cfg.WeightCSV||'')||'').split(',').map(s=>Number(String(s||'').trim())).filter(n=>isFinite(n));
+  const mm=(String(cfg.MaintMarginCSV||'')||'').split(',').map(s=>Number(String(s||'').trim())).filter(n=>isFinite(n));
+  const fs=(String(cfg.FundingScaleCSV||'')||'').split(',').map(s=>Number(String(s||'').trim())).filter(n=>isFinite(n));
+  const defW=1/levs.length, defMM=Number(cfg.MaintMargin||0.005), defFS=Number(cfg.FundingScale||7000);
+  for(let i=0;i<levs.length;i++){
+    const lv=levs[i];
+    const wi=(w.length===levs.length?w[i]:(w[0]||defW));
+    const mi=(mm.length===levs.length?mm[i]:(mm[0]||defMM));
+    const fi=(fs.length===levs.length?fs[i]:(fs[0]||defFS));
+    const wEl=document.getElementById('w_'+lv),mmEl=document.getElementById('mm_'+lv),fsEl=document.getElementById('fs_'+lv);
+    if(wEl) wEl.value=String(wi);
+    if(mmEl) mmEl.value=String(mi);
+    if(fsEl) fsEl.value=String(fi);
+  }
   document.getElementById('decay').value=cfg.DecayK||2.2;
   document.getElementById('neighbor').value=cfg.NeighborShare||0.28;
 }
@@ -4270,21 +4263,35 @@ async function reloadCfg(){
   if(cfg) bind(cfg);
 }
 async function save(){
-  function cleanCSV(v){v=String(v||'').trim();if((v.startsWith('"')&&v.endsWith('"'))||(v.startsWith("'")&&v.endsWith("'")))v=v.slice(1,-1);v=v.split('\\\"').join('"');return String(v).trim();}
-  function firstNum(csv,fallback){const p=String(csv||'').split(',').map(s=>String(s||'').trim()).filter(s=>s)[0];const n=Number(p);return isFinite(n)&&n>0?n:fallback;}
-  const levCSV=cleanCSV(document.getElementById('levs').value||'10,25,50,100');
-  const mmCSV=cleanCSV(document.getElementById('mmcsv').value||'');
-  const fsCSV=cleanCSV(document.getElementById('fundingcsv').value||'');
+  const levs=[1,5,10,20,30,50,100];
+  const levCSV=levs.join(',');
+  const wList=[],mmList=[],fsList=[];
+  for(const lv of levs){
+    const w=Number((document.getElementById('w_'+lv)||{}).value||0);
+    const mm=Number((document.getElementById('mm_'+lv)||{}).value||0);
+    const fs=Number((document.getElementById('fs_'+lv)||{}).value||0);
+    wList.push(isFinite(w)?w:0);
+    mmList.push(isFinite(mm)?mm:0);
+    fsList.push(isFinite(fs)?fs:0);
+  }
+  const sumW=wList.reduce((a,b)=>a+b,0);
+  if(!(sumW>0)){document.getElementById('msg').textContent='保存失败：权重总和必须 > 0';return;}
+  for(let i=0;i<wList.length;i++) wList[i]=wList[i]/sumW;
+  for(const v of mmList){if(!(v>0&&v<=0.02)){document.getElementById('msg').textContent='保存失败：维护保证金率需在 (0,0.02]';return;}}
+  for(const v of fsList){if(!(v>=1000&&v<=20000)){document.getElementById('msg').textContent='保存失败：资金费率缩放系数需在 [1000,20000]';return;}}
+  const mmCSV=mmList.map(v=>String(v)).join(',');
+  const fsCSV=fsList.map(v=>String(v)).join(',');
+  const wCSV=wList.map(v=>String(v)).join(',');
   const body={
     LookbackMin:Number(document.getElementById('lookback').value||360),
     BucketMin:Number(document.getElementById('bucket').value||5),
     PriceStep:Number(document.getElementById('step').value||5),
     PriceRange:Number(document.getElementById('range').value||400),
     LeverageCSV:levCSV,
-    WeightCSV:cleanCSV(document.getElementById('weights').value||'0.25,0.25,0.25,0.25'),
-    MaintMargin:firstNum(mmCSV,0.005),
+    WeightCSV:wCSV,
+    MaintMargin:mmList[0]||0.005,
     MaintMarginCSV:mmCSV,
-    FundingScale:firstNum(fsCSV,7000),
+    FundingScale:fsList[0]||7000,
     FundingScaleCSV:fsCSV,
     DecayK:Number(document.getElementById('decay').value||2.2),
     NeighborShare:Number(document.getElementById('neighbor').value||0.28)
