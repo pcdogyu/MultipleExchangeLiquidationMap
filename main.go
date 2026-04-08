@@ -773,9 +773,9 @@ func (a *App) handleUpgradePull(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// Run upgrade steps in background without creating a transient systemd unit,
-	// because users expect to only see liqmap.service (not liqmap-upgrade.service).
-	upgradeCmd := exec.Command("bash", "-lc", "rm -f /tmp/liqmap-upgrade.exit /tmp/liqmap-upgrade.pid; : >/tmp/liqmap-upgrade.log; (cd /opt/MultipleExchangeLiquidationMap && echo [git fetch] && echo 'root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git fetch --all --prune' && git fetch --all --prune && echo [git reset] && echo 'root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git reset --hard origin/golang' && git reset --hard origin/golang && echo [go build] && echo 'root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# go build -o multipleexchangeliquidationmap.exe .' && go build -o multipleexchangeliquidationmap.exe . && echo [restart service] && echo 'root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl restart liqmap.service' && systemctl restart liqmap.service && echo [service status] && echo 'root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl status liqmap.service --no-pager' && systemctl status liqmap.service --no-pager; ec=$?; echo $ec >/tmp/liqmap-upgrade.exit) >>/tmp/liqmap-upgrade.log 2>&1 & echo $! >/tmp/liqmap-upgrade.pid")
+	// Use systemd-run --scope so the upgrade process survives `systemctl restart liqmap.service`
+	// without creating a liqmap-upgrade.service unit.
+	upgradeCmd := exec.Command("bash", "-lc", "rm -f /tmp/liqmap-upgrade.exit /tmp/liqmap-upgrade.pid /tmp/liqmap-upgrade.unit; : >/tmp/liqmap-upgrade.log; unit=$(systemd-run --scope --collect /bin/bash -lc 'cd /opt/MultipleExchangeLiquidationMap && echo [git fetch] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git fetch --all --prune\" && git fetch --all --prune && echo [git reset] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git reset --hard origin/golang\" && git reset --hard origin/golang && echo [go build] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# go build -o multipleexchangeliquidationmap.exe .\" && go build -o multipleexchangeliquidationmap.exe . && echo [restart service] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl restart liqmap.service\" && systemctl restart liqmap.service && echo [service status] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl status liqmap.service --no-pager\" && systemctl status liqmap.service --no-pager; ec=$?; echo $ec >/tmp/liqmap-upgrade.exit' >>/tmp/liqmap-upgrade.log 2>&1); echo \"$unit\" >>/tmp/liqmap-upgrade.log; echo \"$unit\" | awk '{print $NF}' | tr -d '\\r' > /tmp/liqmap-upgrade.unit")
 	out, err := upgradeCmd.CombinedOutput()
 	if err != nil {
 		w.WriteHeader(http.StatusBadGateway)
@@ -799,7 +799,7 @@ func (a *App) handleUpgradeProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logOut, _ := exec.Command("bash", "-lc", "tail -n 260 /tmp/liqmap-upgrade.log 2>/dev/null || true").CombinedOutput()
-	runningOut, _ := exec.Command("bash", "-lc", "pid=$(cat /tmp/liqmap-upgrade.pid 2>/dev/null || true); if [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null; then echo 1; else echo 0; fi").CombinedOutput()
+	runningOut, _ := exec.Command("bash", "-lc", "unit=$(cat /tmp/liqmap-upgrade.unit 2>/dev/null || true); if [ -n \"$unit\" ] && systemctl is-active --quiet \"$unit\"; then echo 1; else echo 0; fi").CombinedOutput()
 	exitOut, _ := exec.Command("bash", "-lc", "cat /tmp/liqmap-upgrade.exit 2>/dev/null || true").CombinedOutput()
 	running := strings.TrimSpace(string(runningOut)) == "1"
 	exitCode := strings.TrimSpace(string(exitOut))
