@@ -33,7 +33,7 @@ const (
 	defaultServerAddr  = ":8888"
 	defaultWindowDays  = 1
 	windowIntraday     = 0
-	defaultLookbackMin = 360
+	defaultLookbackMin = 1440
 	defaultBucketMin   = 5
 	defaultPriceStep   = 5.0
 	defaultPriceRange  = 400.0
@@ -505,7 +505,7 @@ func (a *App) handleModelLiquidationMap(w http.ResponseWriter, r *http.Request) 
 	cfg := a.loadModelConfig()
 	lookbackMin := cfg.LookbackMin
 	if raw := strings.TrimSpace(r.URL.Query().Get("lookback_min")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n >= 60 && n <= 1440 {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 60 && n <= 43200 {
 			lookbackMin = n
 		}
 	}
@@ -782,7 +782,7 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 		req.WeightCSV = normalizeCSVInput(req.WeightCSV)
 		req.MaintMarginCSV = normalizeCSVInput(req.MaintMarginCSV)
 		req.FundingScaleCSV = normalizeCSVInput(req.FundingScaleCSV)
-		if req.LookbackMin < 60 || req.LookbackMin > 1440 {
+		if req.LookbackMin < 60 || req.LookbackMin > 43200 {
 			req.LookbackMin = defaultLookbackMin
 		}
 		if req.BucketMin < 1 || req.BucketMin > 30 {
@@ -3814,7 +3814,8 @@ function renderLiqDesc(cfg){
   const fs=Number(cfg.funding_scale||cfg.FundingScale||7000);
   const dk=Number(cfg.decay_k||cfg.DecayK||2.2);
   const ns=Number(cfg.neighbor_share||cfg.NeighborShare||0.28);
-  const lookback=Number(cfg.lookback_min||cfg.LookbackMin||360);
+  const lookback=Number(cfg.lookback_min||cfg.LookbackMin||1440);
+  const lookbackDays=Math.max(1,Math.round(lookback/1440));
   const bucket=Number(cfg.bucket_min||cfg.BucketMin||5);
   const step=Number(cfg.price_step||cfg.PriceStep||5);
   const range=Number(cfg.price_range||cfg.PriceRange||400);
@@ -3822,7 +3823,7 @@ function renderLiqDesc(cfg){
   if(el){
     el.textContent='数据源：Binance/Bybit/OKX 公共接口的标记价、OI、资金费率。模型：对 OI 增量按杠杆 '+levs+
       ' 与权重 '+ws+' 分配；多空比例=clamp(0.5+funding×'+fs+',0.2,0.8)；清算价=mark×(1±1/lev∓'+mm.toFixed(4)+')；时间衰减 exp(-'+dk.toFixed(2)+'×age)，邻近价扩散 '+ns.toFixed(2)+
-      '。参数：回看 '+lookback+' 分钟，时间桶 '+bucket+' 分钟，价格步长 '+step+'，范围 ±'+range+'。配置入口 /config。';
+      '。参数：回看 '+lookbackDays+' 天，时间桶 '+bucket+' 分钟，价格步长 '+step+'，范围 ±'+range+'。配置入口 /config。';
   }
 }
 function renderTable(rows,headers){if(!rows||!rows.length)return '<div class="hint">\u6682\u65e0\u6570\u636e</div>';let html='<table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>';for(const r of rows) html+='<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>';return html+'</tbody></table>';}
@@ -4208,7 +4209,7 @@ const configHTML = `<!doctype html>
 <body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config" class="active">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel"><h2 style="margin-top:0">清算地图模型参数</h2><div class="small">修改后立即影响 OI 增量模型的计算与展示。</div>
 <div class="grid" style="margin-top:14px">
-  <div class="field"><label>回看窗口（分钟）</label><input id="lookback" type="number" min="60" max="1440" step="1"></div>
+  <div class="field"><label>回看窗口（天）</label><input id="lookback" type="number" min="1" max="30" step="1"></div>
   <div class="field"><label>时间桶（分钟）</label><input id="bucket" type="number" min="1" max="30" step="1"></div>
   <div class="field"><label>价格步长</label><input id="step" type="number" min="1" max="50" step="0.5"></div>
   <div class="field"><label>价格范围（±）</label><input id="range" type="number" min="100" max="1000" step="10"></div>
@@ -4236,7 +4237,8 @@ const configHTML = `<!doctype html>
 <div class="row" style="margin-top:14px"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="reloadCfg()">重载</button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
 <script>
 function bind(cfg){
-  document.getElementById('lookback').value=cfg.LookbackMin||360;
+  const lbMin=Number(cfg.LookbackMin||1440);
+  document.getElementById('lookback').value=Math.max(1,Math.min(30,Math.round(lbMin/1440)));
   document.getElementById('bucket').value=cfg.BucketMin||5;
   document.getElementById('step').value=cfg.PriceStep||5;
   document.getElementById('range').value=cfg.PriceRange||400;
@@ -4283,7 +4285,7 @@ async function save(){
   const fsCSV=fsList.map(v=>String(v)).join(',');
   const wCSV=wList.map(v=>String(v)).join(',');
   const body={
-    LookbackMin:Number(document.getElementById('lookback').value||360),
+    LookbackMin:Math.max(60,Math.min(43200,Number(document.getElementById('lookback').value||1)*1440)),
     BucketMin:Number(document.getElementById('bucket').value||5),
     PriceStep:Number(document.getElementById('step').value||5),
     PriceRange:Number(document.getElementById('range').value||400),
