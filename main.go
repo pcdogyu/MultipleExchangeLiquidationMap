@@ -643,10 +643,10 @@ func (a *App) loadModelConfig() ModelConfig {
 		NeighborShare: a.getSettingFloat("model_neighbor_share", 0.28),
 	}
 	if cfg.LeverageCSV == "" {
-		cfg.LeverageCSV = "20,50,100"
+		cfg.LeverageCSV = "10,25,50,100"
 	}
 	if cfg.WeightCSV == "" {
-		cfg.WeightCSV = "0.30,0.40,0.30"
+		cfg.WeightCSV = "0.25,0.25,0.25,0.25"
 	}
 	return cfg
 }
@@ -701,10 +701,10 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 			req.NeighborShare = 0.28
 		}
 		if len(parseCSVFloats(req.LeverageCSV)) == 0 {
-			req.LeverageCSV = "20,50,100"
+			req.LeverageCSV = "10,25,50,100"
 		}
 		if len(parseCSVFloats(req.WeightCSV)) == 0 {
-			req.WeightCSV = "0.30,0.40,0.30"
+			req.WeightCSV = "0.25,0.25,0.25,0.25"
 		}
 		_ = a.setSetting("model_lookback_min", strconv.Itoa(req.LookbackMin))
 		_ = a.setSetting("model_bucket_min", strconv.Itoa(req.BucketMin))
@@ -3514,8 +3514,8 @@ function heatColor(v,max){if(!(max>0)||!(v>0))return 'rgb(248,250,252)';let t=Ma
 function drawLiqHeat(){const v=fitCanvas('liqHeatMap');if(!v)return;const {x,W,H}=v;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);const d=liqMapData;if(!d||!d.prices||!d.intensity_grid||!d.prices.length){x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const rows=d.prices.length,cols=((d.intensity_grid&&d.intensity_grid[0])?d.intensity_grid[0].length:0);if(rows<2||cols<1){x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const pts=[];for(let ri=0;ri<rows;ri++){const p=Number(d.prices[ri]||0);if(!(p>0))continue;let s=0;for(let ci=0;ci<cols;ci++)s+=Math.max(0,Number((d.intensity_grid[ri]||[])[ci]||0));if(s>0)pts.push({p:p,v:s});}if(!pts.length){x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const padL=66,padR=20,padT=16,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;const minP=pts[0].p,maxP=pts[pts.length-1].p,span=Math.max(1e-6,maxP-minP),maxV=Math.max(1,...pts.map(it=>it.v));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxV)*ph;x.strokeStyle='#e2e8f0';x.strokeRect(padL,padT,pw,ph);x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4),val=maxV*(1-i/4);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#475569';x.fillText(fmtAmount(val),6,y+4);}const minLabelGap=12;const approxLabelW=Math.max(36,x.measureText(fmtPrice(minP)).width,x.measureText(fmtPrice(maxP)).width);const maxTicks=Math.max(2,Math.floor(pw/(approxLabelW+minLabelGap)));const tickCount=Math.max(2,Math.min(10,maxTicks));for(let i=0;i<=tickCount;i++){const p=minP+span*(i/tickCount),px=sx(p);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(px,by);x.lineTo(px,by+4);x.stroke();const label=fmtPrice(p);const lw=x.measureText(label).width;const tx=Math.max(padL,Math.min(px-lw/2,W-padR-lw));x.fillStyle='#64748b';x.fillText(label,tx,by+18);}const barW=Math.max(2,Math.min(12,pw/Math.max(40,pts.length)));const cp=Number(d.current_price||0);for(const it of pts){const px=sx(it.p),y=sy(it.v);const leftSide=(cp>0)?(it.p<=cp):(it.p<=(minP+maxP)/2);x.fillStyle=leftSide?'rgba(249,115,22,0.78)':'rgba(125,211,252,0.78)';x.fillRect(px-barW/2,y,barW,by-y);}x.lineWidth=1;if(cp>=minP&&cp<=maxP){const cpX=sx(cp);x.strokeStyle='rgba(220,38,38,0.9)';x.setLineDash([5,4]);x.beginPath();x.moveTo(cpX,padT);x.lineTo(cpX,by);x.stroke();x.setLineDash([]);x.fillStyle='#111827';const txt='当前价:'+fmtPrice(cp);const tw=x.measureText(txt).width;x.fillText(txt,Math.max(padL,Math.min(cpX+4,W-padR-tw)),padT+12);}x.fillStyle='#475569';x.fillText('清算金额',padL,padT-4);const xt='价格';const xtw=x.measureText(xt).width;x.fillText(xt,padL+pw/2-xtw/2,H-8);} function renderTable(rows,headers){if(!rows||!rows.length)return '<div class="hint">\u6682\u65e0\u6570\u636e</div>';let html='<table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>';for(const r of rows) html+='<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>';return html+'</tbody></table>';}
 function renderLiqDesc(cfg){
   if(!cfg){const el=document.getElementById('liqDesc');if(el)el.textContent='';return;}
-  const levs=String(cfg.leverage_csv||cfg.LeverageCSV||cfg.leverage_levels||cfg.leverage||'20,50,100');
-  const ws=String(cfg.weight_csv||cfg.WeightCSV||cfg.leverage_weights||cfg.weights||'0.30,0.40,0.30');
+  const levs=String(cfg.leverage_csv||cfg.LeverageCSV||cfg.leverage_levels||cfg.leverage||'10,25,50,100');
+  const ws=String(cfg.weight_csv||cfg.WeightCSV||cfg.leverage_weights||cfg.weights||'0.25,0.25,0.25,0.25');
   const mm=Number(cfg.maint_margin||cfg.MaintMargin||cfg.mm||0.005);
   const fs=Number(cfg.funding_scale||cfg.FundingScale||7000);
   const dk=Number(cfg.decay_k||cfg.DecayK||2.2);
@@ -3918,8 +3918,8 @@ const configHTML = `<!doctype html>
   <div class="field"><label>时间桶（分钟）</label><input id="bucket" type="number" min="1" max="30" step="1"></div>
   <div class="field"><label>价格步长</label><input id="step" type="number" min="1" max="50" step="0.5"></div>
   <div class="field"><label>价格范围（±）</label><input id="range" type="number" min="100" max="1000" step="10"></div>
-  <div class="field"><label>杠杆档位（逗号分隔）</label><input id="levs" type="text" placeholder="20,50,100"></div>
-  <div class="field"><label>杠杆权重（逗号分隔）</label><input id="weights" type="text" placeholder="0.30,0.40,0.30"></div>
+  <div class="field"><label>杠杆档位（逗号分隔）</label><input id="levs" type="text" placeholder="10,25,50,100"></div>
+  <div class="field"><label>杠杆权重（逗号分隔）</label><input id="weights" type="text" placeholder="0.25,0.25,0.25,0.25"></div>
   <div class="field"><label>维护保证金率</label><input id="mm" type="number" step="0.0001"></div>
   <div class="field"><label>资金费率缩放系数</label><input id="funding" type="number" step="100"></div>
   <div class="field"><label>时间衰减系数 k</label><input id="decay" type="number" step="0.1"></div>
@@ -3932,8 +3932,8 @@ function bind(cfg){
   document.getElementById('bucket').value=cfg.BucketMin||5;
   document.getElementById('step').value=cfg.PriceStep||5;
   document.getElementById('range').value=cfg.PriceRange||400;
-  document.getElementById('levs').value=cfg.LeverageCSV||'20,50,100';
-  document.getElementById('weights').value=cfg.WeightCSV||'0.30,0.40,0.30';
+  document.getElementById('levs').value=cfg.LeverageCSV||'10,25,50,100';
+  document.getElementById('weights').value=cfg.WeightCSV||'0.25,0.25,0.25,0.25';
   document.getElementById('mm').value=cfg.MaintMargin||0.005;
   document.getElementById('funding').value=cfg.FundingScale||7000;
   document.getElementById('decay').value=cfg.DecayK||2.2;
@@ -3949,8 +3949,8 @@ async function save(){
     BucketMin:Number(document.getElementById('bucket').value||5),
     PriceStep:Number(document.getElementById('step').value||5),
     PriceRange:Number(document.getElementById('range').value||400),
-    LeverageCSV:String(document.getElementById('levs').value||'20,50,100'),
-    WeightCSV:String(document.getElementById('weights').value||'0.30,0.40,0.30'),
+    LeverageCSV:String(document.getElementById('levs').value||'10,25,50,100'),
+    WeightCSV:String(document.getElementById('weights').value||'0.25,0.25,0.25,0.25'),
     MaintMargin:Number(document.getElementById('mm').value||0.005),
     FundingScale:Number(document.getElementById('funding').value||7000),
     DecayK:Number(document.getElementById('decay').value||2.2),
