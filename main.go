@@ -770,6 +770,19 @@ func parseCSVFloats(raw string) []float64 {
 	}
 	return out
 }
+
+func parseCSVNonNegFloats(raw string) []float64 {
+	parts := strings.Split(raw, ",")
+	out := make([]float64, 0, len(parts))
+	for _, p := range parts {
+		v, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
+		if err != nil || v < 0 {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
+}
 func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
@@ -829,8 +842,18 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "fixed leverage tiers expected", http.StatusBadRequest)
 			return
 		}
-		if len(parseCSVFloats(req.WeightCSV)) == 0 {
-			req.WeightCSV = "0.142857,0.142857,0.142857,0.142857,0.142857,0.142857,0.142857"
+		ws := parseCSVNonNegFloats(req.WeightCSV)
+		if len(ws) != len(levs) {
+			http.Error(w, "weight_csv must match leverage count", http.StatusBadRequest)
+			return
+		}
+		sumW := 0.0
+		for _, v := range ws {
+			sumW += v
+		}
+		if !(sumW > 0) {
+			http.Error(w, "weight_csv sum must be > 0", http.StatusBadRequest)
+			return
 		}
 		mmList := parseCSVFloats(req.MaintMarginCSV)
 		for _, v := range mmList {
@@ -2294,7 +2317,7 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 	contribs := make([]contrib, 0, len(snaps)*6)
 	prevOI := map[string]float64{}
 	levs := parseCSVFloats(cfg.LeverageCSV)
-	weights := parseCSVFloats(cfg.WeightCSV)
+	weights := parseCSVNonNegFloats(cfg.WeightCSV)
 	if len(levs) == 0 {
 		levs = []float64{20, 50, 100}
 	}
@@ -2309,7 +2332,10 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 		sumW += w
 	}
 	if sumW <= 0 {
-		sumW = 1
+		for i := range weights {
+			weights[i] = 1.0
+		}
+		sumW = float64(len(weights))
 	}
 	for i := range weights {
 		weights[i] /= sumW
