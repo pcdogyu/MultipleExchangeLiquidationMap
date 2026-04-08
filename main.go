@@ -628,9 +628,36 @@ type ModelConfig struct {
 	LeverageCSV   string
 	WeightCSV     string
 	MaintMargin   float64
+	MaintMarginCSV string
 	FundingScale  float64
+	FundingScaleCSV string
 	DecayK        float64
 	NeighborShare float64
+}
+
+func normalizeCSVInput(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	// Try to undo accidental quoting/escaping like "\"10,25,50,100\"".
+	for i := 0; i < 2; i++ {
+		if unq, err := strconv.Unquote(s); err == nil {
+			s = strings.TrimSpace(unq)
+			continue
+		}
+		break
+	}
+	for len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			s = strings.TrimSpace(s[1 : len(s)-1])
+			continue
+		}
+		break
+	}
+	// Common case: backslashes were persisted literally.
+	s = strings.ReplaceAll(s, "\\\"", "\"")
+	return strings.TrimSpace(s)
 }
 
 func (a *App) loadModelConfig() ModelConfig {
@@ -639,10 +666,12 @@ func (a *App) loadModelConfig() ModelConfig {
 		BucketMin:     a.getSettingInt("model_bucket_min", defaultBucketMin),
 		PriceStep:     a.getSettingFloat("model_price_step", defaultPriceStep),
 		PriceRange:    a.getSettingFloat("model_price_range", defaultPriceRange),
-		LeverageCSV:   strings.TrimSpace(a.getSetting("model_leverage_levels")),
-		WeightCSV:     strings.TrimSpace(a.getSetting("model_leverage_weights")),
+		LeverageCSV:   normalizeCSVInput(a.getSetting("model_leverage_levels")),
+		WeightCSV:     normalizeCSVInput(a.getSetting("model_leverage_weights")),
 		MaintMargin:   a.getSettingFloat("model_mm", 0.005),
+		MaintMarginCSV: normalizeCSVInput(a.getSetting("model_mm_csv")),
 		FundingScale:  a.getSettingFloat("model_funding_scale", 7000),
+		FundingScaleCSV: normalizeCSVInput(a.getSetting("model_funding_scale_csv")),
 		DecayK:        a.getSettingFloat("model_decay_k", 2.2),
 		NeighborShare: a.getSettingFloat("model_neighbor_share", 0.28),
 	}
@@ -680,6 +709,10 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
+		req.LeverageCSV = normalizeCSVInput(req.LeverageCSV)
+		req.WeightCSV = normalizeCSVInput(req.WeightCSV)
+		req.MaintMarginCSV = normalizeCSVInput(req.MaintMarginCSV)
+		req.FundingScaleCSV = normalizeCSVInput(req.FundingScaleCSV)
 		if req.LookbackMin < 60 || req.LookbackMin > 1440 {
 			req.LookbackMin = defaultLookbackMin
 		}
@@ -691,6 +724,16 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.PriceRange < 100 || req.PriceRange > 1000 {
 			req.PriceRange = defaultPriceRange
+		}
+		if req.MaintMarginCSV != "" && !(req.MaintMargin > 0) {
+			if xs := parseCSVFloats(req.MaintMarginCSV); len(xs) > 0 {
+				req.MaintMargin = xs[0]
+			}
+		}
+		if req.FundingScaleCSV != "" && !(req.FundingScale > 0) {
+			if xs := parseCSVFloats(req.FundingScaleCSV); len(xs) > 0 {
+				req.FundingScale = xs[0]
+			}
 		}
 		if req.MaintMargin <= 0 || req.MaintMargin > 0.02 {
 			req.MaintMargin = 0.005
@@ -710,6 +753,53 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 		if len(parseCSVFloats(req.WeightCSV)) == 0 {
 			req.WeightCSV = "0.25,0.25,0.25,0.25"
 		}
+		levs := parseCSVFloats(req.LeverageCSV)
+		mmList := parseCSVFloats(req.MaintMarginCSV)
+		for _, v := range mmList {
+			if v <= 0 || v > 0.02 {
+				http.Error(w, "maint_margin_csv values must be in (0, 0.02]", http.StatusBadRequest)
+				return
+			}
+		}
+		if len(mmList) == 1 && len(levs) > 1 {
+			v := mmList[0]
+			mmList = make([]float64, len(levs))
+			for i := range mmList {
+				mmList[i] = v
+			}
+			parts := make([]string, len(levs))
+			for i := range parts {
+				parts[i] = fmt.Sprintf("%.6f", v)
+			}
+			req.MaintMarginCSV = strings.Join(parts, ",")
+		}
+		if len(mmList) > 0 && len(mmList) != len(levs) {
+			http.Error(w, "maint_margin_csv must match leverage count", http.StatusBadRequest)
+			return
+		}
+		fsList := parseCSVFloats(req.FundingScaleCSV)
+		for _, v := range fsList {
+			if v < 1000 || v > 20000 {
+				http.Error(w, "funding_scale_csv values must be in [1000, 20000]", http.StatusBadRequest)
+				return
+			}
+		}
+		if len(fsList) == 1 && len(levs) > 1 {
+			v := fsList[0]
+			fsList = make([]float64, len(levs))
+			for i := range fsList {
+				fsList[i] = v
+			}
+			parts := make([]string, len(levs))
+			for i := range parts {
+				parts[i] = fmt.Sprintf("%.2f", v)
+			}
+			req.FundingScaleCSV = strings.Join(parts, ",")
+		}
+		if len(fsList) > 0 && len(fsList) != len(levs) {
+			http.Error(w, "funding_scale_csv must match leverage count", http.StatusBadRequest)
+			return
+		}
 		_ = a.setSetting("model_lookback_min", strconv.Itoa(req.LookbackMin))
 		_ = a.setSetting("model_bucket_min", strconv.Itoa(req.BucketMin))
 		_ = a.setSetting("model_price_step", fmt.Sprintf("%.4f", req.PriceStep))
@@ -717,7 +807,9 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 		_ = a.setSetting("model_leverage_levels", strings.TrimSpace(req.LeverageCSV))
 		_ = a.setSetting("model_leverage_weights", strings.TrimSpace(req.WeightCSV))
 		_ = a.setSetting("model_mm", fmt.Sprintf("%.6f", req.MaintMargin))
+		_ = a.setSetting("model_mm_csv", strings.TrimSpace(req.MaintMarginCSV))
 		_ = a.setSetting("model_funding_scale", fmt.Sprintf("%.2f", req.FundingScale))
+		_ = a.setSetting("model_funding_scale_csv", strings.TrimSpace(req.FundingScaleCSV))
 		_ = a.setSetting("model_decay_k", fmt.Sprintf("%.4f", req.DecayK))
 		_ = a.setSetting("model_neighbor_share", fmt.Sprintf("%.4f", req.NeighborShare))
 		w.WriteHeader(http.StatusNoContent)
@@ -2128,13 +2220,51 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 	for i := range weights {
 		weights[i] /= sumW
 	}
-	mm := cfg.MaintMargin
-	if mm <= 0 {
-		mm = 0.005
+	mmDefault := cfg.MaintMargin
+	if mmDefault <= 0 {
+		mmDefault = 0.005
 	}
-	fundingScale := cfg.FundingScale
-	if fundingScale <= 0 {
-		fundingScale = 7000
+	fundingDefault := cfg.FundingScale
+	if fundingDefault <= 0 {
+		fundingDefault = 7000
+	}
+	mmList := parseCSVFloats(cfg.MaintMarginCSV)
+	if len(mmList) == 1 && len(levs) > 1 {
+		v := mmList[0]
+		mmList = make([]float64, len(levs))
+		for i := range mmList {
+			mmList[i] = v
+		}
+	}
+	if len(mmList) != len(levs) {
+		mmList = make([]float64, len(levs))
+		for i := range mmList {
+			mmList[i] = mmDefault
+		}
+	}
+	for i := range mmList {
+		if mmList[i] <= 0 || mmList[i] > 0.02 {
+			mmList[i] = mmDefault
+		}
+	}
+	fundingList := parseCSVFloats(cfg.FundingScaleCSV)
+	if len(fundingList) == 1 && len(levs) > 1 {
+		v := fundingList[0]
+		fundingList = make([]float64, len(levs))
+		for i := range fundingList {
+			fundingList[i] = v
+		}
+	}
+	if len(fundingList) != len(levs) {
+		fundingList = make([]float64, len(levs))
+		for i := range fundingList {
+			fundingList[i] = fundingDefault
+		}
+	}
+	for i := range fundingList {
+		if fundingList[i] < 1000 || fundingList[i] > 20000 {
+			fundingList[i] = fundingDefault
+		}
 	}
 	decayK := cfg.DecayK
 	if decayK <= 0 {
@@ -2157,10 +2287,11 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 		if delta <= 0 {
 			continue
 		}
-		longShare := clamp(0.5+s.funding*fundingScale, 0.2, 0.8)
-		shortShare := 1 - longShare
 		for i, lev := range levs {
 			w := weights[i]
+			longShare := clamp(0.5+s.funding*fundingList[i], 0.2, 0.8)
+			shortShare := 1 - longShare
+			mm := mmList[i]
 			longAmt := delta * longShare * w
 			shortAmt := delta * shortShare * w
 			liqLong := s.mark * (1 - 1/lev + mm)
@@ -3975,8 +4106,8 @@ const configHTML = `<!doctype html>
   <div class="field"><label>价格范围（±）</label><input id="range" type="number" min="100" max="1000" step="10"></div>
   <div class="field"><label>杠杆档位（逗号分隔）</label><input id="levs" type="text" placeholder="10,25,50,100"></div>
   <div class="field"><label>杠杆权重（逗号分隔）</label><input id="weights" type="text" placeholder="0.25,0.25,0.25,0.25"></div>
-  <div class="field"><label>维护保证金率</label><input id="mm" type="number" step="0.0001"></div>
-  <div class="field"><label>资金费率缩放系数</label><input id="funding" type="number" step="100"></div>
+  <div class="field"><label>维护保证金率（逗号分隔，与杠杆数量一致）</label><input id="mmcsv" type="text" placeholder="0.0100,0.0080,0.0060,0.0050"></div>
+  <div class="field"><label>资金费率缩放系数（逗号分隔，与杠杆数量一致）</label><input id="fundingcsv" type="text" placeholder="7000,7000,7000,7000"></div>
   <div class="field"><label>时间衰减系数 k</label><input id="decay" type="number" step="0.1"></div>
   <div class="field"><label>邻近价扩散比例</label><input id="neighbor" type="number" step="0.01"></div>
 </div>
@@ -3987,10 +4118,13 @@ function bind(cfg){
   document.getElementById('bucket').value=cfg.BucketMin||5;
   document.getElementById('step').value=cfg.PriceStep||5;
   document.getElementById('range').value=cfg.PriceRange||400;
-  document.getElementById('levs').value=cfg.LeverageCSV||'10,25,50,100';
+  const levStr=String(cfg.LeverageCSV||'10,25,50,100');
+  document.getElementById('levs').value=levStr;
   document.getElementById('weights').value=cfg.WeightCSV||'0.25,0.25,0.25,0.25';
-  document.getElementById('mm').value=cfg.MaintMargin||0.005;
-  document.getElementById('funding').value=cfg.FundingScale||7000;
+  const levCount=levStr.split(',').map(s=>String(s||'').trim()).filter(s=>s).length||4;
+  const rep=(v)=>Array.from({length:levCount},()=>String(v)).join(',');
+  document.getElementById('mmcsv').value=(cfg.MaintMarginCSV&&String(cfg.MaintMarginCSV).trim())||rep(cfg.MaintMargin||0.005);
+  document.getElementById('fundingcsv').value=(cfg.FundingScaleCSV&&String(cfg.FundingScaleCSV).trim())||rep(cfg.FundingScale||7000);
   document.getElementById('decay').value=cfg.DecayK||2.2;
   document.getElementById('neighbor').value=cfg.NeighborShare||0.28;
 }
@@ -3999,15 +4133,22 @@ async function reloadCfg(){
   if(cfg) bind(cfg);
 }
 async function save(){
+  function cleanCSV(v){v=String(v||'').trim();if((v.startsWith('"')&&v.endsWith('"'))||(v.startsWith("'")&&v.endsWith("'")))v=v.slice(1,-1);v=v.split('\\\"').join('"');return String(v).trim();}
+  function firstNum(csv,fallback){const p=String(csv||'').split(',').map(s=>String(s||'').trim()).filter(s=>s)[0];const n=Number(p);return isFinite(n)&&n>0?n:fallback;}
+  const levCSV=cleanCSV(document.getElementById('levs').value||'10,25,50,100');
+  const mmCSV=cleanCSV(document.getElementById('mmcsv').value||'');
+  const fsCSV=cleanCSV(document.getElementById('fundingcsv').value||'');
   const body={
     LookbackMin:Number(document.getElementById('lookback').value||360),
     BucketMin:Number(document.getElementById('bucket').value||5),
     PriceStep:Number(document.getElementById('step').value||5),
     PriceRange:Number(document.getElementById('range').value||400),
-    LeverageCSV:String(document.getElementById('levs').value||'10,25,50,100'),
-    WeightCSV:String(document.getElementById('weights').value||'0.25,0.25,0.25,0.25'),
-    MaintMargin:Number(document.getElementById('mm').value||0.005),
-    FundingScale:Number(document.getElementById('funding').value||7000),
+    LeverageCSV:levCSV,
+    WeightCSV:cleanCSV(document.getElementById('weights').value||'0.25,0.25,0.25,0.25'),
+    MaintMargin:firstNum(mmCSV,0.005),
+    MaintMarginCSV:mmCSV,
+    FundingScale:firstNum(fsCSV,7000),
+    FundingScaleCSV:fsCSV,
     DecayK:Number(document.getElementById('decay').value||2.2),
     NeighborShare:Number(document.getElementById('neighbor').value||0.28)
   };
@@ -4018,6 +4159,6 @@ async function loadFooter(){try{const r=await fetch('/api/version');const v=awai
 async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
-bind({LookbackMin:{{.LookbackMin}},BucketMin:{{.BucketMin}},PriceStep:{{.PriceStep}},PriceRange:{{.PriceRange}},LeverageCSV:{{printf "%q" .LeverageCSV}},WeightCSV:{{printf "%q" .WeightCSV}},MaintMargin:{{.MaintMargin}},FundingScale:{{.FundingScale}},DecayK:{{.DecayK}},NeighborShare:{{.NeighborShare}}});
+bind({LookbackMin:{{.LookbackMin}},BucketMin:{{.BucketMin}},PriceStep:{{.PriceStep}},PriceRange:{{.PriceRange}},LeverageCSV:{{printf "%q" .LeverageCSV}},WeightCSV:{{printf "%q" .WeightCSV}},MaintMargin:{{.MaintMargin}},MaintMarginCSV:{{printf "%q" .MaintMarginCSV}},FundingScale:{{.FundingScale}},FundingScaleCSV:{{printf "%q" .FundingScaleCSV}},DecayK:{{.DecayK}},NeighborShare:{{.NeighborShare}}});
 loadFooter();
 </script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
