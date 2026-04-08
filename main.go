@@ -4327,13 +4327,14 @@ const configHTML = `<!doctype html>
       <table style="width:100%;border-collapse:collapse">
         <thead><tr style="background:#f1f5f9"><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">杠杆</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">权重</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">维护保证金率</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">资金费率缩放系数</th></tr></thead>
         <tbody>
-          <tr><td style="padding:8px;border:1px solid #e2e8f0">1x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_1" type="number" step="0.01"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_1" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_1" type="number" step="100"></td></tr>
-          <tr><td style="padding:8px;border:1px solid #e2e8f0">5x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_5" type="number" step="0.01"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_5" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_5" type="number" step="100"></td></tr>
-          <tr><td style="padding:8px;border:1px solid #e2e8f0">10x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_10" type="number" step="0.01"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_10" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_10" type="number" step="100"></td></tr>
-          <tr><td style="padding:8px;border:1px solid #e2e8f0">20x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_20" type="number" step="0.01"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_20" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_20" type="number" step="100"></td></tr>
-          <tr><td style="padding:8px;border:1px solid #e2e8f0">30x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_30" type="number" step="0.01"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_30" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_30" type="number" step="100"></td></tr>
-          <tr><td style="padding:8px;border:1px solid #e2e8f0">50x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_50" type="number" step="0.01"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_50" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_50" type="number" step="100"></td></tr>
-          <tr><td style="padding:8px;border:1px solid #e2e8f0">100x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_100" type="number" step="0.01"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_100" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_100" type="number" step="100"></td></tr>
+          <tr><td style="padding:8px;border:1px solid #e2e8f0">1x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_1" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_1" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_1" type="number" step="100"></td></tr>
+          <tr><td style="padding:8px;border:1px solid #e2e8f0">5x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_5" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_5" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_5" type="number" step="100"></td></tr>
+          <tr><td style="padding:8px;border:1px solid #e2e8f0">10x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_10" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_10" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_10" type="number" step="100"></td></tr>
+          <tr><td style="padding:8px;border:1px solid #e2e8f0">20x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_20" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_20" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_20" type="number" step="100"></td></tr>
+          <tr><td style="padding:8px;border:1px solid #e2e8f0">30x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_30" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_30" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_30" type="number" step="100"></td></tr>
+          <tr><td style="padding:8px;border:1px solid #e2e8f0">50x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_50" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_50" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_50" type="number" step="100"></td></tr>
+          <tr><td style="padding:8px;border:1px solid #e2e8f0">100x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_100" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_100" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_100" type="number" step="100"></td></tr>
+          <tr style="background:#f8fafc"><td style="padding:8px;border:1px solid #e2e8f0;font-weight:700">合计</td><td style="padding:8px;border:1px solid #e2e8f0"><span id="w_sum" style="font-weight:700">-</span>%</td><td style="padding:8px;border:1px solid #e2e8f0"></td><td style="padding:8px;border:1px solid #e2e8f0"></td></tr>
         </tbody>
       </table>
     </div>
@@ -4351,6 +4352,7 @@ function bind(cfg){
   document.getElementById('step').value=cfg.PriceStep||5;
   document.getElementById('range').value=cfg.PriceRange||400;
   const levs=[1,5,10,20,30,50,100];
+  const sumEl=document.getElementById('w_sum');
   function toNum(v){const n=Number(String(v??'').trim());return isFinite(n)?n:NaN;}
   function csvNums(raw,n){const parts=String(raw||'').split(',');if(parts.length===1){const v=toNum(parts[0]);return Array.from({length:n},()=>v);}const out=[];for(let i=0;i<n;i++){out.push(toNum(parts[i]));}return out;}
   const w=csvNums(cfg.WeightCSV,levs.length);
@@ -4359,14 +4361,15 @@ function bind(cfg){
   const defW=1/levs.length, defMM=Number(cfg.MaintMargin||0.005), defFS=Number(cfg.FundingScale||7000);
   for(let i=0;i<levs.length;i++){
     const lv=levs[i];
-    const wi=isFinite(w[i])?w[i]:defW;
+    const wi=isFinite(w[i])?w[i]:defW; // stored as ratio (0..1)
     const mi=isFinite(mm[i])?mm[i]:defMM;
     const fi=isFinite(fs[i])?fs[i]:defFS;
     const wEl=document.getElementById('w_'+lv),mmEl=document.getElementById('mm_'+lv),fsEl=document.getElementById('fs_'+lv);
-    if(wEl) wEl.value=String(wi);
+    if(wEl) wEl.value=(wi*100).toFixed(2);
     if(mmEl) mmEl.value=String(mi);
     if(fsEl) fsEl.value=String(fi);
   }
+  if(sumEl){const s=levs.map(lv=>Number((document.getElementById('w_'+lv)||{}).value||0)).reduce((a,b)=>a+(isFinite(b)?b:0),0);sumEl.textContent=s.toFixed(2);}
   document.getElementById('scale').value=cfg.IntensityScale||1.0;
   document.getElementById('decay').value=cfg.DecayK||2.2;
   document.getElementById('neighbor').value=cfg.NeighborShare||0.28;
@@ -4380,7 +4383,7 @@ async function save(){
   const levCSV=levs.join(',');
   const wList=[],mmList=[],fsList=[];
   for(const lv of levs){
-    const w=Number((document.getElementById('w_'+lv)||{}).value||0);
+    const w=Number((document.getElementById('w_'+lv)||{}).value||0); // percent
     const mm=Number((document.getElementById('mm_'+lv)||{}).value||0);
     const fs=Number((document.getElementById('fs_'+lv)||{}).value||0);
     wList.push(isFinite(w)?w:0);
@@ -4388,8 +4391,10 @@ async function save(){
     fsList.push(isFinite(fs)?fs:0);
   }
   const sumW=wList.reduce((a,b)=>a+b,0);
-  if(!(sumW>0)){document.getElementById('msg').textContent='保存失败：权重总和必须 > 0';return;}
-  for(let i=0;i<wList.length;i++) wList[i]=wList[i]/sumW;
+  const sumEl=document.getElementById('w_sum');if(sumEl)sumEl.textContent=(isFinite(sumW)?sumW:0).toFixed(2);
+  if(!(sumW>0)){document.getElementById('msg').textContent='保存失败：权重合计必须为 100.00%';return;}
+  if(Math.abs(sumW-100)>0.01){document.getElementById('msg').textContent='保存失败：权重合计需等于 100.00%，当前 '+sumW.toFixed(2)+'%';return;}
+  for(let i=0;i<wList.length;i++) wList[i]=wList[i]/100.0;
   for(const v of mmList){if(!(v>0&&v<=0.02)){document.getElementById('msg').textContent='保存失败：维护保证金率需在 (0,0.02]';return;}}
   for(const v of fsList){if(!(v>=1000&&v<=20000)){document.getElementById('msg').textContent='保存失败：资金费率缩放系数需在 [1000,20000]';return;}}
   const mmCSV=mmList.map(v=>String(v)).join(',');
@@ -4413,10 +4418,25 @@ async function save(){
   const r=await fetch('/api/model-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   document.getElementById('msg').textContent=r.ok?'已保存':'保存失败';
 }
+function bindWeightSumLive(){
+  const levs=[1,5,10,20,30,50,100];
+  const sumEl=document.getElementById('w_sum');
+  if(!sumEl) return;
+  function recalc(){
+    const s=levs.map(lv=>Number((document.getElementById('w_'+lv)||{}).value||0)).reduce((a,b)=>a+(isFinite(b)?b:0),0);
+    sumEl.textContent=(isFinite(s)?s:0).toFixed(2);
+  }
+  for(const lv of levs){
+    const el=document.getElementById('w_'+lv);
+    if(el) el.addEventListener('input',recalc);
+  }
+  recalc();
+}
 async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}
 async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 bind({LookbackMin:{{.LookbackMin}},BucketMin:{{.BucketMin}},PriceStep:{{.PriceStep}},PriceRange:{{.PriceRange}},LeverageCSV:{{printf "%q" .LeverageCSV}},WeightCSV:{{printf "%q" .WeightCSV}},MaintMargin:{{.MaintMargin}},MaintMarginCSV:{{printf "%q" .MaintMarginCSV}},FundingScale:{{.FundingScale}},FundingScaleCSV:{{printf "%q" .FundingScaleCSV}},IntensityScale:{{.IntensityScale}},DecayK:{{.DecayK}},NeighborShare:{{.NeighborShare}}});
+bindWeightSumLive();
 loadFooter();
 </script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
