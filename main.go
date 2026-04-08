@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"context"
@@ -358,6 +358,7 @@ func main() {
 	mux.HandleFunc("/liquidations", app.handleLiquidations)
 	mux.HandleFunc("/bubbles", app.handleBubbles)
 	mux.HandleFunc("/channel", app.handleChannel)
+	mux.HandleFunc("/config", app.handleConfig)
 	mux.HandleFunc("/api/dashboard", app.handleDashboard)
 	mux.HandleFunc("/api/model/liquidation-map", app.handleModelLiquidationMap)
 	mux.HandleFunc("/api/model-config", app.handleModelConfig)
@@ -367,6 +368,7 @@ func main() {
 	mux.HandleFunc("/api/coinglass/map", app.handleCoinGlassMap)
 	mux.HandleFunc("/api/window", app.handleWindow)
 	mux.HandleFunc("/api/settings", app.handleSettings)
+	mux.HandleFunc("/api/model-config", app.handleModelConfig)
 	mux.HandleFunc("/api/channel/test", app.handleChannelTest)
 	mux.HandleFunc("/api/upgrade/pull", app.handleUpgradePull)
 	mux.HandleFunc("/api/upgrade/progress", app.handleUpgradeProgress)
@@ -443,6 +445,14 @@ func (a *App) handleChannel(w http.ResponseWriter, r *http.Request) {
 	_ = tpl.Execute(w, a.loadSettings())
 }
 
+func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
+	if a.debug {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	tpl := template.Must(template.New("config").Parse(configHTML))
+	_ = tpl.Execute(w, a.loadModelConfig())
+}
+
 func (a *App) handleWindow(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
@@ -512,7 +522,7 @@ func (a *App) handleModelLiquidationMap(w http.ResponseWriter, r *http.Request) 
 			priceRange = v
 		}
 	}
-	resp, err := a.buildModelLiquidationMap(defaultSymbol, lookbackMin, bucketMin, priceStep, priceRange)
+	resp, err := a.buildModelLiquidationMap(defaultSymbol, lookbackMin, bucketMin, priceStep, priceRange, cfg)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -576,6 +586,28 @@ func (a *App) getSetting(key string) string {
 	return value
 }
 
+func (a *App) getSettingInt(key string, fallback int) int {
+	raw := strings.TrimSpace(a.getSetting(key))
+	if raw == "" {
+		return fallback
+	}
+	if v, err := strconv.Atoi(raw); err == nil {
+		return v
+	}
+	return fallback
+}
+
+func (a *App) getSettingFloat(key string, fallback float64) float64 {
+	raw := strings.TrimSpace(a.getSetting(key))
+	if raw == "" {
+		return fallback
+	}
+	if v, err := strconv.ParseFloat(raw, 64); err == nil {
+		return v
+	}
+	return fallback
+}
+
 func (a *App) setSetting(key, value string) error {
 	_, err := a.db.Exec(`INSERT INTO app_settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
@@ -595,36 +627,53 @@ func (a *App) loadSettings() ChannelSettings {
 	}
 }
 
+type ModelConfig struct {
+	LookbackMin   int
+	BucketMin     int
+	PriceStep     float64
+	PriceRange    float64
+	LeverageCSV   string
+	WeightCSV     string
+	MaintMargin   float64
+	FundingScale  float64
+	DecayK        float64
+	NeighborShare float64
+}
+
 func (a *App) loadModelConfig() ModelConfig {
 	cfg := ModelConfig{
-		LookbackMin: defaultLookbackMin,
-		BucketMin:   defaultBucketMin,
-		PriceStep:   defaultPriceStep,
-		PriceRange:  defaultPriceRange,
+		LookbackMin:   a.getSettingInt("model_lookback_min", defaultLookbackMin),
+		BucketMin:     a.getSettingInt("model_bucket_min", defaultBucketMin),
+		PriceStep:     a.getSettingFloat("model_price_step", defaultPriceStep),
+		PriceRange:    a.getSettingFloat("model_price_range", defaultPriceRange),
+		LeverageCSV:   strings.TrimSpace(a.getSetting("model_leverage_levels")),
+		WeightCSV:     strings.TrimSpace(a.getSetting("model_leverage_weights")),
+		MaintMargin:   a.getSettingFloat("model_mm", 0.005),
+		FundingScale:  a.getSettingFloat("model_funding_scale", 7000),
+		DecayK:        a.getSettingFloat("model_decay_k", 2.2),
+		NeighborShare: a.getSettingFloat("model_neighbor_share", 0.28),
 	}
-	if raw := strings.TrimSpace(a.getSetting("model_lookback_min")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n >= 60 && n <= 1440 {
-			cfg.LookbackMin = n
-		}
+	if cfg.LeverageCSV == "" {
+		cfg.LeverageCSV = "20,50,100"
 	}
-	if raw := strings.TrimSpace(a.getSetting("model_bucket_min")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 30 {
-			cfg.BucketMin = n
-		}
-	}
-	if raw := strings.TrimSpace(a.getSetting("model_price_step")); raw != "" {
-		if v, err := strconv.ParseFloat(raw, 64); err == nil && v >= 1 && v <= 50 {
-			cfg.PriceStep = v
-		}
-	}
-	if raw := strings.TrimSpace(a.getSetting("model_price_range")); raw != "" {
-		if v, err := strconv.ParseFloat(raw, 64); err == nil && v >= 100 && v <= 1000 {
-			cfg.PriceRange = v
-		}
+	if cfg.WeightCSV == "" {
+		cfg.WeightCSV = "0.30,0.40,0.30"
 	}
 	return cfg
 }
 
+func parseCSVFloats(raw string) []float64 {
+	parts := strings.Split(raw, ",")
+	out := make([]float64, 0, len(parts))
+	for _, p := range parts {
+		v, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
+		if err != nil || v <= 0 {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
+}
 func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
@@ -638,32 +687,51 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		if req.LookbackMin < 60 || req.LookbackMin > 1440 || req.BucketMin < 1 || req.BucketMin > 30 || req.PriceStep < 1 || req.PriceStep > 50 || req.PriceRange < 100 || req.PriceRange > 1000 {
-			http.Error(w, "invalid model config", http.StatusBadRequest)
-			return
+		if req.LookbackMin < 60 || req.LookbackMin > 1440 {
+			req.LookbackMin = defaultLookbackMin
 		}
-		if err := a.setSetting("model_lookback_min", strconv.Itoa(req.LookbackMin)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if req.BucketMin < 1 || req.BucketMin > 30 {
+			req.BucketMin = defaultBucketMin
 		}
-		if err := a.setSetting("model_bucket_min", strconv.Itoa(req.BucketMin)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if req.PriceStep < 1 || req.PriceStep > 50 {
+			req.PriceStep = defaultPriceStep
 		}
-		if err := a.setSetting("model_price_step", strconv.FormatFloat(req.PriceStep, 'f', -1, 64)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if req.PriceRange < 100 || req.PriceRange > 1000 {
+			req.PriceRange = defaultPriceRange
 		}
-		if err := a.setSetting("model_price_range", strconv.FormatFloat(req.PriceRange, 'f', -1, 64)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if req.MaintMargin <= 0 || req.MaintMargin > 0.02 {
+			req.MaintMargin = 0.005
 		}
-		_ = json.NewEncoder(w).Encode(req)
+		if req.FundingScale < 1000 || req.FundingScale > 20000 {
+			req.FundingScale = 7000
+		}
+		if req.DecayK <= 0.1 || req.DecayK > 10 {
+			req.DecayK = 2.2
+		}
+		if req.NeighborShare < 0 || req.NeighborShare > 1 {
+			req.NeighborShare = 0.28
+		}
+		if len(parseCSVFloats(req.LeverageCSV)) == 0 {
+			req.LeverageCSV = "20,50,100"
+		}
+		if len(parseCSVFloats(req.WeightCSV)) == 0 {
+			req.WeightCSV = "0.30,0.40,0.30"
+		}
+		_ = a.setSetting("model_lookback_min", strconv.Itoa(req.LookbackMin))
+		_ = a.setSetting("model_bucket_min", strconv.Itoa(req.BucketMin))
+		_ = a.setSetting("model_price_step", fmt.Sprintf("%.4f", req.PriceStep))
+		_ = a.setSetting("model_price_range", fmt.Sprintf("%.2f", req.PriceRange))
+		_ = a.setSetting("model_leverage_levels", strings.TrimSpace(req.LeverageCSV))
+		_ = a.setSetting("model_leverage_weights", strings.TrimSpace(req.WeightCSV))
+		_ = a.setSetting("model_mm", fmt.Sprintf("%.6f", req.MaintMargin))
+		_ = a.setSetting("model_funding_scale", fmt.Sprintf("%.2f", req.FundingScale))
+		_ = a.setSetting("model_decay_k", fmt.Sprintf("%.4f", req.DecayK))
+		_ = a.setSetting("model_neighbor_share", fmt.Sprintf("%.4f", req.NeighborShare))
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
-
 func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
@@ -1904,7 +1972,7 @@ func averageSnapshotPrice(snapshots []Snapshot) float64 {
 	return sum / float64(cnt)
 }
 
-func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int, priceStep, priceRange float64) (map[string]any, error) {
+func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int, priceStep, priceRange float64, cfg ModelConfig) (map[string]any, error) {
 	now := time.Now().UnixMilli()
 	lookbackMS := int64(lookbackMin) * 60 * 1000
 	start := now - lookbackMS
@@ -1966,9 +2034,46 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 	}
 	contribs := make([]contrib, 0, len(snaps)*6)
 	prevOI := map[string]float64{}
-	levs := []float64{20, 50, 100}
-	weights := []float64{0.30, 0.40, 0.30}
-	mm := 0.005
+	levs := parseCSVFloats(cfg.LeverageCSV)
+	weights := parseCSVFloats(cfg.WeightCSV)
+	if len(levs) == 0 {
+		levs = []float64{20, 50, 100}
+	}
+	if len(weights) == 0 || len(weights) != len(levs) {
+		weights = make([]float64, len(levs))
+		for i := range weights {
+			weights[i] = 1.0
+		}
+	}
+	sumW := 0.0
+	for _, w := range weights {
+		sumW += w
+	}
+	if sumW <= 0 {
+		sumW = 1
+	}
+	for i := range weights {
+		weights[i] /= sumW
+	}
+	mm := cfg.MaintMargin
+	if mm <= 0 {
+		mm = 0.005
+	}
+	fundingScale := cfg.FundingScale
+	if fundingScale <= 0 {
+		fundingScale = 7000
+	}
+	decayK := cfg.DecayK
+	if decayK <= 0 {
+		decayK = 2.2
+	}
+	neighborShare := cfg.NeighborShare
+	if neighborShare < 0 {
+		neighborShare = 0
+	}
+	if neighborShare > 1 {
+		neighborShare = 0.28
+	}
 	for _, s := range snaps {
 		prev, ok := prevOI[s.ex]
 		prevOI[s.ex] = s.oi
@@ -1979,7 +2084,7 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 		if delta <= 0 {
 			continue
 		}
-		longShare := clamp(0.5+s.funding*7000, 0.2, 0.8)
+		longShare := clamp(0.5+s.funding*fundingScale, 0.2, 0.8)
 		shortShare := 1 - longShare
 		for i, lev := range levs {
 			w := weights[i]
@@ -2045,14 +2150,14 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 			continue
 		}
 		age := float64(now-c.ts) / float64(lookbackMS)
-		decay := math.Exp(-2.2 * age)
+		decay := math.Exp(-decayK * age)
 		v := c.intensity * decay
 		grid[row][col] += v
 		if row > 0 {
-			grid[row-1][col] += v * 0.28
+			grid[row-1][col] += v * neighborShare
 		}
 		if row < rowsN-1 {
-			grid[row+1][col] += v * 0.28
+			grid[row+1][col] += v * neighborShare
 		}
 	}
 
@@ -3298,14 +3403,16 @@ th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:center}
 .panel h3,.top h2,.top .hint{text-align:center}
 .heatmap-wrap{border:1px solid var(--line);border-radius:10px;background:#fff;padding:10px}
 #liqHeatMap{width:100%;height:320px;display:block;border:1px solid var(--line);border-radius:8px;background:#fff}
+.desc{font-size:12px;color:#5b6b7f;line-height:1.5;margin-top:8px}
 .upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head><body>
-<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/" class="active">清算热区</a><a href="/monitor">雷区监控</a><a href="/config">模型配置</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/" class="active">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel top"><div><h2 style="margin:0 0 6px 0;color:#111827">ETH &#28165;&#31639;&#28909;&#21306;</h2><div class="hint">&#25353; <span class="mono">0</span> / <span class="mono">1</span> / <span class="mono">7</span> / <span class="mono">3</span> &#20999;&#25442; &#26085;&#20869; / 1&#22825; / 7&#22825; / 30&#22825;</div></div><div class="btns"><button data-days="0">&#26085;&#20869;</button><button data-days="1">1&#22825;</button><button data-days="7">7&#22825;</button><button data-days="30">30&#22825;</button></div></div>
 <div class="panel"><div id="status">loading...</div></div>
-<div class="grid"><div class="panel"><h3>&#24066;&#22330;&#29366;&#24577;</h3><div id="market"></div></div><div class="panel"><h3>&#28165;&#31639;&#28909;&#21306;&#36895;&#25253;</h3><div id="bands"></div></div><div class="panel"><h3>ETH清算地图（OI增量模型）</h3><div class="heatmap-wrap"><canvas id="liqHeatMap" width="1400" height="320"></canvas><div class="hint">X轴: 价格 | Y轴: 清算金额（按价格聚合）</div></div></div></div></div>
+<div class="grid"><div class="panel"><h3>&#24066;&#22330;&#29366;&#24577;</h3><div id="market"></div></div><div class="panel"><h3>&#28165;&#31639;&#28909;&#21306;&#36895;&#25253;</h3><div id="bands"></div></div><div class="panel"><h3>ETH清算地图（OI增量模型）</h3><div class="heatmap-wrap"><canvas id="liqHeatMap" width="1400" height="320"></canvas><div class="hint">X轴: 价格 | Y轴: 清算金额（按价格聚合）</div><div id="liqDesc" class="desc"></div></div></div></div></div>
 <script>
 let currentDays=1;
 let liqMapData=null;
+let modelConfig=null;
 function windowLabel(v){return Number(v)===0?'\u65e5\u5185':(Number(v)+'\u5929')}
 async function setWindow(days){currentDays=days;await fetch('/api/window',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days})});renderActive();load();}
 function renderActive(){document.querySelectorAll('button[data-days]').forEach(b=>b.classList.toggle('active',Number(b.dataset.days)===currentDays));}
@@ -3315,6 +3422,26 @@ function fmt4(n){return Number(n).toFixed(8)}
 function fitCanvas(id){const c=document.getElementById(id);if(!c)return null;const dpr=window.devicePixelRatio||1;const rect=c.getBoundingClientRect();const W=Math.max(320,Math.floor(rect.width));const H=Math.max(220,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return {c,x,W,H};}
 function heatColor(v,max){if(!(max>0)||!(v>0))return 'rgb(248,250,252)';let t=Math.max(0,Math.min(1,v/max));t=Math.pow(t,0.55);let r,g,b;if(t<0.5){const k=t/0.5;r=Math.round(15+(46-15)*k);g=Math.round(23+(163-23)*k);b=Math.round(42+(242-42)*k);}else{const k=(t-0.5)/0.5;r=Math.round(46+(250-46)*k);g=Math.round(163+(204-163)*k);b=Math.round(242+(21-242)*k);}return 'rgb('+r+','+g+','+b+')';}
 function drawLiqHeat(){const v=fitCanvas('liqHeatMap');if(!v)return;const {x,W,H}=v;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);const d=liqMapData;if(!d||!d.prices||!d.intensity_grid||!d.prices.length){x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const rows=d.prices.length,cols=((d.intensity_grid&&d.intensity_grid[0])?d.intensity_grid[0].length:0);if(rows<2||cols<1){x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const pts=[];for(let ri=0;ri<rows;ri++){const p=Number(d.prices[ri]||0);if(!(p>0))continue;let s=0;for(let ci=0;ci<cols;ci++)s+=Math.max(0,Number((d.intensity_grid[ri]||[])[ci]||0));if(s>0)pts.push({p:p,v:s});}if(!pts.length){x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const padL=66,padR=20,padT=16,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;const minP=pts[0].p,maxP=pts[pts.length-1].p,span=Math.max(1e-6,maxP-minP),maxV=Math.max(1,...pts.map(it=>it.v));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxV)*ph;x.strokeStyle='#e2e8f0';x.strokeRect(padL,padT,pw,ph);x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4),val=maxV*(1-i/4);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#475569';x.fillText(fmtAmount(val),6,y+4);}const minLabelGap=12;const approxLabelW=Math.max(36,x.measureText(fmtPrice(minP)).width,x.measureText(fmtPrice(maxP)).width);const maxTicks=Math.max(2,Math.floor(pw/(approxLabelW+minLabelGap)));const tickCount=Math.max(2,Math.min(10,maxTicks));for(let i=0;i<=tickCount;i++){const p=minP+span*(i/tickCount),px=sx(p);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(px,by);x.lineTo(px,by+4);x.stroke();const label=fmtPrice(p);const lw=x.measureText(label).width;const tx=Math.max(padL,Math.min(px-lw/2,W-padR-lw));x.fillStyle='#64748b';x.fillText(label,tx,by+18);}const barW=Math.max(2,Math.min(12,pw/Math.max(40,pts.length)));const cp=Number(d.current_price||0);for(const it of pts){const px=sx(it.p),y=sy(it.v);const leftSide=(cp>0)?(it.p<=cp):(it.p<=(minP+maxP)/2);x.fillStyle=leftSide?'rgba(249,115,22,0.78)':'rgba(125,211,252,0.78)';x.fillRect(px-barW/2,y,barW,by-y);}x.lineWidth=1;if(cp>=minP&&cp<=maxP){const cpX=sx(cp);x.strokeStyle='rgba(220,38,38,0.9)';x.setLineDash([5,4]);x.beginPath();x.moveTo(cpX,padT);x.lineTo(cpX,by);x.stroke();x.setLineDash([]);x.fillStyle='#111827';const txt='当前价:'+fmtPrice(cp);const tw=x.measureText(txt).width;x.fillText(txt,Math.max(padL,Math.min(cpX+4,W-padR-tw)),padT+12);}x.fillStyle='#475569';x.fillText('清算金额',padL,padT-4);const xt='价格';const xtw=x.measureText(xt).width;x.fillText(xt,padL+pw/2-xtw/2,H-8);} function renderTable(rows,headers){if(!rows||!rows.length)return '<div class="hint">\u6682\u65e0\u6570\u636e</div>';let html='<table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>';for(const r of rows) html+='<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>';return html+'</tbody></table>';}
+function renderLiqDesc(cfg){
+  if(!cfg){const el=document.getElementById('liqDesc');if(el)el.textContent='';return;}
+  const levs=String(cfg.leverage_csv||cfg.LeverageCSV||cfg.leverage_levels||cfg.leverage||'20,50,100');
+  const ws=String(cfg.weight_csv||cfg.WeightCSV||cfg.leverage_weights||cfg.weights||'0.30,0.40,0.30');
+  const mm=Number(cfg.maint_margin||cfg.MaintMargin||cfg.mm||0.005);
+  const fs=Number(cfg.funding_scale||cfg.FundingScale||7000);
+  const dk=Number(cfg.decay_k||cfg.DecayK||2.2);
+  const ns=Number(cfg.neighbor_share||cfg.NeighborShare||0.28);
+  const lookback=Number(cfg.lookback_min||cfg.LookbackMin||360);
+  const bucket=Number(cfg.bucket_min||cfg.BucketMin||5);
+  const step=Number(cfg.price_step||cfg.PriceStep||5);
+  const range=Number(cfg.price_range||cfg.PriceRange||400);
+  const el=document.getElementById('liqDesc');
+  if(el){
+    el.textContent='数据源：Binance/Bybit/OKX 公共接口的标记价、OI、资金费率。模型：对 OI 增量按杠杆 '+levs+
+      ' 与权重 '+ws+' 分配；多空比例=clamp(0.5+funding×'+fs+',0.2,0.8)；清算价=mark×(1±1/lev∓'+mm.toFixed(4)+')；时间衰减 exp(-'+dk.toFixed(2)+'×age)，邻近价扩散 '+ns.toFixed(2)+
+      '。参数：回看 '+lookback+' 分钟，时间桶 '+bucket+' 分钟，价格步长 '+step+'，范围 ±'+range+'。配置入口 /config。';
+  }
+}
+function renderTable(rows,headers){if(!rows||!rows.length)return '<div class="hint">\u6682\u65e0\u6570\u636e</div>';let html='<table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>';for(const r of rows) html+='<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>';return html+'</tbody></table>';}
 function buildHeatBandsFromModel(model){
   if(!model||!model.prices||!model.intensity_grid||!model.prices.length) return [];
   const rows=model.prices.length, cols=((model.intensity_grid&&model.intensity_grid[0])?model.intensity_grid[0].length:0);
@@ -3368,7 +3495,15 @@ function renderHeatReport(d){
   return html;
 }
 async function load(){
-  const [r,m]=await Promise.all([fetch('/api/dashboard'),fetch('/api/model/liquidation-map')]);
+  const cfg=await fetch('/api/model-config').then(r=>r.json()).catch(()=>null);
+  modelConfig=cfg;
+  renderLiqDesc(cfg);
+  const lookback=Number(cfg&&cfg.LookbackMin||cfg&&cfg.lookback_min||360);
+  const bucket=Number(cfg&&cfg.BucketMin||cfg&&cfg.bucket_min||5);
+  const step=Number(cfg&&cfg.PriceStep||cfg&&cfg.price_step||5);
+  const range=Number(cfg&&cfg.PriceRange||cfg&&cfg.price_range||400);
+  const mapUrl='/api/model/liquidation-map?lookback_min='+lookback+'&bucket_min='+bucket+'&price_step='+step+'&price_range='+range;
+  const [r,m]=await Promise.all([fetch('/api/dashboard'),fetch(mapUrl)]);
   const d=await r.json(); liqMapData=await m.json().catch(()=>null);
   currentDays=(d.window_days===0||d.window_days)?d.window_days:currentDays;
   renderActive();
@@ -3486,7 +3621,7 @@ canvas{width:100%;height:760px;display:block;border:1px solid #e5e7eb;border-rad
 .event-card th,.event-card td{font-size:12px;border-top:1px solid #eef2f7;padding:4px 6px;text-align:center}
 .event-card thead th{border-top:0;color:#64748b}
 .upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head><body>
-<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/monitor">雷区监控</a><a href="/config">模型配置</a><a href="/map" class="active">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a></div></div>
+<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map" class="active">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a></div></div>
 <div class="wrap">
   <div class="panel">
     <div class="row">
@@ -3594,7 +3729,7 @@ setInterval(load,5000);load();(async()=>{try{const r=await fetch('/api/version')
 const channelHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>&#28040;&#24687;&#36890;&#36947;</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{max-width:900px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.small{font-size:12px;color:#6b7280}button.primary{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/monitor">雷区监控</a><a href="/config">模型配置</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/channel" class="active">消息通道</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a></div></div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/channel" class="active">消息通道</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a></div></div>
 <div class="wrap"><div class="panel"><h2 style="margin-top:0">Telegram 消息通道</h2><div class="small">配置 Telegram 机器人与频道，系统将按设定间隔发送通知。</div><div style="margin-top:14px"><label>Telegram Bot Token</label><input id="token" autocomplete="off" placeholder="123456:ABC..."></div><div style="margin-top:14px"><label>Telegram Channel / Chat ID</label><input id="channel" autocomplete="off" placeholder="@mychannel 或 -100123456789"></div><div style="margin-top:14px"><label>通知间隔（分钟）</label><input id="notify-interval" type="number" min="1" step="1" placeholder="15"></div><div style="margin-top:16px" class="row"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="testTelegram()">测试发送</button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
 <script>
 let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},tokenDirty=false,channelDirty=false;
@@ -3670,3 +3805,61 @@ function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 load();
 </script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div><script>(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();</script></body></html>`
+const configHTML = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>模型配置</title>
+<style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{max-width:980px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.small{font-size:12px;color:#6b7280}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.field label{display:block;font-size:12px;color:#6b7280}.field input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}button.primary{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config" class="active">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a></div></div>
+<div class="wrap"><div class="panel"><h2 style="margin-top:0">清算地图模型参数</h2><div class="small">修改后立即影响 OI 增量模型的计算与展示。</div>
+<div class="grid" style="margin-top:14px">
+  <div class="field"><label>回看窗口（分钟）</label><input id="lookback" type="number" min="60" max="1440" step="1"></div>
+  <div class="field"><label>时间桶（分钟）</label><input id="bucket" type="number" min="1" max="30" step="1"></div>
+  <div class="field"><label>价格步长</label><input id="step" type="number" min="1" max="50" step="0.5"></div>
+  <div class="field"><label>价格范围（±）</label><input id="range" type="number" min="100" max="1000" step="10"></div>
+  <div class="field"><label>杠杆档位（逗号分隔）</label><input id="levs" type="text" placeholder="20,50,100"></div>
+  <div class="field"><label>杠杆权重（逗号分隔）</label><input id="weights" type="text" placeholder="0.30,0.40,0.30"></div>
+  <div class="field"><label>维护保证金率</label><input id="mm" type="number" step="0.0001"></div>
+  <div class="field"><label>资金费率缩放系数</label><input id="funding" type="number" step="100"></div>
+  <div class="field"><label>时间衰减系数 k</label><input id="decay" type="number" step="0.1"></div>
+  <div class="field"><label>邻近价扩散比例</label><input id="neighbor" type="number" step="0.01"></div>
+</div>
+<div class="row" style="margin-top:14px"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="reloadCfg()">重载</button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
+<script>
+function bind(cfg){
+  document.getElementById('lookback').value=cfg.LookbackMin||360;
+  document.getElementById('bucket').value=cfg.BucketMin||5;
+  document.getElementById('step').value=cfg.PriceStep||5;
+  document.getElementById('range').value=cfg.PriceRange||400;
+  document.getElementById('levs').value=cfg.LeverageCSV||'20,50,100';
+  document.getElementById('weights').value=cfg.WeightCSV||'0.30,0.40,0.30';
+  document.getElementById('mm').value=cfg.MaintMargin||0.005;
+  document.getElementById('funding').value=cfg.FundingScale||7000;
+  document.getElementById('decay').value=cfg.DecayK||2.2;
+  document.getElementById('neighbor').value=cfg.NeighborShare||0.28;
+}
+async function reloadCfg(){
+  const cfg=await fetch('/api/model-config').then(r=>r.json()).catch(()=>null);
+  if(cfg) bind(cfg);
+}
+async function save(){
+  const body={
+    LookbackMin:Number(document.getElementById('lookback').value||360),
+    BucketMin:Number(document.getElementById('bucket').value||5),
+    PriceStep:Number(document.getElementById('step').value||5),
+    PriceRange:Number(document.getElementById('range').value||400),
+    LeverageCSV:String(document.getElementById('levs').value||'20,50,100'),
+    WeightCSV:String(document.getElementById('weights').value||'0.30,0.40,0.30'),
+    MaintMargin:Number(document.getElementById('mm').value||0.005),
+    FundingScale:Number(document.getElementById('funding').value||7000),
+    DecayK:Number(document.getElementById('decay').value||2.2),
+    NeighborShare:Number(document.getElementById('neighbor').value||0.28)
+  };
+  const r=await fetch('/api/model-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  document.getElementById('msg').textContent=r.ok?'已保存':'保存失败';
+}
+async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
+async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
+bind({LookbackMin:{{.LookbackMin}},BucketMin:{{.BucketMin}},PriceStep:{{.PriceStep}},PriceRange:{{.PriceRange}},LeverageCSV:{{printf "%q" .LeverageCSV}},WeightCSV:{{printf "%q" .WeightCSV}},MaintMargin:{{.MaintMargin}},FundingScale:{{.FundingScale}},DecayK:{{.DecayK}},NeighborShare:{{.NeighborShare}}});
+loadFooter();
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
