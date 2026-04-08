@@ -4032,7 +4032,7 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .hint{font-size:12px;color:var(--muted)} .btns button{margin-right:8px;background:#fff;color:var(--text);border:1px solid #b6c4d5;padding:8px 12px;border-radius:8px;cursor:pointer}
 .btns button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
-.grid{display:grid;grid-template-columns:2fr 1fr;gap:10px}.subgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+ .grid{display:grid;grid-template-columns:1.45fr .9fr;gap:10px}.subgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .card{padding:14px;background:#fff;border-right:1px solid var(--line)}.card:last-child{border-right:0}.card .label{font-size:12px;color:var(--muted);margin-bottom:10px}.card .val{font-size:22px;font-weight:800;line-height:1.05}
 .good{color:var(--good)}.warn{color:var(--warn)}.danger{color:var(--danger)}
 .sidebox{padding:10px 12px}.sidebox h3,.panel h3{margin:0 0 10px 0}
@@ -4068,12 +4068,53 @@ table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--li
 let currentDays=1;
 function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1})}
 function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'亿';if(a>=1e6)return (n/1e6).toFixed(2)+'百万';return (n/1e4).toFixed(1)+'万';}
-function fmtFunding(n){const v=Number(n);if(!isFinite(v))return '-';return v.toFixed(4)}
+ function fmtFunding(n){const v=Number(n);if(!isFinite(v))return '-';return v.toFixed(8)}
 function renderActive(){document.querySelectorAll('button[data-days]').forEach(b=>b.classList.toggle('active',Number(b.dataset.days)===currentDays));}
 async function setWindow(days){currentDays=days;await fetch('/api/window',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days})});renderActive();load();}
 function metricRow(label,val,cls=''){return '<div class="metric"><span>'+label+'</span><strong class="'+cls+'">'+val+'</strong></div>'}
-function renderTopCards(d){const a=d.analytics||{},t=a.top||{},mk=a.market||{};const cards=[{label:'ETH现价',val:fmtPrice(d.current_price)},{label:'短线偏向',val:t.short_bias||'-',cls:(String(t.short_bias||'').includes('上')?'warn':(String(t.short_bias||'').includes('下')?'good':''))},{label:'20点内失衡',val:fmtAmount(Math.abs(Number(t.bias20_delta||0))),cls:Number(t.bias20_delta||0)>=0?'warn':'good'},{label:'50点内失衡',val:t.bias50_label||'-',cls:(String(t.bias50_label||'').includes('上')?'warn':(String(t.bias50_label||'').includes('下')?'good':''))}];document.getElementById('topCards').innerHTML=cards.map(c=>'<div class="card"><div class="label">'+c.label+'</div><div class="val '+(c.cls||'')+'">'+c.val+'</div></div>').join('');document.getElementById('marketState').innerHTML='<div class="state-line"><span>Binance OI</span><strong>'+fmtAmount(mk.binance_oi_usd)+'</strong></div><div class="state-line"><span>Bybit OI</span><strong>'+fmtAmount(mk.bybit_oi_usd)+'</strong></div><div class="state-line"><span>OKX OI</span><strong>'+fmtAmount(mk.okx_oi_usd)+'</strong></div><div class="state-line"><span>Funding</span><strong>'+fmtFunding(mk.avg_funding)+'</strong></div>'}
-function renderHeatReport(d){const bands=(d.bands||[]).filter(b=>[10,20,30,50,100,150].includes(Number(b.band)));if(!bands.length){document.getElementById('heatReport').innerHTML='<div class="hint">暂无数据</div>';return;}let html='<table><thead><tr><th>点数阈值</th><th>上方空单清算价</th><th>上方规模</th><th>下方多单清算价</th><th>下方规模</th></tr></thead><tbody>';for(const b of bands){html+='<tr><td>'+b.band+'点内</td><td>'+fmtPrice(b.up_price)+'</td><td class="warn">'+fmtAmount(b.up_notional_usd)+'</td><td>'+fmtPrice(b.down_price)+'</td><td class="good">'+fmtAmount(b.down_notional_usd)+'</td></tr>';}html+='</tbody></table>';document.getElementById('heatReport').innerHTML=html}
+ function renderTopCards(d){
+   const a=d.analytics||{},t=a.top||{},mk=a.market||{};
+   const cards=[
+     {label:'ETH现价',val:fmtPrice(d.current_price)},
+     {label:'短线偏向',val:t.short_bias||'-',cls:(String(t.short_bias||'').includes('上')?'warn':(String(t.short_bias||'').includes('下')?'good':''))},
+     {label:'20点内失衡',val:fmtAmount(Math.abs(Number(t.bias20_delta||0))),cls:Number(t.bias20_delta||0)>=0?'warn':'good'},
+     {label:'50点内失衡',val:t.bias50_label||'-',cls:(String(t.bias50_label||'').includes('上')?'warn':(String(t.bias50_label||'').includes('下')?'good':''))}
+   ];
+   document.getElementById('topCards').innerHTML=cards.map(c=>'<div class="card"><div class="label">'+c.label+'</div><div class="val '+(c.cls||'')+'">'+c.val+'</div></div>').join('');
+   const states=d.states||[];
+   const byEx={};
+   for(const s of states){const ex=String(s.exchange||'').toLowerCase();if(ex)byEx[ex]=s;}
+   const exLine=(name,key,oi)=>{
+     const st=byEx[key]||{};
+     const fr=st.funding_rate==null?'-':fmtFunding(st.funding_rate);
+     return '<div class="state-line"><span>'+name+' OI</span><strong>'+fmtAmount(oi)+'</strong><span class="mini">费率 '+fr+'</span></div>';
+   };
+   document.getElementById('marketState').innerHTML=
+     exLine('Binance','binance',mk.binance_oi_usd)+
+     exLine('Bybit','bybit',mk.bybit_oi_usd)+
+     exLine('OKX','okx',mk.okx_oi_usd)+
+     '<div class="state-line"><span>平均费率</span><strong>'+fmtFunding(mk.avg_funding)+'</strong></div>';
+ }
+ function renderHeatReport(d){
+   const bandMap=new Map((d.bands||[]).map(b=>[Number(b.band),b]));
+   const desired=[];
+   for(let x=10;x<=100;x+=10) desired.push(x);
+   for(let x=150;x<=400;x+=50) desired.push(x);
+   let hasAny=false;
+   for(const k of desired){if(bandMap.has(k)){hasAny=true;break;}}
+   if(!hasAny){document.getElementById('heatReport').innerHTML='<div class="hint">暂无数据</div>';return;}
+   let html='<table><thead><tr><th>点数阈值</th><th>上方空单清算价</th><th>上方规模</th><th>下方多单清算价</th><th>下方规模</th><th>多空差异</th></tr></thead><tbody>';
+   for(const band of desired){
+     const b=bandMap.get(band);
+     if(!b){html+='<tr><td>'+band+'点内</td><td>-</td><td class="warn">-</td><td>-</td><td class="good">-</td><td>-</td></tr>';continue;}
+     const up=Number(b.up_notional_usd||0),down=Number(b.down_notional_usd||0);
+     const diff=down-up;
+     const diffCls=diff>0?'warn':(diff<0?'good':'');
+     html+='<tr><td>'+band+'点内</td><td>'+fmtPrice(b.up_price)+'</td><td class="warn">'+fmtAmount(up)+'</td><td>'+fmtPrice(b.down_price)+'</td><td class="good">'+fmtAmount(down)+'</td><td class="'+diffCls+'">'+fmtAmount(diff)+'</td></tr>';
+   }
+   html+='</tbody></table>';
+   document.getElementById('heatReport').innerHTML=html;
+ }
 function renderImbalance(d){const rows=((d.analytics||{}).imbalance_stats)||[];document.getElementById('imbalanceStats').innerHTML=rows.length?rows.map(r=>metricRow(r.band+'点内','上'+fmtAmount(r.up_notional_usd)+' / 下'+fmtAmount(r.down_notional_usd)+' / '+(r.verdict||'-'),String(r.verdict||'').includes('上')?'warn':(String(r.verdict||'').includes('下')?'good':''))).join(''):'<div class="hint">暂无数据</div>'}
 function renderDensity(d){const rows=((d.analytics||{}).density_layers)||[];if(!rows.length){document.getElementById('densityLayers').innerHTML='<div class="hint">暂无数据</div>';return;}let html='<table><thead><tr><th>区间</th><th>上方空单</th><th>下方多单</th></tr></thead><tbody>';for(const r of rows){html+='<tr><td>'+r.label+'</td><td>'+fmtAmount(r.up_notional_usd)+'</td><td>'+fmtAmount(r.down_notional_usd)+'</td></tr>';}html+='</tbody></table>';document.getElementById('densityLayers').innerHTML=html}
 function renderTrack(d){const t=((d.analytics||{}).change_tracking)||{};document.getElementById('changeTrack').innerHTML=metricRow('20点内上方空单',fmtAmount(t.up20_delta_usd),Number(t.up20_delta_usd)>=0?'warn':'good')+metricRow('20点内下方多单',fmtAmount(t.down20_delta_usd),Number(t.down20_delta_usd)>=0?'warn':'good')+metricRow('最长柱规模',fmtAmount(t.longest_delta_usd),Number(t.longest_delta_usd)>=0?'warn':'good')+metricRow('Funding',fmtFunding(t.funding_delta),Number(t.funding_delta)>=0?'warn':'good')}
