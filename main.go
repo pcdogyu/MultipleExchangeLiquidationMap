@@ -800,18 +800,54 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "funding_scale_csv must match leverage count", http.StatusBadRequest)
 			return
 		}
-		_ = a.setSetting("model_lookback_min", strconv.Itoa(req.LookbackMin))
-		_ = a.setSetting("model_bucket_min", strconv.Itoa(req.BucketMin))
-		_ = a.setSetting("model_price_step", fmt.Sprintf("%.4f", req.PriceStep))
-		_ = a.setSetting("model_price_range", fmt.Sprintf("%.2f", req.PriceRange))
-		_ = a.setSetting("model_leverage_levels", strings.TrimSpace(req.LeverageCSV))
-		_ = a.setSetting("model_leverage_weights", strings.TrimSpace(req.WeightCSV))
-		_ = a.setSetting("model_mm", fmt.Sprintf("%.6f", req.MaintMargin))
-		_ = a.setSetting("model_mm_csv", strings.TrimSpace(req.MaintMarginCSV))
-		_ = a.setSetting("model_funding_scale", fmt.Sprintf("%.2f", req.FundingScale))
-		_ = a.setSetting("model_funding_scale_csv", strings.TrimSpace(req.FundingScaleCSV))
-		_ = a.setSetting("model_decay_k", fmt.Sprintf("%.4f", req.DecayK))
-		_ = a.setSetting("model_neighbor_share", fmt.Sprintf("%.4f", req.NeighborShare))
+		if err := a.setSetting("model_lookback_min", strconv.Itoa(req.LookbackMin)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_bucket_min", strconv.Itoa(req.BucketMin)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_price_step", fmt.Sprintf("%.4f", req.PriceStep)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_price_range", fmt.Sprintf("%.2f", req.PriceRange)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_leverage_levels", strings.TrimSpace(req.LeverageCSV)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_leverage_weights", strings.TrimSpace(req.WeightCSV)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_mm", fmt.Sprintf("%.6f", req.MaintMargin)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_mm_csv", strings.TrimSpace(req.MaintMarginCSV)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_funding_scale", fmt.Sprintf("%.2f", req.FundingScale)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_funding_scale_csv", strings.TrimSpace(req.FundingScaleCSV)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_decay_k", fmt.Sprintf("%.4f", req.DecayK)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_neighbor_share", fmt.Sprintf("%.4f", req.NeighborShare)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
