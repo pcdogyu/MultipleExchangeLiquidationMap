@@ -842,18 +842,87 @@ func (a *App) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		cutoff := time.Now().Add(-30 * time.Minute).UnixMilli()
-		rows, err := a.db.Query(`SELECT side, price, peak_notional_usd, duration_ms, event_ts, mode
-			FROM price_wall_events
-			WHERE event_ts>=?
-			ORDER BY event_ts DESC
-			LIMIT 200`, cutoff)
+		// Backward-compatible: if no paging filters provided, return a flat array (previous behavior).
+		q := r.URL.Query()
+		side := strings.ToLower(strings.TrimSpace(q.Get("side")))
+		mode := strings.ToLower(strings.TrimSpace(q.Get("mode")))
+		hasPaging := strings.TrimSpace(q.Get("page")) != "" || strings.TrimSpace(q.Get("limit")) != "" || side != "" || mode != "" || strings.TrimSpace(q.Get("minutes")) != ""
+		if !hasPaging {
+			cutoff := time.Now().Add(-30 * time.Minute).UnixMilli()
+			rows, err := a.db.Query(`SELECT side, price, peak_notional_usd, duration_ms, event_ts, mode
+				FROM price_wall_events
+				WHERE event_ts>=?
+				ORDER BY event_ts DESC
+				LIMIT 200`, cutoff)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			defer rows.Close()
+			out := make([]PriceWallEvent, 0, 200)
+			for rows.Next() {
+				var e PriceWallEvent
+				if err := rows.Scan(&e.Side, &e.Price, &e.Peak, &e.DurationMS, &e.EventTS, &e.Mode); err != nil {
+					continue
+				}
+				out = append(out, e)
+			}
+			_ = json.NewEncoder(w).Encode(out)
+			return
+		}
+
+		page := 1
+		if raw := strings.TrimSpace(q.Get("page")); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 100000 {
+				page = n
+			}
+		}
+		limit := 25
+		if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 200 {
+				limit = n
+			}
+		}
+		minutes := 30
+		if raw := strings.TrimSpace(q.Get("minutes")); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 24*60 {
+				minutes = n
+			}
+		}
+		if side != "" && side != "bid" && side != "ask" {
+			http.Error(w, "invalid side", http.StatusBadRequest)
+			return
+		}
+		if mode != "" && mode != "weighted" && mode != "merged" {
+			http.Error(w, "invalid mode", http.StatusBadRequest)
+			return
+		}
+
+		cutoff := time.Now().Add(-time.Duration(minutes) * time.Minute).UnixMilli()
+		baseSQL := ` FROM price_wall_events WHERE event_ts>=?`
+		args := []any{cutoff}
+		if side != "" {
+			baseSQL += ` AND side=?`
+			args = append(args, side)
+		}
+		if mode != "" {
+			baseSQL += ` AND mode=?`
+			args = append(args, mode)
+		}
+
+		var total int
+		if err := a.db.QueryRow(`SELECT COUNT(1)`+baseSQL, args...).Scan(&total); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		offset := (page - 1) * limit
+		rows, err := a.db.Query(`SELECT side, price, peak_notional_usd, duration_ms, event_ts, mode`+baseSQL+` ORDER BY event_ts DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		defer rows.Close()
-		out := make([]PriceWallEvent, 0, 200)
+		out := make([]PriceWallEvent, 0, limit)
 		for rows.Next() {
 			var e PriceWallEvent
 			if err := rows.Scan(&e.Side, &e.Price, &e.Peak, &e.DurationMS, &e.EventTS, &e.Mode); err != nil {
@@ -861,7 +930,15 @@ func (a *App) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			out = append(out, e)
 		}
-		_ = json.NewEncoder(w).Encode(out)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"page":      page,
+			"page_size": limit,
+			"total":     total,
+			"minutes":   minutes,
+			"side":      side,
+			"mode":      mode,
+			"rows":      out,
+		})
 	case http.MethodPost:
 		var req PriceWallEvent
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -3672,14 +3749,20 @@ canvas{width:100%;height:760px;display:block;border:1px solid #e5e7eb;border-rad
     <div class="event-wrap">
       <div class="event-title">价格事件</div>
       <div class="event-grid">
-        <div class="event-card"><h4 style="color:#16a34a">买盘事件</h4><div id="bidEvents"></div></div>
-        <div class="event-card"><h4 style="color:#dc2626">卖盘事件</h4><div id="askEvents"></div></div>
+        <div class="event-card">
+          <div class="row" style="justify-content:space-between"><h4 style="color:#16a34a;margin:0">买盘事件</h4><div class="small"><button id="bidPrev" class="toggle" onclick="evtPrev('bid')">上一页</button><button id="bidNext" class="toggle" onclick="evtNext('bid')">下一页</button><span id="bidPage" style="margin-left:8px"></span></div></div>
+          <div id="bidEvents"></div>
+        </div>
+        <div class="event-card">
+          <div class="row" style="justify-content:space-between"><h4 style="color:#dc2626;margin:0">卖盘事件</h4><div class="small"><button id="askPrev" class="toggle" onclick="evtPrev('ask')">上一页</button><button id="askNext" class="toggle" onclick="evtNext('ask')">下一页</button><span id="askPage" style="margin-left:8px"></span></div></div>
+          <div id="askEvents"></div>
+        </div>
       </div>
     </div>
   </div>
 </div>
 <script>
-let currentMode='weighted',dashboard=null,orderbook=null,depthState=null,isDraggingDepth=false,depthLastX=0,persistedEvents={bid:[],ask:[]};
+let currentMode='weighted',dashboard=null,orderbook=null,depthState=null,isDraggingDepth=false,depthLastX=0,persistedEvents={bid:{rows:[],page:1,total:0},ask:{rows:[],page:1,total:0}};
 const depthMemory={halfLifeMs:120000,rollingWindowMs:5*60*1000,bidGhost:{},askGhost:{},bidMax:{},askMax:{},lastUpdate:0};
 const depthEvents={minPersistMs:3000,linkFactor:0.6,bidTrack:{},askTrack:{},bidList:[],askList:[]};
 function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1})}
@@ -3702,15 +3785,18 @@ function emitQualifiedEvents(side,now){const track=side==='bid'?depthEvents.bidT
 function computeFilteredMap(side,levelNow,th){const out={};const track=side==='bid'?depthEvents.bidTrack:depthEvents.askTrack;for(const [k,vRaw] of Object.entries(levelNow)){const v=Number(vRaw||0);if(!(v>0))continue;const t=track[k];const strong=Boolean(t&&t.linkedEver&&Number(t.duration||0)>=depthEvents.minPersistMs);const linked=hasLinkedNeighbor(levelNow,k,th);const w=strong?1:(linked?0.35:0.1);out[k]=v*w;}return out;}
 function updateDepthMemory(){const m=orderbook&&orderbook.merged;if(!m)return;const now=Date.now();if(depthMemory.lastUpdate===0)depthMemory.lastUpdate=now;const dt=Math.max(0,now-depthMemory.lastUpdate);depthMemory.lastUpdate=now;const decay=Math.pow(0.5,dt/depthMemory.halfLifeMs);decayGhost(depthMemory.bidGhost,decay);decayGhost(depthMemory.askGhost,decay);const bidNow=levelMap(m.bids),askNow=levelMap(m.asks),bidTh=wallThreshold(bidNow),askTh=wallThreshold(askNow);trackWalls('bid',bidNow,bidTh,now);trackWalls('ask',askNow,askTh,now);emitQualifiedEvents('bid',now);emitQualifiedEvents('ask',now);const bidFiltered=computeFilteredMap('bid',bidNow,bidTh),askFiltered=computeFilteredMap('ask',askNow,askTh);for(const [k,v] of Object.entries(bidFiltered)){depthMemory.bidGhost[k]=Math.max(Number(depthMemory.bidGhost[k]||0),Number(v||0));}for(const [k,v] of Object.entries(askFiltered)){depthMemory.askGhost[k]=Math.max(Number(depthMemory.askGhost[k]||0),Number(v||0));}updateRollingMax(depthMemory.bidMax,bidFiltered,now,depthMemory.rollingWindowMs);updateRollingMax(depthMemory.askMax,askFiltered,now,depthMemory.rollingWindowMs);}
 function renderActive(){document.querySelectorAll('button[data-mode]').forEach(b=>b.classList.toggle('active',(b.dataset.mode||'')===currentMode));}
-function resetDepthMemory(){depthMemory.bidGhost={};depthMemory.askGhost={};depthMemory.bidMax={};depthMemory.askMax={};depthMemory.lastUpdate=0;depthState=null;depthEvents.bidTrack={};depthEvents.askTrack={};depthEvents.bidList=[];depthEvents.askList=[];persistedEvents={bid:[],ask:[]};}
+function resetDepthMemory(){depthMemory.bidGhost={};depthMemory.askGhost={};depthMemory.bidMax={};depthMemory.askMax={};depthMemory.lastUpdate=0;depthState=null;depthEvents.bidTrack={};depthEvents.askTrack={};depthEvents.bidList=[];depthEvents.askList=[];persistedEvents={bid:{rows:[],page:1,total:0},ask:{rows:[],page:1,total:0}};}
 function setMode(mode){const m=(mode==='merged')?'merged':'weighted';if(currentMode===m)return;currentMode=m;resetDepthMemory();try{localStorage.setItem('orderbook_mode',currentMode);}catch(_){ }renderActive();load();}
 function loadModeFromStorage(){try{const m=localStorage.getItem('orderbook_mode');if(m==='weighted'||m==='merged')currentMode=m;}catch(_){ }}
 function renderMergedPanel(){const el=document.getElementById('mergeStats');const m=orderbook&&orderbook.merged;const t=document.getElementById('mergeTitle');const h=document.getElementById('mergeHint');if(t)t.textContent=currentMode==='weighted'?'加权盘口统计':'合并盘口统计';if(h)h.textContent=currentMode==='weighted'?'基于成交与 OI 估计':'多交易所合并盘口与价差';if(!m){el.innerHTML='<div class=\"small\">暂无盘口数据</div>';return;}const spread=(Number(m.best_ask||0)-Number(m.best_bid||0));el.innerHTML='<div class=\"merge-card\"><div class=\"merge-label\">Best Bid</div><div class=\"merge-val\">'+fmtPrice(m.best_bid)+'</div></div>'+'<div class=\"merge-card\"><div class=\"merge-label\">Best Ask</div><div class=\"merge-val\">'+fmtPrice(m.best_ask)+'</div></div>'+'<div class=\"merge-card\"><div class=\"merge-label\">Mid / Spread</div><div class=\"merge-val\">'+fmtPrice(m.mid)+' <span style=\"font-size:12px;color:#64748b\">('+fmtPrice(spread)+')</span></div></div>';}
 function fmtEventTime(ts){try{return new Date(ts).toLocaleTimeString('zh-CN',{hour12:false});}catch(_){return '-';}}
 function fmtDur(ms){const s=Math.max(0,Math.round(Number(ms||0)/1000));return s+'s';}
 function eventTable(list){if(!list||!list.length)return '<div class=\"small\">暂无事件</div>';let h='<table><thead><tr><th>价格</th><th>峰值</th><th>持续时间</th><th>时间</th></tr></thead><tbody>';for(const e of list.slice(0,8)){h+='<tr><td>'+fmtPrice(e.price)+'</td><td>'+fmtAmount(e.peak)+'</td><td>'+fmtDur(e.dur_ms)+'</td><td>'+fmtEventTime(e.ts)+'</td></tr>';}return h+'</tbody></table>';}
-function renderEventTables(){const be=document.getElementById('bidEvents'),ae=document.getElementById('askEvents');if(be)be.innerHTML=eventTable(persistedEvents.bid||[]);if(ae)ae.innerHTML=eventTable(persistedEvents.ask||[]);}
-function setPersistedEvents(rows){const cutoff=Date.now()-30*60*1000;const bid=[],ask=[];for(const r of (rows||[])){const ts=Number(r.event_ts||0);if(ts<cutoff)continue;const side=(r.side||'').toLowerCase();const item={price:Number(r.price||0),peak:Number(r.peak||0),dur_ms:Number(r.duration_ms||0),ts:ts};if(side==='bid')bid.push(item);if(side==='ask')ask.push(item);}persistedEvents.bid=bid;persistedEvents.ask=ask;}
+function renderEventTables(){const be=document.getElementById('bidEvents'),ae=document.getElementById('askEvents');if(be)be.innerHTML=eventTable((persistedEvents.bid&&persistedEvents.bid.rows)||[]);if(ae)ae.innerHTML=eventTable((persistedEvents.ask&&persistedEvents.ask.rows)||[]);renderEvtPager('bid');renderEvtPager('ask');}
+function renderEvtPager(side){const st=persistedEvents[side];const pageEl=document.getElementById(side+'Page');const prev=document.getElementById(side+'Prev');const next=document.getElementById(side+'Next');const page=Number((st&&st.page)||1);const total=Number((st&&st.total)||0);const pageSize=25;const pages=Math.max(1,Math.ceil(total/pageSize));if(pageEl)pageEl.textContent='第 '+page+' / '+pages+' 页 · '+total+' 条';if(prev)prev.disabled=page<=1;if(next)next.disabled=page>=pages;}
+async function loadPriceEvents(side,page){const pageSize=25;const url='/api/price-events?side='+encodeURIComponent(side)+'&page='+encodeURIComponent(String(page||1))+'&limit='+encodeURIComponent(String(pageSize))+'&minutes=30';const r=await fetch(url);const d=await r.json().catch(()=>null);if(!d||!d.rows){persistedEvents[side]={rows:[],page:1,total:0};return;}const rows=[];for(const it of (d.rows||[])){rows.push({price:Number(it.price||0),peak:Number(it.peak||0),dur_ms:Number(it.duration_ms||0),ts:Number(it.event_ts||0)});}persistedEvents[side]={rows:rows,page:Number(d.page||1),total:Number(d.total||0)};}
+async function evtPrev(side){const st=persistedEvents[side];const page=Math.max(1,Number((st&&st.page)||1)-1);await loadPriceEvents(side,page);renderEventTables();}
+async function evtNext(side){const st=persistedEvents[side];const page=Math.max(1,Number((st&&st.page)||1)+1);await loadPriceEvents(side,page);renderEventTables();}
 function syncDepthCanvas(c){const rect=c.getBoundingClientRect();const dpr=window.devicePixelRatio||1;const W=Math.max(320,Math.floor(rect.width));const H=Math.max(240,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return{x,W,H};}
 function clampDepthView(minP,maxP){if(!depthState||!(depthState.fullMax>depthState.fullMin))return[minP,maxP];const fullMin=depthState.fullMin,fullMax=depthState.fullMax,fullSpan=Math.max(1e-6,fullMax-fullMin);const minSpan=Math.max(2,fullSpan*0.05);let span=Math.max(minSpan,maxP-minP);span=Math.min(fullSpan,span);let vMin=minP,vMax=vMin+span;if(vMin<fullMin){vMin=fullMin;vMax=vMin+span;}if(vMax>fullMax){vMax=fullMax;vMin=vMax-span;}return[vMin,vMax];}
 function initDepthView(allPrices,cur){const rawMin=Math.min(...allPrices,cur),rawMax=Math.max(...allPrices,cur);const rawSpan=Math.max(2,rawMax-rawMin);const pad=Math.max(1,rawSpan*0.06);const dataMin=rawMin-pad,dataMax=rawMax+pad;if(!depthState||!(depthState.fullMax>depthState.fullMin)){depthState={fullMin:dataMin,fullMax:dataMax,viewMin:dataMin,viewMax:dataMax,padL:64,padR:24,padT:20,padB:44,W:0,H:0};[depthState.viewMin,depthState.viewMax]=clampDepthView(depthState.viewMin,depthState.viewMax);return;}depthState.fullMin=dataMin;depthState.fullMax=dataMax;const span=(depthState.viewMax>depthState.viewMin)?(depthState.viewMax-depthState.viewMin):(dataMax-dataMin);let vMin=cur-span/2,vMax=cur+span/2;[vMin,vMax]=clampDepthView(vMin,vMax);depthState.viewMin=vMin;depthState.viewMax=vMax;}
@@ -3724,7 +3810,7 @@ function buildShares(states){const order=['binance','okx','bybit'];const out={};
 function exchangeWsHealthy(ex){const ob=orderbook&&orderbook[ex];if(!ob)return false;const now=Date.now();const last=Math.max(Number(ob.last_ws_event||0),Number(ob.last_snapshot||0),Number(ob.updated_ts||0));if(!(last>0))return false;return (now-last)<=20000;}
 function renderWsStatus(){const el=document.getElementById('wsStatus');if(!el)return;const show=(name,ex)=>name+' '+(exchangeWsHealthy(ex)?'已连接':'未连接');el.textContent=[show('Binance','binance'),show('OKX','okx'),show('Bybit','bybit')].join('  ');}
 function renderMeta(){if(!dashboard)return;const t=new Date(dashboard.generated_at).toLocaleString();document.getElementById('meta').textContent='覆盖 Binance / Bybit / OKX | 更新时间 '+t+' | 当前模式 '+currentMode;const s=buildShares(dashboard.states);document.getElementById('weights').textContent=currentMode==='weighted'?('OI 权重 Binance '+(s.binance*100).toFixed(1)+'% | Bybit '+(s.bybit*100).toFixed(1)+'% | OKX '+(s.okx*100).toFixed(1)+'%'):'合并模式下直接聚合多交易所盘口';}
-async function load(){const [r1,r2,r3]=await Promise.all([fetch('/api/dashboard'),fetch('/api/orderbook?limit=60&mode='+encodeURIComponent(currentMode)),fetch('/api/price-events')]);dashboard=await r1.json();orderbook=await r2.json();const evts=await r3.json().catch(()=>[]);updateDepthMemory();setPersistedEvents(evts);renderActive();renderMeta();renderWsStatus();renderMergedPanel();drawDepth();renderEventTables();}
+async function load(){const [r1,r2]=await Promise.all([fetch('/api/dashboard'),fetch('/api/orderbook?limit=60&mode='+encodeURIComponent(currentMode))]);dashboard=await r1.json();orderbook=await r2.json();updateDepthMemory();await Promise.all([loadPriceEvents('bid',1),loadPriceEvents('ask',1)]);renderActive();renderMeta();renderWsStatus();renderMergedPanel();drawDepth();renderEventTables();}
 async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
