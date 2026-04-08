@@ -281,6 +281,16 @@ func initDB(db *sql.DB) error {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS model_liqmap_snapshots (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			symbol TEXT NOT NULL,
+			window_days INTEGER NOT NULL,
+			config_rev INTEGER NOT NULL,
+			generated_at INTEGER NOT NULL,
+			payload_json TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_model_liqmap_snapshots_key_ts
+			ON model_liqmap_snapshots(symbol, window_days, config_rev, generated_at);`,
 		`CREATE TABLE IF NOT EXISTS price_wall_events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			side TEXT NOT NULL,
@@ -353,6 +363,7 @@ func main() {
 	app.startOrderBookSync(rootCtx)
 	app.startLiquidationSync(rootCtx)
 	app.startTelegramNotifier(rootCtx)
+	app.startModelMapSnapshotter(rootCtx)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", app.handleIndex)
 	mux.HandleFunc("/monitor", app.handleMonitor)
@@ -515,10 +526,22 @@ func (a *App) handleModelLiquidationMap(w http.ResponseWriter, r *http.Request) 
 			priceRange = v
 		}
 	}
+	windowDays := a.window()
+	configRev := a.getSettingInt64("model_config_rev", 0)
+	useCache := lookbackMin == cfg.LookbackMin && bucketMin == cfg.BucketMin && priceStep == cfg.PriceStep && priceRange == cfg.PriceRange
+	if useCache {
+		if snap, ok := a.loadModelMapSnapshot(defaultSymbol, windowDays, configRev); ok {
+			_ = json.NewEncoder(w).Encode(snap)
+			return
+		}
+	}
 	resp, err := a.buildModelLiquidationMap(defaultSymbol, lookbackMin, bucketMin, priceStep, priceRange, cfg)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if useCache {
+		a.saveModelMapSnapshot(defaultSymbol, windowDays, configRev, resp)
 	}
 	_ = json.NewEncoder(w).Encode(resp)
 }
@@ -590,6 +613,17 @@ func (a *App) getSettingInt(key string, fallback int) int {
 	return fallback
 }
 
+func (a *App) getSettingInt64(key string, fallback int64) int64 {
+	raw := strings.TrimSpace(a.getSetting(key))
+	if raw == "" {
+		return fallback
+	}
+	if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		return v
+	}
+	return fallback
+}
+
 func (a *App) getSettingFloat(key string, fallback float64) float64 {
 	raw := strings.TrimSpace(a.getSetting(key))
 	if raw == "" {
@@ -604,6 +638,43 @@ func (a *App) getSettingFloat(key string, fallback float64) float64 {
 func (a *App) setSetting(key, value string) error {
 	_, err := a.db.Exec(`INSERT INTO app_settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
+}
+
+func (a *App) loadModelMapSnapshot(symbol string, windowDays int, configRev int64) (map[string]any, bool) {
+	var raw string
+	if err := a.db.QueryRow(`SELECT payload_json FROM model_liqmap_snapshots
+		WHERE symbol=? AND window_days=? AND config_rev=?
+		ORDER BY generated_at DESC LIMIT 1`, symbol, windowDays, configRev).Scan(&raw); err != nil {
+		return nil, false
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+func (a *App) saveModelMapSnapshot(symbol string, windowDays int, configRev int64, payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	genAt := time.Now().UnixMilli()
+	if v, ok := payload["generated_at"]; ok {
+		if f, ok2 := v.(float64); ok2 && int64(f) > 0 {
+			genAt = int64(f)
+		}
+	}
+	payload["window_days"] = windowDays
+	payload["config_rev"] = configRev
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	_, _ = a.db.Exec(`INSERT INTO model_liqmap_snapshots(symbol, window_days, config_rev, generated_at, payload_json)
+		VALUES(?, ?, ?, ?, ?)`, symbol, windowDays, configRev, genAt, string(b))
+	cutoff := time.Now().Add(-6 * time.Hour).UnixMilli()
+	_, _ = a.db.Exec(`DELETE FROM model_liqmap_snapshots
+		WHERE symbol=? AND window_days=? AND config_rev=? AND generated_at<?`, symbol, windowDays, configRev, cutoff)
 }
 
 func (a *App) loadSettings() ChannelSettings {
@@ -845,6 +916,10 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := a.setSetting("model_neighbor_share", fmt.Sprintf("%.4f", req.NeighborShare)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_config_rev", strconv.FormatInt(time.Now().UnixMilli(), 10)); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -3068,6 +3143,32 @@ func (a *App) startLiquidationSync(ctx context.Context) {
 	go a.syncBinanceLiquidations(ctx, "ETHUSDT")
 	go a.syncBybitLiquidations(ctx, "ETHUSDT")
 	go a.syncOKXLiquidations(ctx, "ETH-USDT-SWAP", okxCtVal)
+}
+
+func (a *App) startModelMapSnapshotter(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		time.Sleep(2 * time.Second)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			cfg := a.loadModelConfig()
+			windowDays := a.window()
+			configRev := a.getSettingInt64("model_config_rev", 0)
+			resp, err := a.buildModelLiquidationMap(defaultSymbol, cfg.LookbackMin, cfg.BucketMin, cfg.PriceStep, cfg.PriceRange, cfg)
+			if err != nil {
+				if a.debug {
+					log.Printf("model liqmap snapshot err: %v", err)
+				}
+				continue
+			}
+			a.saveModelMapSnapshot(defaultSymbol, windowDays, configRev, resp)
+		}
+	}()
 }
 
 func (a *App) fetchOKXContractValue(instID string) float64 {
