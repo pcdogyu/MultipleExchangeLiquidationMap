@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -315,6 +316,11 @@ func (a *App) setWindow(days int) {
 func main() {
 	debug := getenv("DEBUG", "") == "1" || strings.EqualFold(getenv("DEBUG", ""), "true")
 	dbPath := getenv("DB_PATH", defaultDBPath)
+	if !filepath.IsAbs(dbPath) {
+		if exe, err := os.Executable(); err == nil && exe != "" {
+			dbPath = filepath.Join(filepath.Dir(exe), dbPath)
+		}
+	}
 	if debug {
 		log.Printf("debug enabled: db_path=%s addr=%s symbol=%s", dbPath, defaultServerAddr, defaultSymbol)
 	}
