@@ -703,6 +703,7 @@ type ModelConfig struct {
 	MaintMarginCSV string
 	FundingScale  float64
 	FundingScaleCSV string
+	IntensityScale float64
 	DecayK        float64
 	NeighborShare float64
 }
@@ -744,11 +745,15 @@ func (a *App) loadModelConfig() ModelConfig {
 		MaintMarginCSV: normalizeCSVInput(a.getSetting("model_mm_csv")),
 		FundingScale:  a.getSettingFloat("model_funding_scale", 7000),
 		FundingScaleCSV: normalizeCSVInput(a.getSetting("model_funding_scale_csv")),
+		IntensityScale: a.getSettingFloat("model_intensity_scale", 1.0),
 		DecayK:        a.getSettingFloat("model_decay_k", 2.2),
 		NeighborShare: a.getSettingFloat("model_neighbor_share", 0.28),
 	}
 	if cfg.WeightCSV == "" {
 		cfg.WeightCSV = "0.142857,0.142857,0.142857,0.142857,0.142857,0.142857,0.142857"
+	}
+	if cfg.IntensityScale <= 0 || cfg.IntensityScale > 50 {
+		cfg.IntensityScale = 1.0
 	}
 	return cfg
 }
@@ -782,6 +787,9 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 		req.WeightCSV = normalizeCSVInput(req.WeightCSV)
 		req.MaintMarginCSV = normalizeCSVInput(req.MaintMarginCSV)
 		req.FundingScaleCSV = normalizeCSVInput(req.FundingScaleCSV)
+		if req.IntensityScale <= 0 || req.IntensityScale > 50 {
+			req.IntensityScale = 1.0
+		}
 		if req.LookbackMin < 60 || req.LookbackMin > 43200 {
 			req.LookbackMin = defaultLookbackMin
 		}
@@ -879,6 +887,10 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := a.setSetting("model_funding_scale_csv", strings.TrimSpace(req.FundingScaleCSV)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_intensity_scale", fmt.Sprintf("%.4f", req.IntensityScale)); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -2451,7 +2463,7 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 		}
 		age := float64(now-c.ts) / float64(lookbackMS)
 		decay := math.Exp(-decayK * age)
-		v := c.intensity * decay
+		v := c.intensity * decay * cfg.IntensityScale
 		grid[row][col] += v
 		if g, ok := exGrid[c.ex]; ok {
 			g[row][col] += v
@@ -4231,6 +4243,7 @@ const configHTML = `<!doctype html>
       </table>
     </div>
   </div>
+  <div class="field"><label>清算强度缩放系数</label><input id="scale" type="number" step="0.1" min="0.1" max="50"></div>
   <div class="field"><label>时间衰减系数 k</label><input id="decay" type="number" step="0.1"></div>
   <div class="field"><label>邻近价扩散比例</label><input id="neighbor" type="number" step="0.01"></div>
 </div>
@@ -4257,6 +4270,7 @@ function bind(cfg){
     if(mmEl) mmEl.value=String(mi);
     if(fsEl) fsEl.value=String(fi);
   }
+  document.getElementById('scale').value=cfg.IntensityScale||1.0;
   document.getElementById('decay').value=cfg.DecayK||2.2;
   document.getElementById('neighbor').value=cfg.NeighborShare||0.28;
 }
@@ -4295,6 +4309,7 @@ async function save(){
     MaintMarginCSV:mmCSV,
     FundingScale:fsList[0]||7000,
     FundingScaleCSV:fsCSV,
+    IntensityScale:Number(document.getElementById('scale').value||1.0),
     DecayK:Number(document.getElementById('decay').value||2.2),
     NeighborShare:Number(document.getElementById('neighbor').value||0.28)
   };
@@ -4305,6 +4320,6 @@ async function loadFooter(){try{const r=await fetch('/api/version');const v=awai
 async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
-bind({LookbackMin:{{.LookbackMin}},BucketMin:{{.BucketMin}},PriceStep:{{.PriceStep}},PriceRange:{{.PriceRange}},LeverageCSV:{{printf "%q" .LeverageCSV}},WeightCSV:{{printf "%q" .WeightCSV}},MaintMargin:{{.MaintMargin}},MaintMarginCSV:{{printf "%q" .MaintMarginCSV}},FundingScale:{{.FundingScale}},FundingScaleCSV:{{printf "%q" .FundingScaleCSV}},DecayK:{{.DecayK}},NeighborShare:{{.NeighborShare}}});
+bind({LookbackMin:{{.LookbackMin}},BucketMin:{{.BucketMin}},PriceStep:{{.PriceStep}},PriceRange:{{.PriceRange}},LeverageCSV:{{printf "%q" .LeverageCSV}},WeightCSV:{{printf "%q" .WeightCSV}},MaintMargin:{{.MaintMargin}},MaintMarginCSV:{{printf "%q" .MaintMarginCSV}},FundingScale:{{.FundingScale}},FundingScaleCSV:{{printf "%q" .FundingScaleCSV}},IntensityScale:{{.IntensityScale}},DecayK:{{.DecayK}},NeighborShare:{{.NeighborShare}}});
 loadFooter();
 </script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
