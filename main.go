@@ -210,13 +210,6 @@ type ChannelSettings struct {
 	NotifyIntervalMin int    `json:"notify_interval_min"`
 }
 
-type ModelConfig struct {
-	LookbackMin int     `json:"lookback_min"`
-	BucketMin   int     `json:"bucket_min"`
-	PriceStep   float64 `json:"price_step"`
-	PriceRange  float64 `json:"price_range"`
-}
-
 func getenv(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
@@ -418,7 +411,7 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 		log.Printf("%s %s", r.Method, r.URL.Path)
 	}
 	tpl := template.Must(template.New("config").Parse(configHTML))
-	_ = tpl.Execute(w, nil)
+	_ = tpl.Execute(w, a.loadModelConfig())
 }
 
 func (a *App) handleLiquidations(w http.ResponseWriter, r *http.Request) {
@@ -443,14 +436,6 @@ func (a *App) handleChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	tpl := template.Must(template.New("channel").Parse(channelHTML))
 	_ = tpl.Execute(w, a.loadSettings())
-}
-
-func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	tpl := template.Must(template.New("config").Parse(configHTML))
-	_ = tpl.Execute(w, a.loadModelConfig())
 }
 
 func (a *App) handleWindow(w http.ResponseWriter, r *http.Request) {
@@ -2357,10 +2342,25 @@ func (a *App) handleKlinesAPI(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	allowed := map[string]bool{"5m": true, "15m": true, "30m": true, "1h": true, "4h": true, "8h": true, "12h": true, "1d": true, "3d": true, "1w": true}
+	startTS := int64(0)
+	if raw := strings.TrimSpace(r.URL.Query().Get("start_ts")); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
+			startTS = n
+		}
+	}
+	endTS := int64(0)
+	if raw := strings.TrimSpace(r.URL.Query().Get("end_ts")); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
+			endTS = n
+		}
+	}
+	allowed := map[string]bool{"1m": true, "5m": true, "15m": true, "30m": true, "1h": true, "4h": true, "8h": true, "12h": true, "1d": true, "3d": true, "1w": true}
 	binInterval := interval
 	if interval == "" {
 		binInterval = "15m"
+	}
+	if interval == "2m" {
+		binInterval = "1m"
 	}
 	if interval == "10m" {
 		binInterval = "5m"
@@ -2373,7 +2373,14 @@ func (a *App) handleKlinesAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var rows [][]any
-	if err := a.fetchJSON(fmt.Sprintf("https://api.binance.com/api/v3/klines?symbol=ETHUSDT&interval=%s&limit=%d", binInterval, limit), &rows); err != nil {
+	url := fmt.Sprintf("https://api.binance.com/api/v3/klines?symbol=ETHUSDT&interval=%s&limit=%d", binInterval, limit)
+	if startTS > 0 {
+		url += fmt.Sprintf("&startTime=%d", startTS)
+	}
+	if endTS > 0 {
+		url += fmt.Sprintf("&endTime=%d", endTS)
+	}
+	if err := a.fetchJSON(url, &rows); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -3615,7 +3622,7 @@ canvas{width:100%;height:760px;display:block;border:1px solid #e5e7eb;border-rad
 .event-wrap{margin-top:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;padding:10px}
 .event-title{font-size:16px;font-weight:700;color:#0f172a;margin-bottom:8px}
 .event-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.event-card{border:1px solid #dbe3ef;border-radius:8px;background:#fff;padding:8px}
+.event-card{border:1px solid #dbe3ef;border-radius:8px;background:#fff;padding:8px;max-height:360px;overflow:auto}
 .event-card h4{margin:0 0 6px 0;font-size:14px}
 .event-card table{width:100%;border-collapse:collapse}
 .event-card th,.event-card td{font-size:12px;border-top:1px solid #eef2f7;padding:4px 6px;text-align:center}
@@ -3697,7 +3704,7 @@ function fmtEventTime(ts){try{return new Date(ts).toLocaleTimeString('zh-CN',{ho
 function fmtDur(ms){const s=Math.max(0,Math.round(Number(ms||0)/1000));return s+'s';}
 function eventTable(list){if(!list||!list.length)return '<div class=\"small\">暂无事件</div>';let h='<table><thead><tr><th>价格</th><th>峰值</th><th>持续时间</th><th>时间</th></tr></thead><tbody>';for(const e of list.slice(0,8)){h+='<tr><td>'+fmtPrice(e.price)+'</td><td>'+fmtAmount(e.peak)+'</td><td>'+fmtDur(e.dur_ms)+'</td><td>'+fmtEventTime(e.ts)+'</td></tr>';}return h+'</tbody></table>';}
 function renderEventTables(){const be=document.getElementById('bidEvents'),ae=document.getElementById('askEvents');if(be)be.innerHTML=eventTable(persistedEvents.bid||[]);if(ae)ae.innerHTML=eventTable(persistedEvents.ask||[]);}
-function setPersistedEvents(rows){const cutoff=Date.now()-30*60*1000;const bid=[],ask=[];for(const r of (rows||[])){const ts=Number(r.event_ts||0);if(ts<cutoff)continue;const side=(r.side||'').toLowerCase();const item={price:Number(r.price||0),peak:Number(r.peak||0),dur_ms:Number(r.duration_ms||0),ts:ts};if(side==='bid')bid.push(item);if(side==='ask')ask.push(item);}persistedEvents.bid=bid.slice(0,8);persistedEvents.ask=ask.slice(0,8);}
+function setPersistedEvents(rows){const cutoff=Date.now()-30*60*1000;const bid=[],ask=[];for(const r of (rows||[])){const ts=Number(r.event_ts||0);if(ts<cutoff)continue;const side=(r.side||'').toLowerCase();const item={price:Number(r.price||0),peak:Number(r.peak||0),dur_ms:Number(r.duration_ms||0),ts:ts};if(side==='bid')bid.push(item);if(side==='ask')ask.push(item);}persistedEvents.bid=bid;persistedEvents.ask=ask;}
 function syncDepthCanvas(c){const rect=c.getBoundingClientRect();const dpr=window.devicePixelRatio||1;const W=Math.max(320,Math.floor(rect.width));const H=Math.max(240,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return{x,W,H};}
 function clampDepthView(minP,maxP){if(!depthState||!(depthState.fullMax>depthState.fullMin))return[minP,maxP];const fullMin=depthState.fullMin,fullMax=depthState.fullMax,fullSpan=Math.max(1e-6,fullMax-fullMin);const minSpan=Math.max(2,fullSpan*0.05);let span=Math.max(minSpan,maxP-minP);span=Math.min(fullSpan,span);let vMin=minP,vMax=vMin+span;if(vMin<fullMin){vMin=fullMin;vMax=vMin+span;}if(vMax>fullMax){vMax=fullMax;vMin=vMax-span;}return[vMin,vMax];}
 function initDepthView(allPrices,cur){const rawMin=Math.min(...allPrices,cur),rawMax=Math.max(...allPrices,cur);const rawSpan=Math.max(2,rawMax-rawMin);const pad=Math.max(1,rawSpan*0.06);const dataMin=rawMin-pad,dataMax=rawMax+pad;if(!depthState||!(depthState.fullMax>depthState.fullMin)){depthState={fullMin:dataMin,fullMax:dataMax,viewMin:dataMin,viewMax:dataMax,padL:64,padR:24,padT:20,padB:44,W:0,H:0};[depthState.viewMin,depthState.viewMax]=clampDepthView(depthState.viewMin,depthState.viewMax);return;}depthState.fullMin=dataMin;depthState.fullMax=dataMax;const span=(depthState.viewMax>depthState.viewMin)?(depthState.viewMax-depthState.viewMin):(dataMax-dataMin);let vMin=cur-span/2,vMax=cur+span/2;[vMin,vMax]=clampDepthView(vMin,vMax);depthState.viewMin=vMin;depthState.viewMax=vMax;}
@@ -3741,7 +3748,7 @@ async function save(){const n=document.getElementById('notify-interval');const i
 async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='正在发送测试消息...';const r=await fetch('/api/channel/test',{method:'POST'});msg.textContent=r.ok?'测试发送成功':('测试发送失败: '+await r.text());}
 </script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
-const configHTML = `<!doctype html>
+const configHTMLLegacy = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>模型配置</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{max-width:900px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}label{display:block;margin-top:12px;font-size:13px;color:#334155}input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}.small{font-size:12px;color:#64748b}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
 <body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/monitor">雷区监控</a><a href="/config" class="active">模型配置</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a></div></div>
@@ -3786,20 +3793,24 @@ setInterval(load,5000);load();(async()=>{try{const r=await fetch('/api/version')
 
 const bubblesHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>气泡图</title>
-<style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{max-width:1280px;margin:0 auto;padding:14px}.panel{border:1px solid #dce3ec;background:#fff;margin:10px 0;padding:12px;border-radius:10px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.small{font-size:12px;color:#64748b}select,button{height:34px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:0 10px}button{cursor:pointer}.chart{width:100%;height:620px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;display:block}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
+<style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{max-width:1280px;margin:0 auto;padding:14px}.panel{border:1px solid #dce3ec;background:#fff;margin:10px 0;padding:12px;border-radius:10px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.small{font-size:12px;color:#64748b}select,button{height:34px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:0 10px}button{cursor:pointer}.chart{width:100%;height:620px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;display:block}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
 <body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/monitor">雷区监控</a><a href="/config">模型配置</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles" class="active">气泡图</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a></div></div>
-<div class="wrap"><div class="panel"><div class="row"><span>周期</span><select id="iv"><option value="5m">5M</option><option value="10m">10M</option><option value="15m" selected>15M</option><option value="30m">30M</option><option value="1h">1H</option><option value="4h">4H</option><option value="8h">8H</option><option value="12h">12H</option><option value="1d">1D</option><option value="3d">3D</option><option value="7d">7D</option></select><button onclick="load()">刷新</button><span id="meta" class="small"></span></div><canvas id="cv" class="chart" width="1600" height="620"></canvas><div class="small">气泡大小代表清算金额，颜色代表多空方向。</div></div></div>
+<div class="wrap"><div class="panel"><div class="row"><span>周期</span><select id="iv"><option value="1m">1M</option><option value="2m">2M</option><option value="5m">5M</option><option value="10m">10M</option><option value="15m" selected>15M</option><option value="30m">30M</option><option value="1h">1H</option><option value="4h">4H</option><option value="8h">8H</option><option value="12h">12H</option><option value="1d">1D</option><option value="3d">3D</option><option value="7d">7D</option></select><button onclick="load()">刷新</button><label class="small" style="display:inline-flex;align-items:center;gap:6px;margin-left:6px"><input id="hist" type="checkbox">历史</label><button id="moreBtn" style="display:none" onclick="loadMoreHistory()">向左加载</button><span id="meta" class="small"></span></div><canvas id="cv" class="chart" width="1600" height="620"></canvas><div class="small">气泡大小代表清算金额，颜色代表多空方向。滚轮缩放（默认以最右侧K线为锚点），按住鼠标左键左右拖动。</div></div></div>
 <script>
 let candles=[],events=[],viewStart=0,viewCount=120,drag=false,lastX=0;
 function fit(){const c=document.getElementById('cv');const r=c.getBoundingClientRect(),dpr=window.devicePixelRatio||1;const w=Math.max(700,Math.floor(r.width)),h=Math.max(420,Math.floor(r.height));c.width=Math.floor(w*dpr);c.height=Math.floor(h*dpr);const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return {c,x,w,h};}
 function toNum(v){const n=Number(v);return isFinite(n)?n:0}
 function mapInterval(v){if(v==='10m')return '5m';if(v==='7d')return '1w';return v;}
-function parseRows(rows,interval){let cs=(rows||[]).map(r=>({t:toNum(r[0]),o:toNum(r[1]),h:toNum(r[2]),l:toNum(r[3]),c:toNum(r[4])}));if(interval==='10m'){const out=[];for(let i=0;i+1<cs.length;i+=2){const a=cs[i],b=cs[i+1];out.push({t:a.t,o:a.o,h:Math.max(a.h,b.h),l:Math.min(a.l,b.l),c:b.c});}cs=out;}if(interval==='7d'){const out=[];for(let i=0;i+6<cs.length;i+=7){const a=cs[i],g=cs.slice(i,i+7),z=g[g.length-1];out.push({t:a.t,o:a.o,h:Math.max(...g.map(v=>v.h)),l:Math.min(...g.map(v=>v.l)),c:z.c});}cs=out;}return cs;}
+function parseRows(rows,interval){let cs=(rows||[]).map(r=>({t:toNum(r[0]),o:toNum(r[1]),h:toNum(r[2]),l:toNum(r[3]),c:toNum(r[4])}));if(interval==='2m'){const out=[];for(let i=0;i+1<cs.length;i+=2){const a=cs[i],b=cs[i+1];out.push({t:a.t,o:a.o,h:Math.max(a.h,b.h),l:Math.min(a.l,b.l),c:b.c});}cs=out;}if(interval==='10m'){const out=[];for(let i=0;i+1<cs.length;i+=2){const a=cs[i],b=cs[i+1];out.push({t:a.t,o:a.o,h:Math.max(a.h,b.h),l:Math.min(a.l,b.l),c:b.c});}cs=out;}if(interval==='7d'){const out=[];for(let i=0;i+6<cs.length;i+=7){const a=cs[i],g=cs.slice(i,i+7),z=g[g.length-1];out.push({t:a.t,o:a.o,h:Math.max(...g.map(v=>v.h)),l:Math.min(...g.map(v=>v.l)),c:z.c});}cs=out;}return cs;}
 function draw(){const v=fit(),x=v.x,W=v.w,H=v.h,padL=70,padR=20,padT=18,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);if(!candles.length){x.fillStyle='#64748b';x.fillText('暂无数据',16,24);return;}const s=Math.max(0,Math.min(candles.length-1,viewStart)),e=Math.max(s+10,Math.min(candles.length,s+viewCount));const cs=candles.slice(s,e);const minP=Math.min(...cs.map(v=>v.l)),maxP=Math.max(...cs.map(v=>v.h));const span=Math.max(1e-6,maxP-minP);const sx=i=>padL+(i/(cs.length-1))*pw,sy=p=>padT+((maxP-p)/span)*ph;x.strokeStyle='#e5e7eb';x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*i/4,val=maxP-(span*i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#64748b';x.fillText(val.toFixed(1),6,y+4);}const bodyW=Math.max(3,Math.min(12,pw/Math.max(20,cs.length)));for(let i=0;i<cs.length;i++){const c=cs[i],px=sx(i),yo=sy(c.o),yc=sy(c.c),yh=sy(c.h),yl=sy(c.l),up=c.c>=c.o;x.strokeStyle=up?'#16a34a':'#dc2626';x.beginPath();x.moveTo(px,yh);x.lineTo(px,yl);x.stroke();x.fillStyle=up?'rgba(22,163,74,0.75)':'rgba(220,38,38,0.75)';x.fillRect(px-bodyW/2,Math.min(yo,yc),bodyW,Math.max(1,Math.abs(yc-yo)));}
 const t0=cs[0].t,t1=cs[cs.length-1].t;const vis=events.filter(e=>e.event_ts>=t0&&e.event_ts<=t1);const maxN=Math.max(1,...vis.map(e=>toNum(e.notional_usd)));for(const ev of vis){const tt=toNum(ev.event_ts);const ratio=(tt-t0)/Math.max(1,t1-t0);const px=padL+ratio*pw;const py=sy(toNum(ev.price));const r=3+18*Math.sqrt(Math.max(0,toNum(ev.notional_usd))/maxN);const side=String(ev.side||'').toLowerCase();const color=(side==='long')?'rgba(22,163,74,0.45)':'rgba(220,38,38,0.45)';const stroke=(side==='long')?'#16a34a':'#dc2626';x.beginPath();x.fillStyle=color;x.strokeStyle=stroke;x.arc(px,py,r,0,Math.PI*2);x.fill();x.stroke();}
 x.fillStyle='#64748b';for(let i=0;i<=6;i++){const k=Math.floor((cs.length-1)*i/6),px=sx(k),t=new Date(cs[k].t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});x.fillText(t,Math.max(padL,px-30),H-10);} }
-async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');const kd=await kr.json();candles=parseRows(kd.rows||[],iv);events=[];if(candles.length){const startTS=toNum(candles[0].t),endTS=toNum(candles[candles.length-1].t);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];}viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);document.getElementById('meta').textContent='K线来源: '+(kd.source||iv)+' | 区间清算事件 '+events.length+' 条';draw();}
-const c=document.getElementById('cv');c.addEventListener('wheel',e=>{if(!candles.length)return;e.preventDefault();const factor=e.deltaY<0?0.88:1.12;viewCount=Math.max(30,Math.min(candles.length,Math.round(viewCount*factor)));viewStart=Math.max(0,Math.min(candles.length-viewCount,viewStart));draw();},{passive:false});c.addEventListener('mousedown',e=>{drag=true;lastX=e.clientX});window.addEventListener('mouseup',()=>drag=false);window.addEventListener('mousemove',e=>{if(!drag||!candles.length)return;const dx=e.clientX-lastX;lastX=e.clientX;const shift=Math.round(-dx/8);if(shift!==0){viewStart=Math.max(0,Math.min(candles.length-viewCount,viewStart+shift));draw();}});window.addEventListener('resize',()=>draw());document.getElementById('iv').addEventListener('change',load);
+function uniqByT(list){const out=[];const seen=new Set();for(const it of (list||[])){const t=toNum(it.t);if(!t||seen.has(t))continue;seen.add(t);out.push(it);}out.sort((a,b)=>a.t-b.t);return out;}
+function mergeEvents(a,b){const out=[];const key=(e)=>String(toNum(e.event_ts))+'|'+String(e.exchange||'')+'|'+String(e.side||'')+'|'+String(toNum(e.price))+'|'+String(toNum(e.qty));const seen=new Set();for(const it of (a||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}for(const it of (b||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}out.sort((x,y)=>toNum(x.event_ts)-toNum(y.event_ts));return out;}
+function setMoreBtnVisible(){const cb=document.getElementById('hist');const b=document.getElementById('moreBtn');if(!cb||!b)return;b.style.display=cb.checked?'inline-block':'none';}
+async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');const kd=await kr.json();candles=uniqByT(parseRows(kd.rows||[],iv));events=[];if(candles.length){const startTS=toNum(candles[0].t),endTS=toNum(candles[candles.length-1].t);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];}viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);setMoreBtnVisible();document.getElementById('meta').textContent='K线来源: '+(kd.source||iv)+' | 区间清算事件 '+events.length+' 条';draw();}
+async function loadMoreHistory(){const cb=document.getElementById('hist');if(!cb||!cb.checked)return;if(!candles.length)return;const iv=document.getElementById('iv').value;const endTS=Math.max(0,toNum(candles[0].t)-1);const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500&end_ts='+encodeURIComponent(endTS));const kd=await kr.json();const more=uniqByT(parseRows(kd.rows||[],iv));if(!more.length){document.getElementById('meta').textContent='没有更多历史K线';return;}const added=more.filter(x=>toNum(x.t)<toNum(candles[0].t));if(!added.length){document.getElementById('meta').textContent='没有更多历史K线';return;}candles=uniqByT(added.concat(candles));const startTS=toNum(added[0].t),endTS2=toNum(added[added.length-1].t);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS2));const ed=await er.json();events=mergeEvents(ed.rows||[],events);viewStart=Math.max(0,viewStart+added.length);document.getElementById('meta').textContent='K线来源: '+(kd.source||iv)+' | 区间清算事件 '+events.length+' 条';draw();}
+const c=document.getElementById('cv');c.addEventListener('wheel',e=>{if(!candles.length)return;e.preventDefault();const right=Math.min(candles.length,viewStart+viewCount);const factor=e.deltaY<0?0.88:1.12;const nextCount=Math.max(30,Math.min(candles.length,Math.round(viewCount*factor)));viewCount=nextCount;viewStart=Math.max(0,Math.min(candles.length-viewCount,right-viewCount));draw();},{passive:false});c.addEventListener('mousedown',e=>{drag=true;lastX=e.clientX});window.addEventListener('mouseup',()=>drag=false);window.addEventListener('mousemove',e=>{if(!drag||!candles.length)return;const dx=e.clientX-lastX;lastX=e.clientX;const shift=Math.round(-dx/8);if(shift!==0){viewStart=Math.max(0,Math.min(candles.length-viewCount,viewStart+shift));draw();}});window.addEventListener('resize',()=>draw());document.getElementById('iv').addEventListener('change',load);document.getElementById('hist').addEventListener('change',setMoreBtnVisible);
 async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
