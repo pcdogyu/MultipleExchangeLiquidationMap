@@ -4351,15 +4351,17 @@ function bind(cfg){
   document.getElementById('step').value=cfg.PriceStep||5;
   document.getElementById('range').value=cfg.PriceRange||400;
   const levs=[1,5,10,20,30,50,100];
-  const w=(String(cfg.WeightCSV||'')||'').split(',').map(s=>Number(String(s||'').trim())).filter(n=>isFinite(n));
-  const mm=(String(cfg.MaintMarginCSV||'')||'').split(',').map(s=>Number(String(s||'').trim())).filter(n=>isFinite(n));
-  const fs=(String(cfg.FundingScaleCSV||'')||'').split(',').map(s=>Number(String(s||'').trim())).filter(n=>isFinite(n));
+  function toNum(v){const n=Number(String(v??'').trim());return isFinite(n)?n:NaN;}
+  function csvNums(raw,n){const parts=String(raw||'').split(',');if(parts.length===1){const v=toNum(parts[0]);return Array.from({length:n},()=>v);}const out=[];for(let i=0;i<n;i++){out.push(toNum(parts[i]));}return out;}
+  const w=csvNums(cfg.WeightCSV,levs.length);
+  const mm=csvNums(cfg.MaintMarginCSV,levs.length);
+  const fs=csvNums(cfg.FundingScaleCSV,levs.length);
   const defW=1/levs.length, defMM=Number(cfg.MaintMargin||0.005), defFS=Number(cfg.FundingScale||7000);
   for(let i=0;i<levs.length;i++){
     const lv=levs[i];
-    const wi=(w.length===levs.length?w[i]:(w[0]||defW));
-    const mi=(mm.length===levs.length?mm[i]:(mm[0]||defMM));
-    const fi=(fs.length===levs.length?fs[i]:(fs[0]||defFS));
+    const wi=isFinite(w[i])?w[i]:defW;
+    const mi=isFinite(mm[i])?mm[i]:defMM;
+    const fi=isFinite(fs[i])?fs[i]:defFS;
     const wEl=document.getElementById('w_'+lv),mmEl=document.getElementById('mm_'+lv),fsEl=document.getElementById('fs_'+lv);
     if(wEl) wEl.value=String(wi);
     if(mmEl) mmEl.value=String(mi);
