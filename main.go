@@ -430,6 +430,9 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
 	}
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 	tpl := template.Must(template.New("config").Parse(configHTML))
 	_ = tpl.Execute(w, a.loadModelConfig())
 }
@@ -789,6 +792,9 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		w.Header().Set("Cache-Control", "no-store, max-age=0")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
 		_ = json.NewEncoder(w).Encode(a.loadModelConfig())
 	case http.MethodPost:
 		var req ModelConfig
@@ -4416,7 +4422,8 @@ async function save(){
     NeighborShare:Number(document.getElementById('neighbor').value||0.28)
   };
   const r=await fetch('/api/model-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  document.getElementById('msg').textContent=r.ok?'已保存':'保存失败';
+  if(r.ok){document.getElementById('msg').textContent='已保存';await reloadCfg();bindWeightSumLive();}
+  else{document.getElementById('msg').textContent='保存失败';}
 }
 function bindWeightSumLive(){
   const levs=[1,5,10,20,30,50,100];
@@ -4438,5 +4445,6 @@ function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 bind({LookbackMin:{{.LookbackMin}},BucketMin:{{.BucketMin}},PriceStep:{{.PriceStep}},PriceRange:{{.PriceRange}},LeverageCSV:{{printf "%q" .LeverageCSV}},WeightCSV:{{printf "%q" .WeightCSV}},MaintMargin:{{.MaintMargin}},MaintMarginCSV:{{printf "%q" .MaintMarginCSV}},FundingScale:{{.FundingScale}},FundingScaleCSV:{{printf "%q" .FundingScaleCSV}},IntensityScale:{{.IntensityScale}},DecayK:{{.DecayK}},NeighborShare:{{.NeighborShare}}});
 bindWeightSumLive();
+reloadCfg();
 loadFooter();
 </script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
