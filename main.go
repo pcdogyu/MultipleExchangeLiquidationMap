@@ -2142,18 +2142,30 @@ func (a *App) loadRecentEvents(symbol string, cutoff int64) []EventRow {
 	return out
 }
 
-func (a *App) loadRecentLiquidations(symbol string, limit, offset int) []EventRow {
+func (a *App) loadLiquidations(symbol string, limit, offset int, startTS, endTS int64) []EventRow {
 	if limit <= 0 {
 		limit = 25
 	}
-	if limit > 100 {
-		limit = 100
+	if limit > 10000 {
+		limit = 10000
 	}
 	if offset < 0 {
 		offset = 0
 	}
-	rows, err := a.db.Query(`SELECT exchange, side, price, qty, notional_usd, event_ts
-		FROM liquidation_events WHERE symbol=? ORDER BY event_ts DESC LIMIT ? OFFSET ?`, symbol, limit, offset)
+	baseSQL := `SELECT exchange, side, price, qty, notional_usd, event_ts
+		FROM liquidation_events WHERE symbol=?`
+	args := []any{symbol}
+	if startTS > 0 {
+		baseSQL += ` AND event_ts >= ?`
+		args = append(args, startTS)
+	}
+	if endTS > 0 {
+		baseSQL += ` AND event_ts <= ?`
+		args = append(args, endTS)
+	}
+	baseSQL += ` ORDER BY event_ts DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+	rows, err := a.db.Query(baseSQL, args...)
 	if err != nil {
 		return nil
 	}
@@ -2195,8 +2207,20 @@ func (a *App) handleLiquidationsAPI(w http.ResponseWriter, r *http.Request) {
 			page = n
 		}
 	}
+	startTS := int64(0)
+	if raw := strings.TrimSpace(r.URL.Query().Get("start_ts")); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
+			startTS = n
+		}
+	}
+	endTS := int64(0)
+	if raw := strings.TrimSpace(r.URL.Query().Get("end_ts")); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
+			endTS = n
+		}
+	}
 	offset := (page - 1) * limit
-	rows := a.loadRecentLiquidations(defaultSymbol, limit, offset)
+	rows := a.loadLiquidations(defaultSymbol, limit, offset, startTS, endTS)
 	if minQty > 0 {
 		filtered := make([]EventRow, 0, len(rows))
 		for _, it := range rows {
@@ -3639,7 +3663,7 @@ function parseRows(rows,interval){let cs=(rows||[]).map(r=>({t:toNum(r[0]),o:toN
 function draw(){const v=fit(),x=v.x,W=v.w,H=v.h,padL=70,padR=20,padT=18,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);if(!candles.length){x.fillStyle='#64748b';x.fillText('暂无数据',16,24);return;}const s=Math.max(0,Math.min(candles.length-1,viewStart)),e=Math.max(s+10,Math.min(candles.length,s+viewCount));const cs=candles.slice(s,e);const minP=Math.min(...cs.map(v=>v.l)),maxP=Math.max(...cs.map(v=>v.h));const span=Math.max(1e-6,maxP-minP);const sx=i=>padL+(i/(cs.length-1))*pw,sy=p=>padT+((maxP-p)/span)*ph;x.strokeStyle='#e5e7eb';x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*i/4,val=maxP-(span*i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#64748b';x.fillText(val.toFixed(1),6,y+4);}const bodyW=Math.max(3,Math.min(12,pw/Math.max(20,cs.length)));for(let i=0;i<cs.length;i++){const c=cs[i],px=sx(i),yo=sy(c.o),yc=sy(c.c),yh=sy(c.h),yl=sy(c.l),up=c.c>=c.o;x.strokeStyle=up?'#16a34a':'#dc2626';x.beginPath();x.moveTo(px,yh);x.lineTo(px,yl);x.stroke();x.fillStyle=up?'rgba(22,163,74,0.75)':'rgba(220,38,38,0.75)';x.fillRect(px-bodyW/2,Math.min(yo,yc),bodyW,Math.max(1,Math.abs(yc-yo)));}
 const t0=cs[0].t,t1=cs[cs.length-1].t;const vis=events.filter(e=>e.event_ts>=t0&&e.event_ts<=t1);const maxN=Math.max(1,...vis.map(e=>toNum(e.notional_usd)));for(const ev of vis){const tt=toNum(ev.event_ts);const ratio=(tt-t0)/Math.max(1,t1-t0);const px=padL+ratio*pw;const py=sy(toNum(ev.price));const r=3+18*Math.sqrt(Math.max(0,toNum(ev.notional_usd))/maxN);const side=String(ev.side||'').toLowerCase();const color=(side==='long')?'rgba(22,163,74,0.45)':'rgba(220,38,38,0.45)';const stroke=(side==='long')?'#16a34a':'#dc2626';x.beginPath();x.fillStyle=color;x.strokeStyle=stroke;x.arc(px,py,r,0,Math.PI*2);x.fill();x.stroke();}
 x.fillStyle='#64748b';for(let i=0;i<=6;i++){const k=Math.floor((cs.length-1)*i/6),px=sx(k),t=new Date(cs[k].t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});x.fillText(t,Math.max(padL,px-30),H-10);} }
-async function load(){const iv=document.getElementById('iv').value;const [kr,er]=await Promise.all([fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500'),fetch('/api/liquidations?limit=1000&page=1')]);const kd=await kr.json();const ed=await er.json();candles=parseRows(kd.rows||[],iv);events=ed.rows||[];viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);document.getElementById('meta').textContent='K线来源: '+(kd.source||iv)+' | 清算事件 '+events.length+' 条';draw();}
+async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');const kd=await kr.json();candles=parseRows(kd.rows||[],iv);events=[];if(candles.length){const startTS=toNum(candles[0].t),endTS=toNum(candles[candles.length-1].t);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];}viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);document.getElementById('meta').textContent='K线来源: '+(kd.source||iv)+' | 区间清算事件 '+events.length+' 条';draw();}
 const c=document.getElementById('cv');c.addEventListener('wheel',e=>{if(!candles.length)return;e.preventDefault();const factor=e.deltaY<0?0.88:1.12;viewCount=Math.max(30,Math.min(candles.length,Math.round(viewCount*factor)));viewStart=Math.max(0,Math.min(candles.length-viewCount,viewStart));draw();},{passive:false});c.addEventListener('mousedown',e=>{drag=true;lastX=e.clientX});window.addEventListener('mouseup',()=>drag=false);window.addEventListener('mousemove',e=>{if(!drag||!candles.length)return;const dx=e.clientX-lastX;lastX=e.clientX;const shift=Math.round(-dx/8);if(shift!==0){viewStart=Math.max(0,Math.min(candles.length-viewCount,viewStart+shift));draw();}});window.addEventListener('resize',()=>draw());document.getElementById('iv').addEventListener('change',load);
 async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
