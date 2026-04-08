@@ -317,7 +317,11 @@ func main() {
 	debug := getenv("DEBUG", "") == "1" || strings.EqualFold(getenv("DEBUG", ""), "true")
 	dbPath := getenv("DB_PATH", defaultDBPath)
 	if !filepath.IsAbs(dbPath) {
-		if exe, err := os.Executable(); err == nil && exe != "" {
+		// Prefer working directory (systemd WorkingDirectory / local run dir).
+		// os.Executable() is unstable for `go run` (binary lives under /tmp), which can lead to a new empty DB.
+		if wd, err := os.Getwd(); err == nil && wd != "" {
+			dbPath = filepath.Join(wd, dbPath)
+		} else if exe, err := os.Executable(); err == nil && exe != "" {
 			dbPath = filepath.Join(filepath.Dir(exe), dbPath)
 		}
 	}
