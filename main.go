@@ -3769,7 +3769,7 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui
 .nav{height:56px;background:var(--nav);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
 .nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}
 .menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}
-.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{max-width:1200px;margin:0 auto;padding:22px}
+.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{max-width:none;width:100%;margin:0 auto;padding:16px}
 .top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .panel{border:1px solid #c8d2df;background:var(--panel);margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.03)}
 #status{background:var(--nav);color:#eef3f9;padding:10px 12px;border-radius:8px;font-weight:700;text-align:center}
@@ -3798,12 +3798,13 @@ th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:center}
 <div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/" class="active">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel top"><div><h2 style="margin:0 0 6px 0;color:#111827">ETH &#28165;&#31639;&#28909;&#21306;</h2><div class="hint">&#25353; <span class="mono">0</span> / <span class="mono">1</span> / <span class="mono">7</span> / <span class="mono">3</span> &#20999;&#25442; &#26085;&#20869; / 1&#22825; / 7&#22825; / 30&#22825;</div></div><div class="btns"><button data-days="0">&#26085;&#20869;</button><button data-days="1">1&#22825;</button><button data-days="7">7&#22825;</button><button data-days="30">30&#22825;</button></div></div>
 <div class="panel"><div id="status">loading...</div></div>
-<div class="grid"><div class="panel"><h3>&#24066;&#22330;&#29366;&#24577;</h3><div id="market"></div></div><div class="panel"><h3>&#28165;&#31639;&#28909;&#21306;&#36895;&#25253;</h3><div id="bands"></div></div><div class="panel"><h3>ETH清算地图（OI增量模型）</h3><div class="heatmap-wrap"><canvas id="liqHeatMap" width="1400" height="320"></canvas><div id="liqTip" class="liq-tip"></div><div class="hint">X轴: 价格 | Y轴: 清算金额（按价格聚合）</div><div id="liqDesc" class="desc"></div></div></div></div></div>
+<div class="grid"><div class="panel"><h3>&#24066;&#22330;&#29366;&#24577;</h3><div id="market"></div></div><div class="panel" style="display:none"><h3>&#28165;&#31639;&#28909;&#21306;&#36895;&#25253;</h3><div id="bands"></div></div><div class="panel"><h3>ETH清算地图（OI增量模型）</h3><div class="heatmap-wrap"><canvas id="liqHeatMap" width="1400" height="320"></canvas><div id="liqTip" class="liq-tip"></div><div class="hint">滚轮缩放，Shift+滚轮左右平移，按住鼠标左键左右拖动。X轴: 价格 | Y轴: 清算金额（按价格聚合）</div><div id="liqDesc" class="desc"></div></div></div></div></div>
 <script>
 let currentDays=1;
 let liqMapData=null;
 let modelConfig=null;
 let liqHoverMeta=null;
+let liqViewMin=null, liqViewMax=null, liqDrag=false, liqLastX=0;
 const exOrder=['binance','okx','bybit'];
 const exColor={binance:'rgba(139,92,246,0.78)',okx:'rgba(234,179,8,0.76)',bybit:'rgba(103,232,249,0.76)'};
 function windowLabel(v){return Number(v)===0?'\u65e5\u5185':(Number(v)+'\u5929')}
@@ -3815,9 +3816,77 @@ function fmt4(n){return Number(n).toFixed(8)}
 function fitCanvas(id){const c=document.getElementById(id);if(!c)return null;const dpr=window.devicePixelRatio||1;const rect=c.getBoundingClientRect();const W=Math.max(320,Math.floor(rect.width));const H=Math.max(220,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return {c,x,W,H};}
 function hideLiqTip(){const tip=document.getElementById('liqTip');if(tip)tip.style.display='none';}
 function showLiqTip(meta,ev){const tip=document.getElementById('liqTip');if(!tip||!meta||!meta.pts||!meta.pts.length)return;const rect=meta.c.getBoundingClientRect();const mx=ev.clientX-rect.left;let best=null,bd=1e18;for(const it of meta.pts){const d=Math.abs(mx-it.px);if(d<bd){bd=d;best=it;}}if(!best||bd>(meta.barW*0.75)){hideLiqTip();return;}const lines=[];lines.push('<div class=\"t\">价格 '+fmtPrice(best.p)+'</div>');lines.push('<div class=\"row\"><span>累计清算量</span><span>'+fmtAmount(best.total)+'</span></div>');for(const ex of exOrder){const v=Number((best.ex||{})[ex]||0);if(!(v>0))continue;lines.push('<div class=\"row\"><span><span class=\"liq-dot '+ex+'\"></span>'+ex.toUpperCase()+'</span><span>'+fmtAmount(v)+'</span></div>');}tip.innerHTML=lines.join('');tip.style.display='block';const wrap=document.querySelector('.heatmap-wrap');const wr=wrap?wrap.getBoundingClientRect():rect;let left=(ev.clientX-wr.left)+14,top=(ev.clientY-wr.top)+14;tip.style.left='0px';tip.style.top='0px';const tw=tip.offsetWidth||220,th=tip.offsetHeight||90;if(left+tw>wr.width-10)left=Math.max(8,wr.width-10-tw);if(top+th>wr.height-10)top=Math.max(8,wr.height-10-th);tip.style.left=left+'px';tip.style.top=top+'px';}
-function bindLiqHover(){const c=document.getElementById('liqHeatMap');if(!c||c.dataset.bound==='1')return;c.dataset.bound='1';c.addEventListener('mousemove',e=>{if(!liqHoverMeta)return;showLiqTip(liqHoverMeta,e);});c.addEventListener('mouseleave',()=>hideLiqTip());}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function bindLiqHover(){
+  const c=document.getElementById('liqHeatMap');
+  if(!c||c.dataset.bound==='1')return;
+  c.dataset.bound='1';
+  c.addEventListener('mousemove',e=>{
+    if(liqDrag&&liqHoverMeta&&liqViewMin!=null&&liqViewMax!=null){
+      const rect=c.getBoundingClientRect();
+      const dx=e.clientX-liqLastX;
+      liqLastX=e.clientX;
+      const s=liqHoverMeta;
+      const pw=s.pw||Math.max(1,rect.width-86);
+      const span=(liqViewMax-liqViewMin);
+      const dp=-(dx/pw)*span;
+      liqViewMin+=dp;
+      liqViewMax+=dp;
+      const baseMin=s.baseMin,baseMax=s.baseMax;
+      const w=liqViewMax-liqViewMin;
+      if(liqViewMin<baseMin){liqViewMin=baseMin;liqViewMax=baseMin+w;}
+      if(liqViewMax>baseMax){liqViewMax=baseMax;liqViewMin=baseMax-w;}
+      drawLiqHeat();
+      return;
+    }
+    if(!liqHoverMeta)return;
+    showLiqTip(liqHoverMeta,e);
+  });
+  c.addEventListener('mouseleave',()=>{liqDrag=false;hideLiqTip();});
+  c.addEventListener('mousedown',e=>{if(e.button!==0)return;liqDrag=true;liqLastX=e.clientX;});
+  window.addEventListener('mouseup',()=>{liqDrag=false;});
+
+  c.addEventListener('wheel',e=>{
+    if(!liqHoverMeta)return;
+    e.preventDefault();
+    const s=liqHoverMeta;
+    const rect=c.getBoundingClientRect();
+    const mx=e.clientX-rect.left;
+    const pw=s.pw||Math.max(1,rect.width-86);
+    const ratio=clamp((mx-(s.padL||66))/pw,0,1);
+    const baseMin=s.baseMin,baseMax=s.baseMax;
+    const curMin=(liqViewMin==null?baseMin:liqViewMin);
+    const curMax=(liqViewMax==null?baseMax:liqViewMax);
+    let span=curMax-curMin;
+    if(!(span>0))span=baseMax-baseMin;
+    const focus=curMin+span*ratio;
+
+    const isPan=Math.abs(e.deltaX)>Math.abs(e.deltaY)||e.shiftKey;
+    if(isPan){
+      const d=(Math.abs(e.deltaX)>0?e.deltaX:e.deltaY);
+      const pan=-(d/pw)*span;
+      let vMin=curMin+pan;
+      let vMax=curMax+pan;
+      if(vMin<baseMin){vMin=baseMin;vMax=baseMin+span;}
+      if(vMax>baseMax){vMax=baseMax;vMin=baseMax-span;}
+      liqViewMin=vMin;
+      liqViewMax=vMax;
+    }else{
+      const factor=(e.deltaY<0?0.88:1.14);
+      const full=(baseMax-baseMin);
+      const nextSpan=clamp(span*factor,full*0.08,full);
+      let vMin=focus-nextSpan*ratio;
+      let vMax=vMin+nextSpan;
+      if(vMin<baseMin){vMin=baseMin;vMax=baseMin+nextSpan;}
+      if(vMax>baseMax){vMax=baseMax;vMin=baseMax-nextSpan;}
+      liqViewMin=vMin;
+      liqViewMax=vMax;
+    }
+    drawLiqHeat();
+  },{passive:false});
+}
 function heatColor(v,max){if(!(max>0)||!(v>0))return 'rgb(248,250,252)';let t=Math.max(0,Math.min(1,v/max));t=Math.pow(t,0.55);let r,g,b;if(t<0.5){const k=t/0.5;r=Math.round(15+(46-15)*k);g=Math.round(23+(163-23)*k);b=Math.round(42+(242-42)*k);}else{const k=(t-0.5)/0.5;r=Math.round(46+(250-46)*k);g=Math.round(163+(204-163)*k);b=Math.round(242+(21-242)*k);}return 'rgb('+r+','+g+','+b+')';}
-function drawLiqHeat(){const v=fitCanvas('liqHeatMap');if(!v)return;const {c,x,W,H}=v;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);const d=liqMapData;if(!d||!d.prices||!d.intensity_grid||!d.prices.length){hideLiqTip();liqHoverMeta=null;x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const rows=d.prices.length,cols=((d.intensity_grid&&d.intensity_grid[0])?d.intensity_grid[0].length:0);if(rows<2||cols<1){hideLiqTip();liqHoverMeta=null;x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const per=(d.per_exchange)||{};const pts=[];for(let ri=0;ri<rows;ri++){const p=Number(d.prices[ri]||0);if(!(p>0))continue;const exVals={};let total=0;for(const ex of exOrder){const arr=per[ex]||per[ex.toUpperCase()]||null;const v=Number((arr&&arr[ri])||0);if(v>0){exVals[ex]=v;total+=v;}}if(!(total>0)){let s=0;for(let ci=0;ci<cols;ci++)s+=Math.max(0,Number((d.intensity_grid[ri]||[])[ci]||0));if(s>0){total=s;exVals.unknown=s;} }if(total>0)pts.push({ri:ri,p:p,total:total,ex:exVals});}if(!pts.length){hideLiqTip();liqHoverMeta=null;x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const padL=66,padR=20,padT=16,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;const minP=pts[0].p,maxP=pts[pts.length-1].p,span=Math.max(1e-6,maxP-minP),maxV=Math.max(1,...pts.map(it=>it.total));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxV)*ph;x.strokeStyle='#e2e8f0';x.strokeRect(padL,padT,pw,ph);x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4),val=maxV*(1-i/4);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#475569';x.fillText(fmtAmount(val),6,y+4);}const minLabelGap=12;const approxLabelW=Math.max(36,x.measureText(fmtPrice(minP)).width,x.measureText(fmtPrice(maxP)).width);const maxTicks=Math.max(2,Math.floor(pw/(approxLabelW+minLabelGap)));const tickCount=Math.max(2,Math.min(10,maxTicks));for(let i=0;i<=tickCount;i++){const p=minP+span*(i/tickCount),px=sx(p);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(px,by);x.lineTo(px,by+4);x.stroke();const label=fmtPrice(p);const lw=x.measureText(label).width;const tx=Math.max(padL,Math.min(px-lw/2,W-padR-lw));x.fillStyle='#64748b';x.fillText(label,tx,by+18);}const barW=Math.max(2,Math.min(12,pw/Math.max(40,pts.length)));const cp=Number(d.current_price||0);for(const it of pts){const px=sx(it.p);let acc=0;for(const ex of exOrder){const v=Number((it.ex||{})[ex]||0);if(!(v>0))continue;const y0=sy(acc),y1=sy(acc+v);x.fillStyle=exColor[ex]||'rgba(148,163,184,0.6)';x.fillRect(px-barW/2,y1,barW,Math.max(1,y0-y1));acc+=v;}if(acc<=0){const y=sy(it.total);x.fillStyle=(cp>0?(it.p<=cp):(it.p<=(minP+maxP)/2))?'rgba(249,115,22,0.78)':'rgba(125,211,252,0.78)';x.fillRect(px-barW/2,y,barW,by-y);} }x.lineWidth=1;if(cp>=minP&&cp<=maxP){const cpX=sx(cp);x.strokeStyle='rgba(220,38,38,0.9)';x.setLineDash([5,4]);x.beginPath();x.moveTo(cpX,padT);x.lineTo(cpX,by);x.stroke();x.setLineDash([]);x.fillStyle='#111827';const txt='当前价:'+fmtPrice(cp);const tw=x.measureText(txt).width;x.fillText(txt,Math.max(padL,Math.min(cpX+4,W-padR-tw)),padT+12);}x.fillStyle='#475569';x.fillText('清算金额',padL,padT-4);const xt='价格';const xtw=x.measureText(xt).width;x.fillText(xt,padL+pw/2-xtw/2,H-8);liqHoverMeta={c:c,pts:pts.map(it=>({p:it.p,total:it.total,ex:it.ex,px:sx(it.p)})),barW:barW};}
+function drawLiqHeat(){const v=fitCanvas('liqHeatMap');if(!v)return;const {c,x,W,H}=v;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);const d=liqMapData;if(!d||!d.prices||!d.intensity_grid||!d.prices.length){hideLiqTip();liqHoverMeta=null;x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const rows=d.prices.length,cols=((d.intensity_grid&&d.intensity_grid[0])?d.intensity_grid[0].length:0);if(rows<2||cols<1){hideLiqTip();liqHoverMeta=null;x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const per=(d.per_exchange)||{};const all=[];for(let ri=0;ri<rows;ri++){const p=Number(d.prices[ri]||0);if(!(p>0))continue;const exVals={};let total=0;for(const ex of exOrder){const arr=per[ex]||per[ex.toUpperCase()]||null;const v=Number((arr&&arr[ri])||0);if(v>0){exVals[ex]=v;total+=v;}}if(!(total>0)){let s=0;for(let ci=0;ci<cols;ci++)s+=Math.max(0,Number((d.intensity_grid[ri]||[])[ci]||0));if(s>0){total=s;exVals.unknown=s;}}if(total>0)all.push({ri:ri,p:p,total:total,ex:exVals});}if(!all.length){hideLiqTip();liqHoverMeta=null;x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const baseMin=all[0].p,baseMax=all[all.length-1].p;const padL=66,padR=20,padT=16,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;const fullSpan=Math.max(1e-6,baseMax-baseMin);if(liqViewMin==null||liqViewMax==null||liqViewMin>=liqViewMax||liqViewMin<baseMin||liqViewMax>baseMax){liqViewMin=baseMin;liqViewMax=baseMax;}const minP=liqViewMin,maxP=liqViewMax,span=Math.max(1e-6,maxP-minP);const pts=all.filter(it=>it.p>=minP&&it.p<=maxP);const maxV=Math.max(1,...pts.map(it=>it.total));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxV)*ph;x.strokeStyle='#e2e8f0';x.strokeRect(padL,padT,pw,ph);x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4),val=maxV*(1-i/4);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#475569';x.fillText(fmtAmount(val),6,y+4);}const minLabelGap=12;const approxLabelW=Math.max(36,x.measureText(fmtPrice(minP)).width,x.measureText(fmtPrice(maxP)).width);const maxTicks=Math.max(2,Math.floor(pw/(approxLabelW+minLabelGap)));const tickCount=Math.max(2,Math.min(10,maxTicks));for(let i=0;i<=tickCount;i++){const p=minP+span*(i/tickCount),px=sx(p);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(px,by);x.lineTo(px,by+4);x.stroke();const label=fmtPrice(p);const lw=x.measureText(label).width;const tx=Math.max(padL,Math.min(px-lw/2,W-padR-lw));x.fillStyle='#64748b';x.fillText(label,tx,by+18);}const barW=Math.max(2,Math.min(12,pw/Math.max(40,pts.length)));const cp=Number(d.current_price||0);for(const it of pts){const px=sx(it.p);let acc=0;for(const ex of exOrder){const v=Number((it.ex||{})[ex]||0);if(!(v>0))continue;const y0=sy(acc),y1=sy(acc+v);x.fillStyle=exColor[ex]||'rgba(148,163,184,0.6)';x.fillRect(px-barW/2,y1,barW,Math.max(1,y0-y1));acc+=v;}if(acc<=0){const y=sy(it.total);x.fillStyle=(cp>0?(it.p<=cp):(it.p<=(minP+maxP)/2))?'rgba(249,115,22,0.78)':'rgba(125,211,252,0.78)';x.fillRect(px-barW/2,y,barW,by-y);} }x.lineWidth=1;if(cp>=minP&&cp<=maxP){const cpX=sx(cp);x.strokeStyle='rgba(220,38,38,0.9)';x.setLineDash([5,4]);x.beginPath();x.moveTo(cpX,padT);x.lineTo(cpX,by);x.stroke();x.setLineDash([]);x.fillStyle='#111827';const txt='当前价:'+fmtPrice(cp);const tw=x.measureText(txt).width;x.fillText(txt,Math.max(padL,Math.min(cpX+4,W-padR-tw)),padT+12);}x.fillStyle='#475569';x.fillText('清算金额',padL,padT-4);const xt='价格';const xtw=x.measureText(xt).width;x.fillText(xt,padL+pw/2-xtw/2,H-8);liqHoverMeta={c:c,pts:pts.map(it=>({p:it.p,total:it.total,ex:it.ex,px:sx(it.p)})),barW:barW,pw:pw,padL:padL,baseMin:baseMin,baseMax:baseMax,fullSpan:fullSpan};}
 function renderLiqDesc(cfg){
   if(!cfg){const el=document.getElementById('liqDesc');if(el)el.textContent='';return;}
   const levs=String(cfg.leverage_csv||cfg.LeverageCSV||cfg.leverage_levels||cfg.leverage||'10,25,50,100');
