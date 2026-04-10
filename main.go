@@ -745,8 +745,14 @@ type ModelConfig struct {
 	PriceRange      float64
 	LeverageCSV     string
 	WeightCSV       string
+	WeightCSVBinance string
+	WeightCSVOKX     string
+	WeightCSVBybit   string
 	MaintMargin     float64
 	MaintMarginCSV  string
+	MaintMarginCSVBinance string
+	MaintMarginCSVOKX     string
+	MaintMarginCSVBybit   string
 	FundingScale    float64
 	FundingScaleCSV string
 	IntensityScale  float64
@@ -787,8 +793,14 @@ func (a *App) loadModelConfig() ModelConfig {
 		PriceRange:      a.getSettingFloat("model_price_range", defaultPriceRange),
 		LeverageCSV:     fixedLeverageCSV,
 		WeightCSV:       normalizeCSVInput(a.getSetting("model_leverage_weights")),
+		WeightCSVBinance: normalizeCSVInput(a.getSetting("model_leverage_weights_binance")),
+		WeightCSVOKX:     normalizeCSVInput(a.getSetting("model_leverage_weights_okx")),
+		WeightCSVBybit:   normalizeCSVInput(a.getSetting("model_leverage_weights_bybit")),
 		MaintMargin:     a.getSettingFloat("model_mm", 0.005),
 		MaintMarginCSV:  normalizeCSVInput(a.getSetting("model_mm_csv")),
+		MaintMarginCSVBinance: normalizeCSVInput(a.getSetting("model_mm_csv_binance")),
+		MaintMarginCSVOKX:     normalizeCSVInput(a.getSetting("model_mm_csv_okx")),
+		MaintMarginCSVBybit:   normalizeCSVInput(a.getSetting("model_mm_csv_bybit")),
 		FundingScale:    a.getSettingFloat("model_funding_scale", 7000),
 		FundingScaleCSV: normalizeCSVInput(a.getSetting("model_funding_scale_csv")),
 		IntensityScale:  a.getSettingFloat("model_intensity_scale", 1.0),
@@ -881,7 +893,13 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		req.LeverageCSV = fixedLeverageCSV
 		req.WeightCSV = normalizeCSVInput(req.WeightCSV)
+		req.WeightCSVBinance = normalizeCSVInput(req.WeightCSVBinance)
+		req.WeightCSVOKX = normalizeCSVInput(req.WeightCSVOKX)
+		req.WeightCSVBybit = normalizeCSVInput(req.WeightCSVBybit)
 		req.MaintMarginCSV = normalizeCSVInput(req.MaintMarginCSV)
+		req.MaintMarginCSVBinance = normalizeCSVInput(req.MaintMarginCSVBinance)
+		req.MaintMarginCSVOKX = normalizeCSVInput(req.MaintMarginCSVOKX)
+		req.MaintMarginCSVBybit = normalizeCSVInput(req.MaintMarginCSVBybit)
 		req.FundingScaleCSV = normalizeCSVInput(req.FundingScaleCSV)
 		if req.IntensityScale <= 0 || req.IntensityScale > 50 {
 			req.IntensityScale = 1.0
@@ -960,6 +978,63 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "funding_scale_csv must match leverage count", http.StatusBadRequest)
 			return
 		}
+
+		validateWeights := func(raw string) error {
+			if strings.TrimSpace(raw) == "" {
+				return nil
+			}
+			xs := parseCSVNonNegFloats(raw)
+			if len(xs) != len(levs) {
+				return fmt.Errorf("weight_csv must match leverage count")
+			}
+			sum := 0.0
+			for _, v := range xs {
+				sum += v
+			}
+			if !(sum > 0) {
+				return fmt.Errorf("weight_csv sum must be > 0")
+			}
+			return nil
+		}
+		validateMM := func(raw string) error {
+			if strings.TrimSpace(raw) == "" {
+				return nil
+			}
+			xs := parseCSVFloats(raw)
+			if len(xs) != len(levs) {
+				return fmt.Errorf("maint_margin_csv must match leverage count")
+			}
+			for _, v := range xs {
+				if v <= 0 || v > 0.02 {
+					return fmt.Errorf("maint_margin_csv values must be in (0, 0.02]")
+				}
+			}
+			return nil
+		}
+		if err := validateWeights(req.WeightCSVBinance); err != nil {
+			http.Error(w, "weight_csv_binance invalid: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := validateWeights(req.WeightCSVOKX); err != nil {
+			http.Error(w, "weight_csv_okx invalid: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := validateWeights(req.WeightCSVBybit); err != nil {
+			http.Error(w, "weight_csv_bybit invalid: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := validateMM(req.MaintMarginCSVBinance); err != nil {
+			http.Error(w, "maint_margin_csv_binance invalid: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := validateMM(req.MaintMarginCSVOKX); err != nil {
+			http.Error(w, "maint_margin_csv_okx invalid: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := validateMM(req.MaintMarginCSVBybit); err != nil {
+			http.Error(w, "maint_margin_csv_bybit invalid: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		if err := a.setSetting("model_lookback_min", strconv.Itoa(req.LookbackMin)); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -980,11 +1055,35 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if err := a.setSetting("model_leverage_weights_binance", strings.TrimSpace(req.WeightCSVBinance)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_leverage_weights_okx", strings.TrimSpace(req.WeightCSVOKX)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_leverage_weights_bybit", strings.TrimSpace(req.WeightCSVBybit)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		if err := a.setSetting("model_mm", fmt.Sprintf("%.6f", req.MaintMargin)); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		if err := a.setSetting("model_mm_csv", strings.TrimSpace(req.MaintMarginCSV)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_mm_csv_binance", strings.TrimSpace(req.MaintMarginCSVBinance)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_mm_csv_okx", strings.TrimSpace(req.MaintMarginCSVOKX)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("model_mm_csv_bybit", strings.TrimSpace(req.MaintMarginCSVBybit)); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -1769,6 +1868,38 @@ func (a *App) fetchBybitLongShortRatio(symbol string) (float64, error) {
 	return 0, lastErr
 }
 
+func (a *App) fetchOKXLongShortRatio(ccy string) (float64, error) {
+	type okxResp struct {
+		Code string           `json:"code"`
+		Msg  string           `json:"msg"`
+		Data []map[string]any `json:"data"`
+	}
+	u := "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio?ccy=" + url.QueryEscape(ccy) + "&period=5m"
+	var resp okxResp
+	if err := a.fetchJSON(u, &resp); err != nil {
+		return 0, err
+	}
+	if len(resp.Data) == 0 {
+		return 0, errors.New("okx long/short ratio empty response")
+	}
+	row := resp.Data[len(resp.Data)-1]
+	if v := parseAnyFloat(row["longShortRatio"]); v > 0 {
+		return v, nil
+	}
+	// Some wrappers use longAccount/shortAccount or long/short.
+	longV := parseAnyFloat(row["longAccount"])
+	shortV := parseAnyFloat(row["shortAccount"])
+	if longV > 0 && shortV > 0 {
+		return longV / shortV, nil
+	}
+	longV = parseAnyFloat(row["long"])
+	shortV = parseAnyFloat(row["short"])
+	if longV > 0 && shortV > 0 {
+		return longV / shortV, nil
+	}
+	return 0, errors.New("okx long/short ratio parse failed")
+}
+
 func (a *App) fetchBinanceSnapshot(symbol string) (Snapshot, error) {
 	var premium struct {
 		MarkPrice       string `json:"markPrice"`
@@ -1879,12 +2010,18 @@ func (a *App) fetchOKXSnapshot(instID string) (Snapshot, error) {
 	if len(fundingResp.Data) > 0 {
 		funding = parseFloat(fundingResp.Data[0].FundingRate)
 	}
+	ccy := "ETH"
+	if parts := strings.Split(strings.TrimSpace(instID), "-"); len(parts) > 0 && parts[0] != "" {
+		ccy = parts[0]
+	}
+	lsr, _ := a.fetchOKXLongShortRatio(ccy)
 	return Snapshot{
 		Exchange:    "okx",
 		MarkPrice:   mark,
 		OIQty:       oiQty,
 		OIValueUSD:  oiUSD,
 		FundingRate: funding,
+		LongShortRatio: lsr,
 		UpdatedTS:   time.Now().UnixMilli(),
 	}, nil
 }
@@ -2601,6 +2738,95 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 			fundingList[i] = fundingDefault
 		}
 	}
+
+	weightCache := map[string][]float64{}
+	weightsFor := func(ex string) []float64 {
+		ex = strings.ToLower(strings.TrimSpace(ex))
+		if ex == "" {
+			return weights
+		}
+		if v, ok := weightCache[ex]; ok {
+			return v
+		}
+		raw := ""
+		switch ex {
+		case "binance":
+			raw = cfg.WeightCSVBinance
+		case "okx":
+			raw = cfg.WeightCSVOKX
+		case "bybit":
+			raw = cfg.WeightCSVBybit
+		}
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			weightCache[ex] = weights
+			return weights
+		}
+		xs := parseCSVNonNegFloats(raw)
+		if len(xs) != len(levs) {
+			weightCache[ex] = weights
+			return weights
+		}
+		sum := 0.0
+		for _, v := range xs {
+			sum += v
+		}
+		if !(sum > 0) {
+			weightCache[ex] = weights
+			return weights
+		}
+		for i := range xs {
+			xs[i] /= sum
+		}
+		weightCache[ex] = xs
+		return xs
+	}
+
+	mmCache := map[string][]float64{}
+	mmFor := func(ex string) []float64 {
+		ex = strings.ToLower(strings.TrimSpace(ex))
+		if ex == "" {
+			return mmList
+		}
+		if v, ok := mmCache[ex]; ok {
+			return v
+		}
+		raw := ""
+		switch ex {
+		case "binance":
+			raw = cfg.MaintMarginCSVBinance
+		case "okx":
+			raw = cfg.MaintMarginCSVOKX
+		case "bybit":
+			raw = cfg.MaintMarginCSVBybit
+		}
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			mmCache[ex] = mmList
+			return mmList
+		}
+		xs := parseCSVFloats(raw)
+		if len(xs) == 1 && len(levs) > 1 {
+			v := xs[0]
+			xs = make([]float64, len(levs))
+			for i := range xs {
+				xs[i] = v
+			}
+		}
+		if len(xs) != len(levs) {
+			mmCache[ex] = mmList
+			return mmList
+		}
+		for i := range xs {
+			if xs[i] <= 0 || xs[i] > 0.02 {
+				mmCache[ex] = mmList
+				return mmList
+			}
+		}
+		mmCache[ex] = xs
+		return xs
+	}
+
 	decayK := cfg.DecayK
 	if decayK <= 0 {
 		decayK = 2.2
@@ -2658,8 +2884,10 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 	}
 	for _, e := range events {
 		delta := e.delta * scaleByEx[e.ex]
+		wsEx := weightsFor(e.ex)
+		mmEx := mmFor(e.ex)
 		for i, lev := range levs {
-			w := weights[i]
+			w := wsEx[i]
 			baseLong := 0.5
 			if e.lsr > 0 {
 				baseLong = clamp(e.lsr/(1+e.lsr), 0.2, 0.8)
@@ -2670,7 +2898,7 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 			}
 			longShare := clamp(baseLong+tilt, 0.2, 0.8)
 			shortShare := 1 - longShare
-			mm := mmList[i]
+			mm := mmEx[i]
 			longAmt := delta * longShare * w
 			shortAmt := delta * shortShare * w
 			liqLong := e.mark * (1 - 1/lev + mm)
@@ -2938,7 +3166,10 @@ func (a *App) handleLiquidationsAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := 25
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 1000 {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			if n > 5000 {
+				n = 5000
+			}
 			limit = n
 		}
 	}
@@ -4819,13 +5050,13 @@ function mapInterval(v){if(v==='10m')return '5m';if(v==='7d')return '1w';return 
 function parseRows(rows,interval){let cs=(rows||[]).map(r=>({t:toNum(r[0]),o:toNum(r[1]),h:toNum(r[2]),l:toNum(r[3]),c:toNum(r[4])}));if(interval==='2m'){const out=[];for(let i=0;i+1<cs.length;i+=2){const a=cs[i],b=cs[i+1];out.push({t:a.t,o:a.o,h:Math.max(a.h,b.h),l:Math.min(a.l,b.l),c:b.c});}cs=out;}if(interval==='10m'){const out=[];for(let i=0;i+1<cs.length;i+=2){const a=cs[i],b=cs[i+1];out.push({t:a.t,o:a.o,h:Math.max(a.h,b.h),l:Math.min(a.l,b.l),c:b.c});}cs=out;}if(interval==='7d'){const out=[];for(let i=0;i+6<cs.length;i+=7){const a=cs[i],g=cs.slice(i,i+7),z=g[g.length-1];out.push({t:a.t,o:a.o,h:Math.max(...g.map(v=>v.h)),l:Math.min(...g.map(v=>v.l)),c:z.c});}cs=out;}return cs;}
 function cssVar(name,fallback){try{const v=getComputedStyle(document.documentElement).getPropertyValue(name).trim();return v||fallback;}catch(_){return fallback;}}
 function draw(){const v=fit(),x=v.x,W=v.w,H=v.h,padL=70,padR=20,padT=18,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;x.clearRect(0,0,W,H);const bg=cssVar('--panel-bg','#fff');const muted=cssVar('--muted','#64748b');const grid=cssVar('--chart-border','#e5e7eb');x.fillStyle=bg;x.fillRect(0,0,W,H);if(!candles.length){x.fillStyle=muted;x.fillText('暂无数据',16,24);return;}const s=Math.max(0,Math.min(candles.length-1,viewStart)),e=Math.max(s+10,Math.min(candles.length,s+viewCount));const cs=candles.slice(s,e);const minP=Math.min(...cs.map(v=>v.l)),maxP=Math.max(...cs.map(v=>v.h));const span=Math.max(1e-6,maxP-minP);const sx=i=>padL+(i/(cs.length-1))*pw,sy=p=>padT+((maxP-p)/span)*ph;x.strokeStyle=grid;x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*i/4,val=maxP-(span*i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle=muted;x.fillText(val.toFixed(1),6,y+4);}const bodyW=Math.max(3,Math.min(12,pw/Math.max(20,cs.length)));for(let i=0;i<cs.length;i++){const c=cs[i],px=sx(i),yo=sy(c.o),yc=sy(c.c),yh=sy(c.h),yl=sy(c.l),up=c.c>=c.o;x.strokeStyle=up?'#16a34a':'#dc2626';x.beginPath();x.moveTo(px,yh);x.lineTo(px,yl);x.stroke();x.fillStyle=up?'rgba(22,163,74,0.75)':'rgba(220,38,38,0.75)';x.fillRect(px-bodyW/2,Math.min(yo,yc),bodyW,Math.max(1,Math.abs(yc-yo)));}
-const t0=cs[0].t,t1=cs[cs.length-1].t;const vis=events.filter(e=>e.event_ts>=t0&&e.event_ts<=t1);const maxN=Math.max(1,...vis.map(e=>toNum(e.notional_usd)));for(const ev of vis){const tt=toNum(ev.event_ts);const ratio=(tt-t0)/Math.max(1,t1-t0);const px=padL+ratio*pw;const py=sy(toNum(ev.price));const r=3+18*Math.sqrt(Math.max(0,toNum(ev.notional_usd))/maxN);const side=String(ev.side||'').toLowerCase();const isLatest=(intervalMs>0&&latestStart>0)?(tt>=latestStart&&tt<latestStart+intervalMs):false;let color='rgba(148,163,184,0.22)',stroke='rgba(148,163,184,0.55)';if(isLatest){color=(side==='long')?'rgba(22,163,74,0.45)':'rgba(220,38,38,0.45)';stroke=(side==='long')?'#16a34a':'#dc2626';}x.beginPath();x.fillStyle=color;x.strokeStyle=stroke;x.arc(px,py,r,0,Math.PI*2);x.fill();x.stroke();}
+const t0=cs[0].t,t1=cs[cs.length-1].t;const spanMs=(intervalMs>0?intervalMs:intervalToMs(document.getElementById('iv').value||''));const tEnd=t1+(spanMs>0?spanMs:0);const vis=events.filter(e=>{const tt=toNum(e.event_ts);return tt>=t0&&(tEnd>t0?tt<tEnd:tt<=t1);});const maxN=Math.max(1,...vis.map(e=>toNum(e.notional_usd)));const denom=Math.max(1,(tEnd>t0)?(tEnd-t0):(t1-t0));for(const ev of vis){const tt=toNum(ev.event_ts);const ratio=(tt-t0)/denom;const px=padL+ratio*pw;const py=sy(toNum(ev.price));const r=3+18*Math.sqrt(Math.max(0,toNum(ev.notional_usd))/maxN);const side=String(ev.side||'').toLowerCase();const isLatest=(spanMs>0&&latestStart>0)?(tt>=latestStart&&tt<latestStart+spanMs):false;let color='rgba(148,163,184,0.32)',stroke='rgba(148,163,184,0.72)';if(isLatest){color=(side==='long')?'rgba(22,163,74,0.45)':'rgba(220,38,38,0.45)';stroke=(side==='long')?'#16a34a':'#dc2626';}x.beginPath();x.fillStyle=color;x.strokeStyle=stroke;x.arc(px,py,r,0,Math.PI*2);x.fill();x.stroke();}
 x.fillStyle=muted;for(let i=0;i<=6;i++){const k=Math.floor((cs.length-1)*i/6),px=sx(k),t=new Date(cs[k].t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});x.fillText(t,Math.max(padL,px-30),H-10);} }
 function uniqByT(list){const out=[];const seen=new Set();for(const it of (list||[])){const t=toNum(it.t);if(!t||seen.has(t))continue;seen.add(t);out.push(it);}out.sort((a,b)=>a.t-b.t);return out;}
 function mergeEvents(a,b){const out=[];const key=(e)=>String(toNum(e.event_ts))+'|'+String(e.exchange||'')+'|'+String(e.side||'')+'|'+String(toNum(e.price))+'|'+String(toNum(e.qty));const seen=new Set();for(const it of (a||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}for(const it of (b||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}out.sort((x,y)=>toNum(x.event_ts)-toNum(y.event_ts));return out;}
 function setMoreBtnVisible(){const cb=document.getElementById('hist');const b=document.getElementById('moreBtn');if(!cb||!b)return;b.style.display=cb.checked?'inline-block':'none';}
-async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');const kd=await kr.json();candles=uniqByT(parseRows(kd.rows||[],iv));events=[];if(candles.length){const startTS=toNum(candles[0].t),endTS=toNum(candles[candles.length-1].t);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];}intervalMs=(candles.length>=2)?Math.max(0,toNum(candles[candles.length-1].t)-toNum(candles[candles.length-2].t)):intervalToMs(iv);latestStart=candles.length?toNum(candles[candles.length-1].t):0;viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);setMoreBtnVisible();document.getElementById('meta').textContent='K线来源: '+(kd.source||iv)+' | 区间清算事件 '+events.length+' 条';draw();}
-async function loadMoreHistory(){const cb=document.getElementById('hist');if(!cb||!cb.checked)return;if(!candles.length)return;const iv=document.getElementById('iv').value;const endTS=Math.max(0,toNum(candles[0].t)-1);const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500&end_ts='+encodeURIComponent(endTS));const kd=await kr.json();const more=uniqByT(parseRows(kd.rows||[],iv));if(!more.length){document.getElementById('meta').textContent='没有更多历史K线';return;}const added=more.filter(x=>toNum(x.t)<toNum(candles[0].t));if(!added.length){document.getElementById('meta').textContent='没有更多历史K线';return;}candles=uniqByT(added.concat(candles));const startTS=toNum(added[0].t),endTS2=toNum(added[added.length-1].t);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS2));const ed=await er.json();events=mergeEvents(ed.rows||[],events);viewStart=Math.max(0,viewStart+added.length);document.getElementById('meta').textContent='K线来源: '+(kd.source||iv)+' | 区间清算事件 '+events.length+' 条';draw();}
+async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');const kd=await kr.json();candles=uniqByT(parseRows(kd.rows||[],iv));intervalMs=(candles.length>=2)?Math.max(0,toNum(candles[candles.length-1].t)-toNum(candles[candles.length-2].t)):intervalToMs(iv);if(!(intervalMs>0))intervalMs=intervalToMs(iv);latestStart=candles.length?toNum(candles[candles.length-1].t):0;events=[];if(candles.length){const startTS=toNum(candles[0].t);const endTS=latestStart+(intervalMs>0?intervalMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];}viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);setMoreBtnVisible();document.getElementById('meta').textContent='K线来源: '+(kd.source||iv)+' | 区间清算事件 '+events.length+' 条';draw();}
+async function loadMoreHistory(){const cb=document.getElementById('hist');if(!cb||!cb.checked)return;if(!candles.length)return;const iv=document.getElementById('iv').value;const endTS=Math.max(0,toNum(candles[0].t)-1);const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500&end_ts='+encodeURIComponent(endTS));const kd=await kr.json();const more=uniqByT(parseRows(kd.rows||[],iv));if(!more.length){document.getElementById('meta').textContent='没有更多历史K线';return;}const added=more.filter(x=>toNum(x.t)<toNum(candles[0].t));if(!added.length){document.getElementById('meta').textContent='没有更多历史K线';return;}candles=uniqByT(added.concat(candles));const spanMs=(intervalMs>0?intervalMs:intervalToMs(iv));const startTS=toNum(added[0].t),endTS2=toNum(added[added.length-1].t)+(spanMs>0?spanMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS2));const ed=await er.json();events=mergeEvents(ed.rows||[],events);viewStart=Math.max(0,viewStart+added.length);document.getElementById('meta').textContent='K线来源: '+(kd.source||iv)+' | 区间清算事件 '+events.length+' 条';draw();}
 const c=document.getElementById('cv');c.addEventListener('wheel',e=>{if(!candles.length)return;e.preventDefault();const right=Math.min(candles.length,viewStart+viewCount);const factor=e.deltaY<0?0.88:1.12;const nextCount=Math.max(30,Math.min(candles.length,Math.round(viewCount*factor)));viewCount=nextCount;viewStart=Math.max(0,Math.min(candles.length-viewCount,right-viewCount));draw();},{passive:false});c.addEventListener('mousedown',e=>{drag=true;lastX=e.clientX});window.addEventListener('mouseup',()=>drag=false);window.addEventListener('mousemove',e=>{if(!drag||!candles.length)return;const dx=e.clientX-lastX;lastX=e.clientX;const shift=Math.round(-dx/8);if(shift!==0){viewStart=Math.max(0,Math.min(candles.length-viewCount,viewStart+shift));draw();}});window.addEventListener('resize',()=>draw());document.getElementById('iv').addEventListener('change',load);document.getElementById('hist').addEventListener('change',setMoreBtnVisible);
 async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
