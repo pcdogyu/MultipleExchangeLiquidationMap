@@ -1143,6 +1143,12 @@ func (a *App) handleModelFit(w http.ResponseWriter, r *http.Request) {
 			hours = n
 		}
 	}
+	minEvents := 25
+	if raw := strings.TrimSpace(r.URL.Query().Get("min_events")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 5 && n <= 200 {
+			minEvents = n
+		}
+	}
 	exFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("exchange")))
 	mode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode")))
 	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour).UnixMilli()
@@ -1202,7 +1208,7 @@ func (a *App) handleModelFit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fitOne := func(ex string, evts []fitEvt) (modelFitSuggestion, bool) {
-		if len(evts) < 25 {
+		if len(evts) < minEvents {
 			return modelFitSuggestion{}, false
 		}
 		totalNotional := 0.0
@@ -1353,6 +1359,7 @@ func (a *App) handleModelFit(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"symbol":      defaultSymbol,
 		"hours":       hours,
+		"min_events":  minEvents,
 		"cutoff_ts":   cutoff,
 		"raw_count":   totalCnt,
 		"counts":      counts,
@@ -5390,6 +5397,8 @@ const configHTML = `<!doctype html>
       <div class="row" style="margin-top:18px">
         <input id="fit_hours" type="number" min="1" max="168" step="1" value="24" style="width:88px;height:34px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:0 10px">
         <span class="small">小时</span>
+        <input id="fit_min" type="number" min="5" max="200" step="1" value="25" style="width:76px;height:34px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:0 10px">
+        <span class="small">条</span>
         <button class="secondary" type="button" onclick="fitScope()">拟合</button>
         <button class="secondary" type="button" onclick="clearScope()">清空覆盖</button>
         <span id="fitMsg" class="small"></span>
@@ -5508,8 +5517,10 @@ async function fitScope(){
   msg.textContent='拟合中...';
   const hoursEl=document.getElementById('fit_hours');
   const hours=Math.max(1,Math.min(168,Number((hoursEl&&hoursEl.value)||24)||24));
+  const minEl=document.getElementById('fit_min');
+  const minEvents=Math.max(5,Math.min(200,Number((minEl&&minEl.value)||25)||25));
   const ex=(currentScope==='global')?'':currentScope;
-  const u='/api/model-fit?hours='+encodeURIComponent(String(hours))+(ex?('&exchange='+encodeURIComponent(ex)):'&mode=global');
+  const u='/api/model-fit?hours='+encodeURIComponent(String(hours))+'&min_events='+encodeURIComponent(String(minEvents))+(ex?('&exchange='+encodeURIComponent(ex)):'&mode=global');
   const r=await fetch(u).catch(()=>null);
   if(!r){msg.textContent='拟合失败：网络错误';return;}
   if(!r.ok){msg.textContent='拟合失败：HTTP '+String(r.status);return;}
@@ -5523,7 +5534,7 @@ async function fitScope(){
       const n=Number(c.count||0);
       if(n>0) parts.push(k+':'+n);
     }
-    msg.textContent='拟合失败：样本不足（需>=25条，窗口 '+String(hours)+'h）'+(parts.length?(' '+parts.join(' ')):'');
+    msg.textContent='拟合失败：样本不足（需>='+String(minEvents)+'条，窗口 '+String(hours)+'h）'+(parts.length?(' '+parts.join(' ')):'');
     return;
   }
   const sug=d.suggestions[0];
