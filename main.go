@@ -410,6 +410,7 @@ func main() {
 	mux.HandleFunc("/api/dashboard", app.handleDashboard)
 	mux.HandleFunc("/api/model/liquidation-map", app.handleModelLiquidationMap)
 	mux.HandleFunc("/api/model-config", app.handleModelConfig)
+	mux.HandleFunc("/api/model-fit", app.handleModelFit)
 	mux.HandleFunc("/api/liquidations", app.handleLiquidationsAPI)
 	mux.HandleFunc("/api/klines", app.handleKlinesAPI)
 	mux.HandleFunc("/api/orderbook", app.handleOrderBook)
@@ -739,25 +740,25 @@ func (a *App) loadSettings() ChannelSettings {
 }
 
 type ModelConfig struct {
-	LookbackMin     int
-	BucketMin       int
-	PriceStep       float64
-	PriceRange      float64
-	LeverageCSV     string
-	WeightCSV       string
-	WeightCSVBinance string
-	WeightCSVOKX     string
-	WeightCSVBybit   string
-	MaintMargin     float64
-	MaintMarginCSV  string
+	LookbackMin           int
+	BucketMin             int
+	PriceStep             float64
+	PriceRange            float64
+	LeverageCSV           string
+	WeightCSV             string
+	WeightCSVBinance      string
+	WeightCSVOKX          string
+	WeightCSVBybit        string
+	MaintMargin           float64
+	MaintMarginCSV        string
 	MaintMarginCSVBinance string
 	MaintMarginCSVOKX     string
 	MaintMarginCSVBybit   string
-	FundingScale    float64
-	FundingScaleCSV string
-	IntensityScale  float64
-	DecayK          float64
-	NeighborShare   float64
+	FundingScale          float64
+	FundingScaleCSV       string
+	IntensityScale        float64
+	DecayK                float64
+	NeighborShare         float64
 }
 
 func normalizeCSVInput(raw string) string {
@@ -787,25 +788,25 @@ func normalizeCSVInput(raw string) string {
 
 func (a *App) loadModelConfig() ModelConfig {
 	cfg := ModelConfig{
-		LookbackMin:     a.getSettingInt("model_lookback_min", defaultLookbackMin),
-		BucketMin:       a.getSettingInt("model_bucket_min", defaultBucketMin),
-		PriceStep:       a.getSettingFloat("model_price_step", defaultPriceStep),
-		PriceRange:      a.getSettingFloat("model_price_range", defaultPriceRange),
-		LeverageCSV:     fixedLeverageCSV,
-		WeightCSV:       normalizeCSVInput(a.getSetting("model_leverage_weights")),
-		WeightCSVBinance: normalizeCSVInput(a.getSetting("model_leverage_weights_binance")),
-		WeightCSVOKX:     normalizeCSVInput(a.getSetting("model_leverage_weights_okx")),
-		WeightCSVBybit:   normalizeCSVInput(a.getSetting("model_leverage_weights_bybit")),
-		MaintMargin:     a.getSettingFloat("model_mm", 0.005),
-		MaintMarginCSV:  normalizeCSVInput(a.getSetting("model_mm_csv")),
+		LookbackMin:           a.getSettingInt("model_lookback_min", defaultLookbackMin),
+		BucketMin:             a.getSettingInt("model_bucket_min", defaultBucketMin),
+		PriceStep:             a.getSettingFloat("model_price_step", defaultPriceStep),
+		PriceRange:            a.getSettingFloat("model_price_range", defaultPriceRange),
+		LeverageCSV:           fixedLeverageCSV,
+		WeightCSV:             normalizeCSVInput(a.getSetting("model_leverage_weights")),
+		WeightCSVBinance:      normalizeCSVInput(a.getSetting("model_leverage_weights_binance")),
+		WeightCSVOKX:          normalizeCSVInput(a.getSetting("model_leverage_weights_okx")),
+		WeightCSVBybit:        normalizeCSVInput(a.getSetting("model_leverage_weights_bybit")),
+		MaintMargin:           a.getSettingFloat("model_mm", 0.005),
+		MaintMarginCSV:        normalizeCSVInput(a.getSetting("model_mm_csv")),
 		MaintMarginCSVBinance: normalizeCSVInput(a.getSetting("model_mm_csv_binance")),
 		MaintMarginCSVOKX:     normalizeCSVInput(a.getSetting("model_mm_csv_okx")),
 		MaintMarginCSVBybit:   normalizeCSVInput(a.getSetting("model_mm_csv_bybit")),
-		FundingScale:    a.getSettingFloat("model_funding_scale", 7000),
-		FundingScaleCSV: normalizeCSVInput(a.getSetting("model_funding_scale_csv")),
-		IntensityScale:  a.getSettingFloat("model_intensity_scale", 1.0),
-		DecayK:          a.getSettingFloat("model_decay_k", 2.2),
-		NeighborShare:   a.getSettingFloat("model_neighbor_share", 0.28),
+		FundingScale:          a.getSettingFloat("model_funding_scale", 7000),
+		FundingScaleCSV:       normalizeCSVInput(a.getSetting("model_funding_scale_csv")),
+		IntensityScale:        a.getSettingFloat("model_intensity_scale", 1.0),
+		DecayK:                a.getSettingFloat("model_decay_k", 2.2),
+		NeighborShare:         a.getSettingFloat("model_neighbor_share", 0.28),
 	}
 	if cfg.WeightCSV == "" {
 		cfg.WeightCSV = "0.142857,0.142857,0.142857,0.142857,0.142857,0.142857,0.142857"
@@ -1116,6 +1117,238 @@ func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
+
+type modelFitSuggestion struct {
+	Exchange   string  `json:"exchange"`
+	Count      int     `json:"count"`
+	Notional   float64 `json:"notional_usd"`
+	WeightCSV  string  `json:"weight_csv"`
+	MMCSV      string  `json:"maint_margin_csv"`
+	FitBaseMM  float64 `json:"fit_base_mm"`
+	FitK       float64 `json:"fit_k"`
+	WeightedSE float64 `json:"weighted_se"`
+}
+
+func (a *App) handleModelFit(w http.ResponseWriter, r *http.Request) {
+	if a.debug {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	hours := 24
+	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 168 {
+			hours = n
+		}
+	}
+	exFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("exchange")))
+	mode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode")))
+	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour).UnixMilli()
+
+	cfg := a.loadModelConfig()
+	levs := parseCSVFloats(cfg.LeverageCSV)
+	if len(levs) == 0 {
+		levs = parseCSVFloats(fixedLeverageCSV)
+	}
+	if len(levs) == 0 {
+		http.Error(w, "no leverage tiers", http.StatusBadRequest)
+		return
+	}
+
+	type fitEvt struct {
+		ex       string
+		price    float64
+		mark     float64
+		notional float64
+	}
+	var rows *sql.Rows
+	var err error
+	if exFilter != "" {
+		rows, err = a.db.Query(`SELECT LOWER(exchange), price, mark_price, notional_usd
+			FROM liquidation_events WHERE symbol=? AND event_ts>=? AND LOWER(exchange)=?`,
+			defaultSymbol, cutoff, exFilter)
+	} else {
+		rows, err = a.db.Query(`SELECT LOWER(exchange), price, mark_price, notional_usd
+			FROM liquidation_events WHERE symbol=? AND event_ts>=?`, defaultSymbol, cutoff)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	byEx := map[string][]fitEvt{}
+	for rows.Next() {
+		var ex string
+		var price, mark, notional float64
+		if err := rows.Scan(&ex, &price, &mark, &notional); err != nil {
+			continue
+		}
+		if ex == "" || !(price > 0) || !(mark > 0) || !(notional > 0) {
+			continue
+		}
+		byEx[ex] = append(byEx[ex], fitEvt{ex: ex, price: price, mark: mark, notional: notional})
+	}
+
+	fitOne := func(ex string, evts []fitEvt) (modelFitSuggestion, bool) {
+		if len(evts) < 25 {
+			return modelFitSuggestion{}, false
+		}
+		totalNotional := 0.0
+		for _, e := range evts {
+			totalNotional += e.notional
+		}
+		bestBase := 0.0
+		bestK := 0.0
+		bestErr := math.Inf(1)
+
+		for base := 0.002; base <= 0.010001; base += 0.0005 {
+			for k := 0.00; k <= 0.20001; k += 0.01 {
+				// quick guard: 1x tier must stay valid
+				if base+k/levs[0] > 0.02 {
+					continue
+				}
+				errSum := 0.0
+				weightSum := 0.0
+				for _, e := range evts {
+					distObs := math.Abs(e.price-e.mark) / e.mark
+					if !(distObs > 0) || distObs > 0.7 {
+						continue
+					}
+					best := math.Inf(1)
+					for _, lev := range levs {
+						if !(lev > 0) {
+							continue
+						}
+						mm := base + k/lev
+						if mm <= 0 || mm > 0.02 {
+							continue
+						}
+						distPred := 1/lev - mm
+						if distPred <= 0 {
+							continue
+						}
+						diff := distObs - distPred
+						se := diff * diff
+						if se < best {
+							best = se
+						}
+					}
+					if math.IsInf(best, 1) {
+						continue
+					}
+					errSum += e.notional * best
+					weightSum += e.notional
+				}
+				if !(weightSum > 0) {
+					continue
+				}
+				if errSum < bestErr {
+					bestErr = errSum
+					bestBase = base
+					bestK = k
+				}
+			}
+		}
+		if !isFinite(bestErr) {
+			return modelFitSuggestion{}, false
+		}
+
+		weights := make([]float64, len(levs))
+		for _, e := range evts {
+			distObs := math.Abs(e.price-e.mark) / e.mark
+			if !(distObs > 0) || distObs > 0.7 {
+				continue
+			}
+			bestI := -1
+			best := math.Inf(1)
+			for i, lev := range levs {
+				mm := bestBase + bestK/lev
+				if mm <= 0 || mm > 0.02 {
+					continue
+				}
+				distPred := 1/lev - mm
+				if distPred <= 0 {
+					continue
+				}
+				diff := distObs - distPred
+				se := diff * diff
+				if se < best {
+					best = se
+					bestI = i
+				}
+			}
+			if bestI >= 0 {
+				weights[bestI] += e.notional
+			}
+		}
+		sumW := 0.0
+		for _, v := range weights {
+			sumW += v
+		}
+		if !(sumW > 0) {
+			return modelFitSuggestion{}, false
+		}
+		for i := range weights {
+			weights[i] /= sumW
+		}
+		mmParts := make([]string, 0, len(levs))
+		wParts := make([]string, 0, len(levs))
+		for i, lev := range levs {
+			mm := bestBase + bestK/lev
+			if mm <= 0 {
+				mm = 0.0001
+			}
+			if mm > 0.02 {
+				mm = 0.02
+			}
+			mmParts = append(mmParts, fmt.Sprintf("%.4f", mm))
+			wParts = append(wParts, fmt.Sprintf("%.6f", weights[i]))
+		}
+		return modelFitSuggestion{
+			Exchange:   ex,
+			Count:      len(evts),
+			Notional:   totalNotional,
+			WeightCSV:  strings.Join(wParts, ","),
+			MMCSV:      strings.Join(mmParts, ","),
+			FitBaseMM:  bestBase,
+			FitK:       bestK,
+			WeightedSE: bestErr / math.Max(1, totalNotional),
+		}, true
+	}
+
+	out := []modelFitSuggestion{}
+	if exFilter != "" {
+		evts := byEx[exFilter]
+		if sug, ok := fitOne(exFilter, evts); ok {
+			out = append(out, sug)
+		}
+	} else if mode == "global" {
+		all := make([]fitEvt, 0, 4096)
+		for _, evts := range byEx {
+			all = append(all, evts...)
+		}
+		if sug, ok := fitOne("global", all); ok {
+			out = append(out, sug)
+		}
+	} else {
+		for ex, evts := range byEx {
+			if sug, ok := fitOne(ex, evts); ok {
+				out = append(out, sug)
+			}
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Notional > out[j].Notional })
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"hours":       hours,
+		"cutoff_ts":   cutoff,
+		"leverages":   levs,
+		"suggestions": out,
+	})
+}
+
+func isFinite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
@@ -2016,13 +2249,13 @@ func (a *App) fetchOKXSnapshot(instID string) (Snapshot, error) {
 	}
 	lsr, _ := a.fetchOKXLongShortRatio(ccy)
 	return Snapshot{
-		Exchange:    "okx",
-		MarkPrice:   mark,
-		OIQty:       oiQty,
-		OIValueUSD:  oiUSD,
-		FundingRate: funding,
+		Exchange:       "okx",
+		MarkPrice:      mark,
+		OIQty:          oiQty,
+		OIValueUSD:     oiUSD,
+		FundingRate:    funding,
 		LongShortRatio: lsr,
-		UpdatedTS:   time.Now().UnixMilli(),
+		UpdatedTS:      time.Now().UnixMilli(),
 	}, nil
 }
 
@@ -5076,6 +5309,23 @@ const configHTML = `<!doctype html>
   <div class="field" style="grid-column:1/-1">
     <label>杠杆固定档位（1x / 5x / 10x / 20x / 30x / 50x / 100x）</label>
     <div class="small" style="margin-top:6px">分别配置：权重、维护保证金率、资金费率缩放系数（与杠杆档位一一对应）。</div>
+    <div class="row" style="margin-top:10px;justify-content:space-between">
+      <div class="field" style="min-width:280px">
+        <label>编辑范围（权重/mm）</label>
+        <select id="ex_scope" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px">
+          <option value="global">全局</option>
+          <option value="binance">Binance</option>
+          <option value="okx">OKX</option>
+          <option value="bybit">Bybit</option>
+        </select>
+        <div class="small" style="margin-top:6px">提示：资金费率缩放系数仍为全局配置。</div>
+      </div>
+      <div class="row" style="margin-top:18px">
+        <button class="secondary" type="button" onclick="fitScope()">拟合(24h)</button>
+        <button class="secondary" type="button" onclick="clearScope()">清空覆盖</button>
+        <span id="fitMsg" class="small"></span>
+      </div>
+    </div>
     <div style="overflow:auto;margin-top:10px">
       <table style="width:100%;border-collapse:collapse">
         <thead><tr style="background:#f1f5f9"><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">杠杆</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">权重</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">维护保证金率 <span class="q" title="用途：近似交易所的维护保证金率（Maintenance Margin Ratio，记作 mm），用于计算清算价位置。mm 越大，允许的亏损越小，清算价越“靠近现价”。&#10;&#10;本模型的清算价（按标记价 mark 估算）：&#10;多单清算价（下方）：liqLong = mark * (1 - 1/lev + mm)&#10;空单清算价（上方）：liqShort = mark * (1 + 1/lev - mm)&#10;&#10;影响：&#10;- 提高 mm：多单清算价上移、空单清算价下移（两边都更贴近现价），柱子更集中；&#10;- 降低 mm：清算价更远离现价，柱子更分散。&#10;&#10;示例：mark=2250，lev=10x&#10;- mm=0.005：liqLong=2250*(1-0.1+0.005)=2021.25；liqShort=2250*(1+0.1-0.005)=2463.75&#10;- mm=0.010：liqLong=2250*(1-0.1+0.010)=2032.50；liqShort=2250*(1+0.1-0.010)=2452.50&#10;&#10;提示：目前界面允许你为每个杠杆档位单独设置 mm。">?</span></th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">资金费率缩放系数 <span class="q" title="用途：用资金费率（Funding Rate）来调整“多/空”清算强度的分配比例。&#10;&#10;公式（每个交易所、每个杠杆档位分别计算）：&#10;longShare = clamp(0.5 + funding_rate * funding_scale, 0.2, 0.8)&#10;shortShare = 1 - longShare&#10;longAmt = ΔOI * longShare * weight&#10;shortAmt = ΔOI * shortShare * weight&#10;&#10;解释：&#10;- funding_rate > 0 通常表示多头付费，模型会把更多强度分给“空单清算价（上方区域）”，因此上方柱子会变大；&#10;- funding_rate < 0 相反，会让下方柱子更大；&#10;- funding_scale 越大，偏向越强，但会被限制在 20%~80% 区间。&#10;&#10;示例：funding_rate=0.00005（5e-5）&#10;- funding_scale=4500 ⇒ longShare=0.5+0.00005*4500=0.725（72.5%/27.5%）&#10;- funding_scale=7000 ⇒ 0.85 → clamp 到 0.80（80%/20%）">?</span></th></tr></thead>
@@ -5099,6 +5349,8 @@ const configHTML = `<!doctype html>
 <div class="row" style="margin-top:14px"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="reloadCfg()">重载</button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
 <script>
 let lastCfg=null;
+let currentScope='global';
+let scopeCleared=false;
 async function reloadWindowLookback(){
   const el=document.getElementById('lookback');
   if(!el) return;
@@ -5108,31 +5360,105 @@ async function reloadWindowLookback(){
 }
 function bind(cfg){
   lastCfg=cfg;
+  scopeCleared=false;
   document.getElementById('bucket').value=cfg.BucketMin||5;
   document.getElementById('step').value=cfg.PriceStep||5;
   document.getElementById('range').value=cfg.PriceRange||400;
   const levs=[1,5,10,20,30,50,100];
-  const sumEl=document.getElementById('w_sum');
-  function toNum(v){const n=Number(String(v??'').trim());return isFinite(n)?n:NaN;}
-  function csvNums(raw,n){const parts=String(raw||'').split(',');if(parts.length===1){const v=toNum(parts[0]);return Array.from({length:n},()=>v);}const out=[];for(let i=0;i<n;i++){out.push(toNum(parts[i]));}return out;}
-  const w=csvNums(cfg.WeightCSV,levs.length);
-  const mm=csvNums(cfg.MaintMarginCSV,levs.length);
   const fs=csvNums(cfg.FundingScaleCSV,levs.length);
-  const defW=1/levs.length, defMM=Number(cfg.MaintMargin||0.005), defFS=Number(cfg.FundingScale||7000);
+  const defFS=Number(cfg.FundingScale||7000);
   for(let i=0;i<levs.length;i++){
     const lv=levs[i];
-    const wi=isFinite(w[i])?w[i]:defW; // stored as ratio (0..1)
-    const mi=isFinite(mm[i])?mm[i]:defMM;
     const fi=isFinite(fs[i])?fs[i]:defFS;
-    const wEl=document.getElementById('w_'+lv),mmEl=document.getElementById('mm_'+lv),fsEl=document.getElementById('fs_'+lv);
-    if(wEl) wEl.value=(wi*100).toFixed(2);
-    if(mmEl) mmEl.value=String(mi);
+    const fsEl=document.getElementById('fs_'+lv);
     if(fsEl) fsEl.value=String(fi);
   }
-  if(sumEl){const s=levs.map(lv=>Number((document.getElementById('w_'+lv)||{}).value||0)).reduce((a,b)=>a+(isFinite(b)?b:0),0);sumEl.textContent=s.toFixed(2);}
+  const scopeSel=document.getElementById('ex_scope');
+  if(scopeSel){
+    if(!currentScope) currentScope='global';
+    scopeSel.value=currentScope;
+    scopeSel.onchange=()=>{currentScope=scopeSel.value||'global';scopeCleared=false;renderScope();};
+  }
+  renderScope();
   document.getElementById('scale').value=cfg.IntensityScale||1.0;
   document.getElementById('decay').value=cfg.DecayK||2.2;
   document.getElementById('neighbor').value=cfg.NeighborShare||0.28;
+}
+
+function toNum(v){const n=Number(String(v??'').trim());return isFinite(n)?n:NaN;}
+function csvNums(raw,n){const parts=String(raw||'').split(',');if(parts.length===1){const v=toNum(parts[0]);return Array.from({length:n},()=>v);}const out=[];for(let i=0;i<n;i++){out.push(toNum(parts[i]));}return out;}
+
+function getScopeCSV(scope, kind){
+  const cfg=lastCfg||{};
+  const s=String(scope||'global');
+  if(kind==='w'){
+    if(s==='binance') return String(cfg.WeightCSVBinance||'').trim()||String(cfg.WeightCSV||'').trim();
+    if(s==='okx') return String(cfg.WeightCSVOKX||'').trim()||String(cfg.WeightCSV||'').trim();
+    if(s==='bybit') return String(cfg.WeightCSVBybit||'').trim()||String(cfg.WeightCSV||'').trim();
+    return String(cfg.WeightCSV||'').trim();
+  }
+  if(kind==='mm'){
+    if(s==='binance') return String(cfg.MaintMarginCSVBinance||'').trim()||String(cfg.MaintMarginCSV||'').trim();
+    if(s==='okx') return String(cfg.MaintMarginCSVOKX||'').trim()||String(cfg.MaintMarginCSV||'').trim();
+    if(s==='bybit') return String(cfg.MaintMarginCSVBybit||'').trim()||String(cfg.MaintMarginCSV||'').trim();
+    return String(cfg.MaintMarginCSV||'').trim();
+  }
+  return '';
+}
+
+function renderScope(){
+  const cfg=lastCfg||{};
+  const levs=[1,5,10,20,30,50,100];
+  const defW=1/levs.length, defMM=Number(cfg.MaintMargin||0.005);
+  const w=csvNums(getScopeCSV(currentScope,'w'),levs.length);
+  const mm=csvNums(getScopeCSV(currentScope,'mm'),levs.length);
+  for(let i=0;i<levs.length;i++){
+    const lv=levs[i];
+    const wi=isFinite(w[i])?w[i]:defW;
+    const mi=isFinite(mm[i])?mm[i]:defMM;
+    const wEl=document.getElementById('w_'+lv),mmEl=document.getElementById('mm_'+lv);
+    if(wEl) wEl.value=(wi*100).toFixed(2);
+    if(mmEl) mmEl.value=String(mi);
+  }
+  const sumEl=document.getElementById('w_sum');
+  if(sumEl){
+    const s=levs.map(lv=>Number((document.getElementById('w_'+lv)||{}).value||0)).reduce((a,b)=>a+(isFinite(b)?b:0),0);
+    sumEl.textContent=s.toFixed(2);
+  }
+  const msg=document.getElementById('fitMsg');
+  if(msg){
+    msg.textContent=(currentScope==='global')?'当前编辑：全局':('当前编辑：'+currentScope.toUpperCase());
+  }
+}
+
+async function fitScope(){
+  const msg=document.getElementById('fitMsg');
+  if(!msg){return;}
+  msg.textContent='拟合中...';
+  const ex=(currentScope==='global')?'':currentScope;
+  const u='/api/model-fit?hours=24'+(ex?('&exchange='+encodeURIComponent(ex)):'&mode=global');
+  const d=await fetch(u).then(r=>r.json()).catch(()=>null);
+  if(!d||!d.suggestions||!d.suggestions.length){msg.textContent='拟合失败：数据不足（需至少 25 条爆仓事件）';return;}
+  const sug=d.suggestions[0];
+  if(!sug||!sug.weight_csv||!sug.maint_margin_csv){msg.textContent='拟合失败：无有效结果';return;}
+  if(!lastCfg) lastCfg={};
+  if(currentScope==='binance'){lastCfg.WeightCSVBinance=sug.weight_csv;lastCfg.MaintMarginCSVBinance=sug.maint_margin_csv;}
+  else if(currentScope==='okx'){lastCfg.WeightCSVOKX=sug.weight_csv;lastCfg.MaintMarginCSVOKX=sug.maint_margin_csv;}
+  else if(currentScope==='bybit'){lastCfg.WeightCSVBybit=sug.weight_csv;lastCfg.MaintMarginCSVBybit=sug.maint_margin_csv;}
+  else {lastCfg.WeightCSV=sug.weight_csv;lastCfg.MaintMarginCSV=sug.maint_margin_csv;}
+  scopeCleared=false;
+  renderScope();
+  msg.textContent='拟合完成：样本 '+String(sug.count||0)+' 条';
+}
+
+function clearScope(){
+  const msg=document.getElementById('fitMsg');
+  if(currentScope==='global'){
+    if(msg) msg.textContent='全局不可清空覆盖';
+    return;
+  }
+  scopeCleared=true;
+  if(msg) msg.textContent='已标记清空覆盖：保存后该交易所回退全局';
 }
 async function reloadCfg(){
   const cfg=await fetch('/api/model-config').then(r=>r.json()).catch(()=>null);
@@ -5161,15 +5487,22 @@ async function save(){
   const mmCSV=mmList.map(v=>String(v)).join(',');
   const fsCSV=fsList.map(v=>String(v)).join(',');
   const wCSV=wList.map(v=>String(v)).join(',');
+  const prev=(k)=>String((lastCfg&&lastCfg[k])||'').trim();
   const body={
     LookbackMin:Number((lastCfg&&lastCfg.LookbackMin)||1440),
     BucketMin:Number(document.getElementById('bucket').value||5),
     PriceStep:Number(document.getElementById('step').value||5),
     PriceRange:Number(document.getElementById('range').value||400),
     LeverageCSV:levCSV,
-    WeightCSV:wCSV,
+    WeightCSV:(currentScope==='global'?wCSV:prev('WeightCSV')),
+    WeightCSVBinance:(currentScope==='binance'?(scopeCleared?'':wCSV):prev('WeightCSVBinance')),
+    WeightCSVOKX:(currentScope==='okx'?(scopeCleared?'':wCSV):prev('WeightCSVOKX')),
+    WeightCSVBybit:(currentScope==='bybit'?(scopeCleared?'':wCSV):prev('WeightCSVBybit')),
     MaintMargin:mmList[0]||0.005,
-    MaintMarginCSV:mmCSV,
+    MaintMarginCSV:(currentScope==='global'?mmCSV:prev('MaintMarginCSV')),
+    MaintMarginCSVBinance:(currentScope==='binance'?(scopeCleared?'':mmCSV):prev('MaintMarginCSVBinance')),
+    MaintMarginCSVOKX:(currentScope==='okx'?(scopeCleared?'':mmCSV):prev('MaintMarginCSVOKX')),
+    MaintMarginCSVBybit:(currentScope==='bybit'?(scopeCleared?'':mmCSV):prev('MaintMarginCSVBybit')),
     FundingScale:fsList[0]||7000,
     FundingScaleCSV:fsCSV,
     IntensityScale:Number(document.getElementById('scale').value||1.0),
