@@ -2,6 +2,10 @@ liqmap.db
 liqmap.db-shm
 liqmap.db-wal
 multipleexchangeliquidationmap.exe
+.gocache/
+debug*
+*.disabled
+*test*
 
 # certificates / keys
 pem/

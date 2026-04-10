@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/gorilla/websocket"
 	"html/template"
 	"io"
 	"log"
@@ -23,6 +22,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/gorilla/websocket"
 
 	_ "modernc.org/sqlite"
 )
@@ -107,6 +108,9 @@ type AlertSummary struct {
 	RecentSide     string  `json:"recent_side"`
 	RecentPrice    float64 `json:"recent_price"`
 	Recent1mUSD    float64 `json:"recent_1m_usd"`
+	Recent1mBinanceUSD float64 `json:"recent_1m_binance_usd"`
+	Recent1mBybitUSD   float64 `json:"recent_1m_bybit_usd"`
+	Recent1mOKXUSD     float64 `json:"recent_1m_okx_usd"`
 	Suggestion     string  `json:"suggestion"`
 }
 
@@ -117,10 +121,11 @@ type TopConclusion struct {
 }
 
 type MarketSummary struct {
-	BinanceOIUSD float64 `json:"binance_oi_usd"`
-	OKXOIUSD     float64 `json:"okx_oi_usd"`
-	BybitOIUSD   float64 `json:"bybit_oi_usd"`
-	AvgFunding   float64 `json:"avg_funding"`
+	BinanceOIUSD      float64 `json:"binance_oi_usd"`
+	OKXOIUSD          float64 `json:"okx_oi_usd"`
+	BybitOIUSD        float64 `json:"bybit_oi_usd"`
+	AvgFunding        float64 `json:"avg_funding"`
+	AvgFundingVerdict string  `json:"avg_funding_verdict"`
 }
 
 type HeatZoneAnalytics struct {
@@ -1222,14 +1227,24 @@ func (a *App) handleModelFit(w http.ResponseWriter, r *http.Request) {
 		for base := 0.002; base <= 0.010001; base += 0.0005 {
 			for k := 0.00; k <= 0.20001; k += 0.01 {
 				// quick guard: 1x tier must stay valid
-				if base+k/levs[0] > 0.02 {
-					continue
+				// For 1x leverage, mm can be much larger (up to nearly 1.0)
+				// since distPred = 1 - mm, and typical liquidation distances are small
+				if levs[0] == 1 {
+					// Allow mm up to 0.5 for 1x leverage
+					if base+k/levs[0] > 0.5 {
+						continue
+					}
+				} else {
+					// For higher leverage, use the original threshold
+					if base+k/levs[0] > 0.02 {
+						continue
+					}
 				}
 				errSum := 0.0
 				weightSum := 0.0
 				for _, e := range evts {
 					distObs := math.Abs(e.price-e.mark) / e.mark
-					if !(distObs > 0) || distObs > 0.7 {
+					if !(distObs > 0) || distObs > 1.0 {
 						continue
 					}
 					best := math.Inf(1)
@@ -2586,6 +2601,33 @@ func (a *App) sumLiquidationNotionalSince(symbol string, startTS int64) float64 
 	return total.Float64
 }
 
+func (a *App) sumLiquidationNotionalByExchangeSince(symbol string, startTS int64) map[string]float64 {
+	out := map[string]float64{
+		"binance": 0,
+		"bybit":   0,
+		"okx":     0,
+	}
+	rows, err := a.db.Query(`SELECT LOWER(exchange), SUM(notional_usd) FROM liquidation_events
+		WHERE symbol=? AND event_ts>=?
+		GROUP BY LOWER(exchange)`, symbol, startTS)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ex string
+		var total sql.NullFloat64
+		if err := rows.Scan(&ex, &total); err != nil {
+			continue
+		}
+		if !total.Valid {
+			continue
+		}
+		out[ex] = total.Float64
+	}
+	return out
+}
+
 func (a *App) computeExchangeContribution(symbol string, currentPrice, band float64, cutoff int64, states []MarketState) []ExchangeContribution {
 	sums := map[string]float64{
 		"binance": 0,
@@ -2615,19 +2657,6 @@ func (a *App) computeExchangeContribution(symbol string, currentPrice, band floa
 	for _, v := range sums {
 		total += v
 	}
-	if total <= 0 {
-		for _, s := range states {
-			if s.OIValueUSD == nil || *s.OIValueUSD <= 0 {
-				continue
-			}
-			ex := strings.ToLower(strings.TrimSpace(s.Exchange))
-			sums[ex] += *s.OIValueUSD
-		}
-		total = 0
-		for _, v := range sums {
-			total += v
-		}
-	}
 	out := make([]ExchangeContribution, 0, len(sums))
 	for ex, v := range sums {
 		share := 0.0
@@ -2646,7 +2675,47 @@ func (a *App) computeExchangeContribution(symbol string, currentPrice, band floa
 		}
 		return out[i].NotionalUSD > out[j].NotionalUSD
 	})
+	if total <= 0 {
+		return []ExchangeContribution{}
+	}
 	return out
+}
+
+func fundingDirectionText(v *float64) string {
+	if v == nil {
+		return "-"
+	}
+	if *v > 0 {
+		return "多付空"
+	}
+	if *v < 0 {
+		return "空付多"
+	}
+	return "中性"
+}
+
+func fundingVerdictFromStates(states []MarketState) string {
+	pos := 0
+	neg := 0
+	for _, s := range states {
+		if s.FundingRate == nil {
+			continue
+		}
+		switch {
+		case *s.FundingRate > 0:
+			pos++
+		case *s.FundingRate < 0:
+			neg++
+		}
+	}
+	switch {
+	case pos > neg:
+		return "空方有利"
+	case neg > pos:
+		return "多方有利"
+	default:
+		return "基本中性"
+	}
 }
 
 func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states []MarketState, bands []BandRow, longestShort, longestLong []any, events []EventRow, cutoff int64) HeatZoneAnalytics {
@@ -2694,6 +2763,7 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 	if fundingCnt > 0 {
 		market.AvgFunding = fundingSum / float64(fundingCnt)
 	}
+	market.AvgFundingVerdict = fundingVerdictFromStates(states)
 
 	shortPrice := 0.0
 	shortNotional := 0.0
@@ -2757,6 +2827,10 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 		Recent1mUSD: a.sumLiquidationNotionalSince(symbol, nowTS-60*1000),
 		Suggestion:  fmt.Sprintf("%.1f / %.1f 关注上下关键价位", b20.UpPrice, b20.DownPrice),
 	}
+	recentByEx := a.sumLiquidationNotionalByExchangeSince(symbol, nowTS-60*1000)
+	alert.Recent1mBinanceUSD = recentByEx["binance"]
+	alert.Recent1mBybitUSD = recentByEx["bybit"]
+	alert.Recent1mOKXUSD = recentByEx["okx"]
 	if len(events) > 0 {
 		e := events[0]
 		alert.RecentExchange = normalizeExchangeName(e.Exchange)
@@ -3892,7 +3966,15 @@ func (a *App) insertLiquidationEvent(exchange, symbol, side, rawSide string, pri
 		return
 	}
 	if markPrice <= 0 {
-		markPrice = price
+		// Try to get current mark price from market_state table
+		var currentMarkPrice float64
+		err := a.db.QueryRow(`SELECT mark_price FROM market_state WHERE exchange=? AND symbol=?`, exchange, symbol).Scan(&currentMarkPrice)
+		if err == nil && currentMarkPrice > 0 {
+			markPrice = currentMarkPrice
+		} else {
+			// Fallback to price if we can't get mark price
+			markPrice = price
+		}
 	}
 	if eventTS <= 0 {
 		eventTS = time.Now().UnixMilli()
@@ -4568,7 +4650,9 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui
 .btns button{margin-right:8px;background:var(--ctl-bg);color:var(--text);border:1px solid var(--ctl-border);padding:8px 14px;border-radius:8px;cursor:pointer}
 .btns button.active{background:var(--nav);color:#fff;border-color:var(--nav)} table{width:100%;border-collapse:collapse}
 th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:center}
-.grid{display:grid;grid-template-columns:1fr;gap:14px}.hint{color:var(--muted);font-size:12px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.grid{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}.hint{color:var(--muted);font-size:12px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.table-wrap{width:100%;overflow-x:auto}
+.table-wrap table{min-width:640px}
 .heat-table thead tr:first-child th{background:#d5dce6;font-size:18px}
 .heat-table .col-threshold{background:#d8d9dc}
 .heat-table .col-up-price,.heat-table .col-up-size{background:var(--left)}
@@ -4584,13 +4668,13 @@ th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:center}
 .liq-tip .t{font-weight:800;margin-bottom:6px}
 .liq-tip .row{display:flex;justify-content:space-between;gap:10px}
 .liq-dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:-1px}
-.liq-dot.binance{background:rgba(139,92,246,.9)}.liq-dot.okx{background:rgba(234,179,8,.9)}.liq-dot.bybit{background:rgba(103,232,249,.9)}
+.liq-dot.binance{background:rgba(249,115,22,.9)}.liq-dot.okx{background:rgba(234,179,8,.9)}.liq-dot.bybit{background:rgba(103,232,249,.9)}
 .desc{font-size:12px;color:var(--muted);line-height:1.5;margin-top:8px}
 .upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head><body>
 <div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/" class="active">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel top"><div><h2 style="margin:0 0 6px 0">ETH &#28165;&#31639;&#28909;&#21306;</h2><div class="hint">&#25353; <span class="mono">0</span> / <span class="mono">1</span> / <span class="mono">7</span> / <span class="mono">3</span> &#20999;&#25442; &#26085;&#20869; / 1&#22825; / 7&#22825; / 30&#22825;</div></div><div class="btns"><button data-days="0">&#26085;&#20869;</button><button data-days="1">1&#22825;</button><button data-days="7">7&#22825;</button><button data-days="30">30&#22825;</button></div></div>
 <div class="panel"><div id="status">loading...</div></div>
-<div class="grid"><div class="panel"><h3>&#24066;&#22330;&#29366;&#24577;</h3><div id="market"></div></div><div class="panel" style="display:none"><h3>&#28165;&#31639;&#28909;&#21306;&#36895;&#25253;</h3><div id="bands"></div></div><div class="panel"><h3>ETH清算地图（OI增量模型）</h3><div class="heatmap-wrap"><canvas id="liqHeatMap" width="1400" height="320"></canvas><div id="liqTip" class="liq-tip"></div><div class="hint">滚轮缩放，Shift+滚轮左右平移，按住鼠标左键左右拖动。X轴: 价格 | Y轴: 清算金额（按价格聚合）</div><div id="liqDesc" class="desc"></div></div></div></div></div>
+<div class="grid"><div class="panel"><h3>ETH清算地图（OI增量模型）</h3><div class="heatmap-wrap"><canvas id="liqHeatMap" width="1400" height="320"></canvas><div id="liqTip" class="liq-tip"></div><div class="hint">滚轮缩放，Shift+滚轮左右平移，按住鼠标左键左右拖动。X轴: 价格 | Y轴: 清算金额（按价格聚合）</div><div id="liqDesc" class="desc"></div></div></div></div></div>
 <script>
 let currentDays=1;
 let liqMapData=null;
@@ -4598,7 +4682,7 @@ let modelConfig=null;
 let liqHoverMeta=null;
 let liqViewMin=null, liqViewMax=null, liqDrag=false, liqLastX=0;
 const exOrder=['binance','okx','bybit'];
-const exColor={binance:'rgba(139,92,246,0.78)',okx:'rgba(234,179,8,0.76)',bybit:'rgba(103,232,249,0.76)'};
+const exColor={binance:'rgba(249,115,22,0.78)',okx:'rgba(234,179,8,0.76)',bybit:'rgba(103,232,249,0.76)'};
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
 function windowLabel(v){return Number(v)===0?'\u65e5\u5185':(Number(v)+'\u5929')}
@@ -4609,7 +4693,7 @@ function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n)
 function fmt4(n){return Number(n).toFixed(8)}
 function fitCanvas(id){const c=document.getElementById(id);if(!c)return null;const dpr=window.devicePixelRatio||1;const rect=c.getBoundingClientRect();const W=Math.max(320,Math.floor(rect.width));const H=Math.max(220,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return {c,x,W,H};}
 function hideLiqTip(){const tip=document.getElementById('liqTip');if(tip)tip.style.display='none';}
-function showLiqTip(meta,ev){const tip=document.getElementById('liqTip');if(!tip||!meta||!meta.pts||!meta.pts.length)return;const rect=meta.c.getBoundingClientRect();const mx=ev.clientX-rect.left;let best=null,bd=1e18;for(const it of meta.pts){const d=Math.abs(mx-it.px);if(d<bd){bd=d;best=it;}}if(!best||bd>(meta.barW*0.75)){hideLiqTip();return;}const lines=[];lines.push('<div class=\"t\">价格 '+fmtPrice(best.p)+'</div>');lines.push('<div class=\"row\"><span>累计清算量</span><span>'+fmtAmount(best.total)+'</span></div>');for(const ex of exOrder){const v=Number((best.ex||{})[ex]||0);if(!(v>0))continue;lines.push('<div class=\"row\"><span><span class=\"liq-dot '+ex+'\"></span>'+ex.toUpperCase()+'</span><span>'+fmtAmount(v)+'</span></div>');}tip.innerHTML=lines.join('');tip.style.display='block';const wrap=document.querySelector('.heatmap-wrap');const wr=wrap?wrap.getBoundingClientRect():rect;let left=(ev.clientX-wr.left)+14,top=(ev.clientY-wr.top)+14;tip.style.left='0px';tip.style.top='0px';const tw=tip.offsetWidth||220,th=tip.offsetHeight||90;if(left+tw>wr.width-10)left=Math.max(8,wr.width-10-tw);if(top+th>wr.height-10)top=Math.max(8,wr.height-10-th);tip.style.left=left+'px';tip.style.top=top+'px';}
+function showLiqTip(meta,ev){const tip=document.getElementById('liqTip');if(!tip||!meta||!meta.pts||!meta.pts.length)return;const rect=meta.c.getBoundingClientRect();const mx=ev.clientX-rect.left;let best=null,bd=1e18;for(const it of meta.pts){const d=Math.abs(mx-it.px);if(d<bd){bd=d;best=it;}}const hitW=Math.max(meta.hitW||0,meta.barW||0);if(!best||bd>(hitW*0.5)){hideLiqTip();return;}const lines=[];lines.push('<div class=\"t\">价格 '+fmtPrice(best.p)+'</div>');lines.push('<div class=\"row\"><span>累计清算量</span><span>'+fmtAmount(best.total)+'</span></div>');for(const ex of exOrder){const v=Number((best.ex||{})[ex]||0);lines.push('<div class=\"row\"><span><span class=\"liq-dot '+ex+'\"></span>'+ex.toUpperCase()+'</span><span>'+fmtAmount(v)+'</span></div>');}tip.innerHTML=lines.join('');tip.style.display='block';const wrap=document.querySelector('.heatmap-wrap');const wr=wrap?wrap.getBoundingClientRect():rect;let left=(ev.clientX-wr.left)+14,top=(ev.clientY-wr.top)+14;tip.style.left='0px';tip.style.top='0px';const tw=tip.offsetWidth||220,th=tip.offsetHeight||90;if(left+tw>wr.width-10)left=Math.max(8,wr.width-10-tw);if(top+th>wr.height-10)top=Math.max(8,wr.height-10-th);tip.style.left=left+'px';tip.style.top=top+'px';}
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 function bindLiqHover(){
   const c=document.getElementById('liqHeatMap');
@@ -4864,7 +4948,7 @@ function drawLiqHeat(){
   const xt='价格';
   const xtw=x.measureText(xt).width;
   x.fillText(xt,padL+pw/2-xtw/2,H-8);
-  liqHoverMeta={c:c,pts:pts.map(it=>({p:it.p,total:it.total,ex:it.ex,px:sx(it.p)})),barW:barW,pw:pw,padL:padL,baseMin:baseMin,baseMax:baseMax,fullSpan:fullSpan};
+  liqHoverMeta={c:c,pts:pts.map(it=>({p:it.p,total:it.total,ex:it.ex,px:sx(it.p)})),barW:barW,hitW:barW,pw:pw,padL:padL,baseMin:baseMin,baseMax:baseMax,fullSpan:fullSpan};
 }
 function renderLiqDesc(cfg,dash){
   if(!cfg){const el=document.getElementById('liqDesc');if(el)el.textContent='';return;}
@@ -4965,8 +5049,14 @@ async function load(){
   const mapUrl='/api/model/liquidation-map?bucket_min='+bucket+'&price_step='+step+'&price_range='+range;
   liqMapData=await fetch(mapUrl).then(m=>m.json()).catch(()=>null);
   document.getElementById('status').textContent='\u5f53\u524d\u4ef7: '+fmtPrice(d.current_price)+' | \u5468\u671f: '+windowLabel(d.window_days)+' | \u66f4\u65b0\u65f6\u95f4: '+new Date(d.generated_at).toLocaleString();
-  document.getElementById('market').innerHTML=renderTable((d.states||[]).map(s=>[s.exchange,fmtPrice(s.mark_price),s.oi_qty?fmtAmount(s.oi_qty*s.mark_price):'-',s.oi_value_usd?fmtAmount(s.oi_value_usd):'-',s.funding_rate==null?'-':fmt4(s.funding_rate)]),['\u4ea4\u6613\u6240','\u6807\u8bb0\u4ef7','OI\u6570\u91cf','OI\u4ef7\u503cUSD','Funding']);
-  document.getElementById('bands').innerHTML=renderHeatReport(d);
+  const marketEl=document.getElementById('market');
+  if(marketEl){
+    marketEl.innerHTML=renderTable((d.states||[]).map(s=>[s.exchange,fmtPrice(s.mark_price),s.oi_qty?fmtAmount(s.oi_qty*s.mark_price):'-',s.oi_value_usd?fmtAmount(s.oi_value_usd):'-',s.funding_rate==null?'-':fmt4(s.funding_rate)]),['\u4ea4\u6613\u6240','\u6807\u8bb0\u4ef7','OI\u6570\u91cf','OI\u4ef7\u503cUSD','Funding']);
+  }
+  const bandsEl=document.getElementById('bands');
+  if(bandsEl){
+    bandsEl.innerHTML=renderHeatReport(d);
+  }
   drawLiqHeat();
 }
 async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
@@ -4997,7 +5087,7 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui
 .card{padding:14px;background:#fff;border-right:1px solid var(--line)}.card:last-child{border-right:0}.card .label{font-size:12px;color:var(--muted);margin-bottom:10px}.card .val{font-size:22px;font-weight:800;line-height:1.05}
 .good{color:var(--good)}.warn{color:var(--warn)}.danger{color:var(--danger)}
 .sidebox{padding:10px 12px}.sidebox h3,.panel h3{margin:0 0 10px 0}
-.state-list{display:grid;gap:6px;font-weight:700}.state-line{display:flex;gap:10px;flex-wrap:wrap}
+.state-list{display:grid;gap:8px;font-weight:700}.state-line{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline}.state-line .mini{font-size:16px;color:var(--text);font-weight:700}.state-line .funding-tag{font-size:14px;color:var(--muted);font-weight:700}
 .main-grid{display:grid;grid-template-columns:1.45fr .9fr;gap:10px}.stack{display:grid;gap:10px}
 table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:center}thead th{background:#5d7291;color:#fff;font-size:13px}
 .metric{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--line)}.metric:last-child{border-bottom:0}
@@ -5027,6 +5117,7 @@ table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--li
 </div>
 <script>
 let currentDays=1;
+let monitorLiqMapData=null;
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
 function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1})}
@@ -5035,6 +5126,41 @@ function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n)
 function renderActive(){document.querySelectorAll('button[data-days]').forEach(b=>b.classList.toggle('active',Number(b.dataset.days)===currentDays));}
 async function setWindow(days){currentDays=days;await fetch('/api/window',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days})});renderActive();load();}
 function metricRow(label,val,cls=''){return '<div class="metric"><span>'+label+'</span><strong class="'+cls+'">'+val+'</strong></div>'}
+function fundingDirectionLabel(v){
+  const n=Number(v);
+  if(!isFinite(n)) return '-';
+  if(n>0) return '多付空';
+  if(n<0) return '空付多';
+  return '中性';
+}
+function buildHeatBandsFromModel(model){
+  if(!model||!model.prices||!model.intensity_grid||!model.prices.length) return [];
+  const rows=model.prices.length, cols=((model.intensity_grid&&model.intensity_grid[0])?model.intensity_grid[0].length:0);
+  if(rows<1||cols<1) return [];
+  const cp=Number(model.current_price||0);
+  if(!(cp>0)) return [];
+  const pts=[];
+  for(let ri=0;ri<rows;ri++){
+    const p=Number(model.prices[ri]||0);
+    if(!(p>0)) continue;
+    let s=0;
+    for(let ci=0;ci<cols;ci++) s+=Math.max(0,Number((model.intensity_grid[ri]||[])[ci]||0));
+    if(s>0) pts.push({price:p,notional:s});
+  }
+  if(!pts.length) return [];
+  const desired=[];
+  for(let x=10;x<=100;x+=10) desired.push(x);
+  for(let x=150;x<=400;x+=50) desired.push(x);
+  return desired.map(band=>{
+    let upPrice=cp+band,upNotional=0,downPrice=cp-band,downNotional=0;
+    for(const pt of pts){
+      const dist=pt.price-cp;
+      if(dist>=0&&dist<=band) upNotional+=pt.notional;
+      if(dist<=0&&Math.abs(dist)<=band) downNotional+=pt.notional;
+    }
+    return {band,up_price:upPrice,up_notional_usd:upNotional,down_price:downPrice,down_notional_usd:downNotional};
+  });
+}
  function renderTopCards(d){
    const a=d.analytics||{},t=a.top||{},mk=a.market||{};
    const cards=[
@@ -5050,30 +5176,24 @@ function metricRow(label,val,cls=''){return '<div class="metric"><span>'+label+'
    const exLine=(name,key,oi)=>{
      const st=byEx[key]||{};
      const fr=st.funding_rate==null?'-':fmtFunding(st.funding_rate);
-     return '<div class="state-line"><span>'+name+' OI</span><strong>'+fmtAmount(oi)+'</strong><span class="mini">费率 '+fr+'</span></div>';
+     const dir=st.funding_rate==null?'-':fundingDirectionLabel(st.funding_rate);
+     return '<div class="state-line"><span>'+name+' OI</span><strong>'+fmtAmount(oi)+'</strong><span class="mini">费率 '+fr+'</span><span class="funding-tag">'+dir+'</span></div>';
    };
    document.getElementById('marketState').innerHTML=
      exLine('Binance','binance',mk.binance_oi_usd)+
      exLine('Bybit','bybit',mk.bybit_oi_usd)+
      exLine('OKX','okx',mk.okx_oi_usd)+
-     '<div class="state-line"><span>平均费率</span><strong>'+fmtFunding(mk.avg_funding)+'</strong></div>';
+     '<div class="state-line"><span>平均费率</span><strong>'+fmtFunding(mk.avg_funding)+'</strong><span class="funding-tag">'+(mk.avg_funding_verdict||'基本中性')+'</span></div>';
  }
  function renderHeatReport(d){
-   const bandMap=new Map((d.bands||[]).map(b=>[Number(b.band),b]));
-   const desired=[];
-   for(let x=10;x<=100;x+=10) desired.push(x);
-   for(let x=150;x<=400;x+=50) desired.push(x);
-   let hasAny=false;
-   for(const k of desired){if(bandMap.has(k)){hasAny=true;break;}}
-   if(!hasAny){document.getElementById('heatReport').innerHTML='<div class="hint">暂无数据</div>';return;}
+   const bands=buildHeatBandsFromModel(monitorLiqMapData);
+   if(!bands.length){document.getElementById('heatReport').innerHTML='<div class="hint">暂无数据</div>';return;}
    let html='<table><thead><tr><th>点数阈值</th><th>上方空单清算价</th><th>上方规模</th><th>下方多单清算价</th><th>下方规模</th><th>多空差异</th></tr></thead><tbody>';
-   for(const band of desired){
-     const b=bandMap.get(band);
-     if(!b){html+='<tr><td>'+band+'点内</td><td>-</td><td class="warn">-</td><td>-</td><td class="good">-</td><td>-</td></tr>';continue;}
+   for(const b of bands){
      const up=Number(b.up_notional_usd||0),down=Number(b.down_notional_usd||0);
      const diff=down-up;
      const diffCls=diff>0?'warn':(diff<0?'good':'');
-     html+='<tr><td>'+band+'点内</td><td>'+fmtPrice(b.up_price)+'</td><td class="warn">'+fmtAmount(up)+'</td><td>'+fmtPrice(b.down_price)+'</td><td class="good">'+fmtAmount(down)+'</td><td class="'+diffCls+'">'+fmtAmount(diff)+'</td></tr>';
+     html+='<tr><td>'+b.band+'点内</td><td>'+fmtPrice(b.up_price)+'</td><td class="warn">'+fmtAmount(up)+'</td><td>'+fmtPrice(b.down_price)+'</td><td class="good">'+fmtAmount(down)+'</td><td class="'+diffCls+'">'+fmtAmount(diff)+'</td></tr>';
    }
    html+='</tbody></table>';
    document.getElementById('heatReport').innerHTML=html;
@@ -5083,8 +5203,8 @@ function renderDensity(d){const rows=((d.analytics||{}).density_layers)||[];if(!
 function renderTrack(d){const t=((d.analytics||{}).change_tracking)||{};document.getElementById('changeTrack').innerHTML=metricRow('20点内上方空单',fmtAmount(t.up20_delta_usd),Number(t.up20_delta_usd)>=0?'warn':'good')+metricRow('20点内下方多单',fmtAmount(t.down20_delta_usd),Number(t.down20_delta_usd)>=0?'warn':'good')+metricRow('最长柱规模',fmtAmount(t.longest_delta_usd),Number(t.longest_delta_usd)>=0?'warn':'good')+metricRow('Funding',fmtFunding(t.funding_delta),Number(t.funding_delta)>=0?'warn':'good')}
 function renderCore(d){const c=((d.analytics||{}).core_zone)||{};document.getElementById('coreZone').innerHTML=metricRow('上方空单最长柱',fmtPrice(c.up_price)+' / '+fmtAmount(c.up_notional_usd),'warn')+metricRow('下方多单最长柱',fmtPrice(c.down_price)+' / '+fmtAmount(c.down_notional_usd),'good')+metricRow('距离最近强区',fmtPrice(c.nearest_strong_price)+' / '+(Number(c.nearest_distance||0).toFixed(1))+'点',String(c.nearest_side||'').includes('上')?'warn':'good')+metricRow('最近强区方向',c.nearest_side||'-')}
 function renderContrib(d){const rows=((d.analytics||{}).exchange_contrib)||[];if(!rows.length){document.getElementById('exchangeContrib').innerHTML='<div class="hint">暂无数据</div>';return;}document.getElementById('exchangeContrib').innerHTML=rows.map(r=>'<div class="bar-row"><div>'+r.exchange+'</div><div class="bar"><div class="fill" style="width:'+Math.max(4,Number(r.share||0)*100)+'%"></div></div><div>'+(Number(r.share||0)*100).toFixed(0)+'%</div></div>').join('')+'<div class="mini">主贡献交易所：'+(((d.analytics||{}).dominant_exchange)||'-')+'</div>'}
-function renderAlerts(d){const a=((d.analytics||{}).alert)||{};document.getElementById('alerts').innerHTML=metricRow('当前预警',a.level||'-',String(a.level||'').includes('预警')?'danger':'')+metricRow('最近事件',[(a.recent_exchange||'-'),(a.recent_side||'-'),(a.recent_price?fmtPrice(a.recent_price):'-')].join(' / '))+metricRow('近1分钟已发生清算',fmtAmount(a.recent_1m_usd),'warn')+metricRow('建议',a.suggestion||'-')}
-async function load(){const r=await fetch('/api/dashboard');const d=await r.json();currentDays=(d.window_days===0||d.window_days)?d.window_days:currentDays;renderActive();document.getElementById('heroTime').textContent=new Date(d.generated_at).toLocaleString('zh-CN',{hour12:false});renderTopCards(d);renderHeatReport(d);renderImbalance(d);renderDensity(d);renderTrack(d);renderCore(d);renderContrib(d);renderAlerts(d);}
+function renderAlerts(d){const a=((d.analytics||{}).alert)||{};document.getElementById('alerts').innerHTML=metricRow('当前预警',a.level||'-',String(a.level||'').includes('预警')?'danger':'')+metricRow('最近事件',[(a.recent_exchange||'-'),(a.recent_side||'-'),(a.recent_price?fmtPrice(a.recent_price):'-')].join(' / '))+metricRow('近1分钟已发生清算',fmtAmount(a.recent_1m_usd),'warn')+metricRow('Binance / Bybit / OKX',fmtAmount(a.recent_1m_binance_usd)+' / '+fmtAmount(a.recent_1m_bybit_usd)+' / '+fmtAmount(a.recent_1m_okx_usd))+metricRow('建议',a.suggestion||'-')}
+async function load(){const cfg=await fetch('/api/model-config').then(r=>r.json()).catch(()=>null);const bucket=Number(cfg&&cfg.BucketMin||cfg&&cfg.bucket_min||5);const step=Number(cfg&&cfg.PriceStep||cfg&&cfg.price_step||5);const range=Number(cfg&&cfg.PriceRange||cfg&&cfg.price_range||400);const [dashResp,mapResp]=await Promise.all([fetch('/api/dashboard'),fetch('/api/model/liquidation-map?bucket_min='+bucket+'&price_step='+step+'&price_range='+range)]);const d=await dashResp.json();monitorLiqMapData=await mapResp.json().catch(()=>null);currentDays=(d.window_days===0||d.window_days)?d.window_days:currentDays;renderActive();document.getElementById('heroTime').textContent=new Date(d.generated_at).toLocaleString('zh-CN',{hour12:false});renderTopCards(d);renderHeatReport(d);renderImbalance(d);renderDensity(d);renderTrack(d);renderCore(d);renderContrib(d);renderAlerts(d);}
 async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
@@ -5314,26 +5434,52 @@ initTheme();setInterval(load,5000);load();(async()=>{try{const r=await fetch('/a
 
 const bubblesHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>气泡图</title>
-<style>:root{--bg:#f5f7fb;--text:#1f2937;--muted:#64748b;--nav-bg:#0b1220;--nav-border:#243145;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#fff;--panel-border:#dce3ec;--ctl-bg:#fff;--ctl-text:#111827;--ctl-border:#cbd5e1;--chart-border:#e5e7eb}[data-theme="dark"]{--bg:#000;--text:#e5e7eb;--muted:#94a3b8;--nav-bg:#000;--nav-border:#111827;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#000;--panel-border:#1f2937;--ctl-bg:#000;--ctl-text:#e5e7eb;--ctl-border:#334155;--chart-border:#1f2937}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:var(--nav-bg);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:14px}.brand{font-size:18px;font-weight:700;color:var(--nav-text)}.menu a{color:var(--link);text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{width:100%;max-width:none;margin:0 auto;padding:14px;box-sizing:border-box}.panel{border:1px solid var(--panel-border);background:var(--panel-bg);margin:10px 0;padding:12px;border-radius:10px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.small{font-size:12px;color:var(--muted)}select,button{height:34px;border:1px solid var(--ctl-border);border-radius:8px;background:var(--ctl-bg);color:var(--ctl-text);padding:0 10px}button{cursor:pointer}.chart{width:100%;height:682px;border:1px solid var(--chart-border);border-radius:8px;background:var(--panel-bg);display:block}.legend{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:8px}.tag{display:inline-flex;align-items:center;gap:6px}.dot{width:10px;height:10px;border-radius:999px;display:inline-block}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:var(--nav-text);cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:var(--muted);text-align:center}</style></head>
+<style>:root{--bg:#f5f7fb;--text:#1f2937;--muted:#64748b;--nav-bg:#0b1220;--nav-border:#243145;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#fff;--panel-border:#dce3ec;--ctl-bg:#fff;--ctl-text:#111827;--ctl-border:#cbd5e1;--chart-border:#e5e7eb}[data-theme="dark"]{--bg:#000;--text:#e5e7eb;--muted:#94a3b8;--nav-bg:#000;--nav-border:#111827;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#000;--panel-border:#1f2937;--ctl-bg:#000;--ctl-text:#e5e7eb;--ctl-border:#334155;--chart-border:#1f2937}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:var(--nav-bg);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:14px}.brand{font-size:18px;font-weight:700;color:var(--nav-text)}.menu a{color:var(--link);text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{width:100%;max-width:none;margin:0 auto;padding:14px;box-sizing:border-box}.panel{border:1px solid var(--panel-border);background:var(--panel-bg);margin:10px 0;padding:12px;border-radius:10px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.small{font-size:12px;color:var(--muted)}select,button,input{height:34px;border:1px solid var(--ctl-border);border-radius:8px;background:var(--ctl-bg);color:var(--ctl-text);padding:0 10px}input{width:96px}button{cursor:pointer}.chart{width:100%;height:682px;border:1px solid var(--chart-border);border-radius:8px;background:var(--panel-bg);display:block}.chart-wrap{position:relative}.legend{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:8px}.tag{display:inline-flex;align-items:center;gap:6px}.dot{width:10px;height:10px;border-radius:999px;display:inline-block}.bubble-tip{position:absolute;display:none;min-width:180px;max-width:260px;background:rgba(15,23,42,.96);color:#e2e8f0;border:1px solid rgba(148,163,184,.25);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.5;box-shadow:0 10px 28px rgba(2,6,23,.35);pointer-events:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:var(--nav-text);cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:var(--muted);text-align:center}</style></head>
 <body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles" class="active">气泡图</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><div class="row"><span>周期</span><select id="iv"><option value="1m">1M</option><option value="2m">2M</option><option value="5m">5M</option><option value="10m">10M</option><option value="15m" selected>15M</option><option value="30m">30M</option><option value="1h">1H</option><option value="4h">4H</option><option value="8h">8H</option><option value="12h">12H</option><option value="1d">1D</option><option value="3d">3D</option><option value="7d">7D</option></select><button onclick="load()">刷新</button><label class="small" style="display:inline-flex;align-items:center;gap:6px;margin-left:6px"><input id="hist" type="checkbox">历史</label><button id="moreBtn" style="display:none" onclick="loadMoreHistory()">向左加载</button><span id="meta" class="small"></span></div><canvas id="cv" class="chart" width="1600" height="620"></canvas><div class="legend small"><div>气泡大小代表清算金额，颜色代表多空方向。滚轮缩放（默认以最右侧K线为锚点），按住鼠标左键左右拖动。</div><div class="tag"><span class="dot" style="background:#16a34a"></span><span>绿色=多单爆仓</span><span class="dot" style="margin-left:10px;background:#dc2626"></span><span>红色=空单爆仓</span></div></div></div></div>
+<div class="wrap"><div class="panel"><div class="row"><span>周期</span><select id="iv"><option value="1m">1M</option><option value="2m">2M</option><option value="5m">5M</option><option value="10m">10M</option><option value="15m" selected>15M</option><option value="30m">30M</option><option value="1h">1H</option><option value="4h">4H</option><option value="8h">8H</option><option value="12h">12H</option><option value="1d">1D</option><option value="3d">3D</option><option value="7d">7D</option></select><button onclick="load()">刷新</button><span class="small">过滤小单 ETH 数量</span><input id="qtyFilter" type="number" min="0" step="0.1" value="10"><button id="filterBtn" onclick="applyQtyFilter()">应用过滤</button><label class="small" style="display:inline-flex;align-items:center;gap:6px;margin-left:6px"><input id="hist" type="checkbox">历史</label><button id="moreBtn" style="display:none" onclick="loadMoreHistory()">向左加载</button><span id="meta" class="small"></span></div><div class="chart-wrap"><canvas id="cv" class="chart" width="1600" height="620"></canvas><div id="bubbleTip" class="bubble-tip"></div></div><div class="legend small"><div>气泡大小代表清算金额，颜色代表多空方向。滚轮缩放（默认以最右侧K线为锚点），按住鼠标左键左右拖动。</div><div class="tag"><span class="dot" style="background:#dc2626"></span><span>红色=多单爆仓</span><span class="dot" style="margin-left:10px;background:#16a34a"></span><span>绿色=空单爆仓</span></div></div></div></div>
 <script>
-let candles=[],events=[],viewStart=0,viewCount=120,drag=false,lastX=0,intervalMs=0,latestStart=0;
+let candles=[],events=[],viewStart=0,viewCount=120,drag=false,lastX=0,intervalMs=0,latestStart=0,qtyFilter=10,bubbleHoverMeta=[];
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
 function intervalToMs(iv){switch(String(iv||'')){case '1m':return 60e3;case '2m':return 120e3;case '5m':return 300e3;case '10m':return 600e3;case '15m':return 900e3;case '30m':return 1800e3;case '1h':return 3600e3;case '4h':return 14400e3;case '8h':return 28800e3;case '12h':return 43200e3;case '1d':return 86400e3;case '3d':return 3*86400e3;case '7d':return 7*86400e3;default:return 0;}}
 function fit(){const c=document.getElementById('cv');const r=c.getBoundingClientRect(),dpr=window.devicePixelRatio||1;const w=Math.max(700,Math.floor(r.width)),h=Math.max(420,Math.floor(r.height));c.width=Math.floor(w*dpr);c.height=Math.floor(h*dpr);const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return {c,x,w,h};}
 function toNum(v){const n=Number(v);return isFinite(n)?n:0}
 function mapInterval(v){if(v==='10m')return '5m';if(v==='7d')return '1w';return v;}
+function visibleEvents(){return (events||[]).filter(ev=>toNum(ev.qty)>=qtyFilter);}
+function applyQtyFilter(){const input=document.getElementById('qtyFilter');qtyFilter=Math.max(0,toNum(input&&input.value));if(input)input.value=String(qtyFilter);draw();updateMeta();}
+function updateMeta(){const meta=document.getElementById('meta');if(!meta)return;meta.textContent='K线来源: '+((document.getElementById('iv')&&document.getElementById('iv').value)||'-')+' | 区间清算事件 '+visibleEvents().length+' 条 | 已过滤小于 '+qtyFilter+' ETH';}
+function fmtAmt(n){n=toNum(n);if(!isFinite(n))return '-';return n.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function fmtQty(n){return toNum(n).toLocaleString('zh-CN',{maximumFractionDigits:4});}
+function fmtPrice(n){return toNum(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1});}
+function fmtTime(ts){try{return new Date(toNum(ts)).toLocaleString('zh-CN',{hour12:false});}catch(_){return '-';}}
+function hideBubbleTip(){const tip=document.getElementById('bubbleTip');if(tip)tip.style.display='none';}
+function showBubbleTip(hit,ev){
+  const tip=document.getElementById('bubbleTip');
+  const wrap=document.querySelector('.chart-wrap');
+  if(!tip||!wrap||!hit)return;
+  tip.innerHTML='<div><strong>'+(String(hit.side)==='long'?'多单爆仓':'空单爆仓')+'</strong></div>'+
+    '<div>价格: '+fmtPrice(hit.price)+'</div>'+
+    '<div>时间: '+fmtTime(hit.event_ts)+'</div>'+
+    '<div>数量: '+fmtQty(hit.qty)+' ETH</div>'+
+    '<div>金额: '+fmtAmt(hit.notional_usd)+' USD</div>';
+  tip.style.display='block';
+  const wr=wrap.getBoundingClientRect();
+  let left=(ev.clientX-wr.left)+14,top=(ev.clientY-wr.top)+14;
+  tip.style.left='0px';tip.style.top='0px';
+  const tw=tip.offsetWidth||220,th=tip.offsetHeight||110;
+  if(left+tw>wr.width-10)left=Math.max(8,wr.width-10-tw);
+  if(top+th>wr.height-10)top=Math.max(8,wr.height-10-th);
+  tip.style.left=left+'px';tip.style.top=top+'px';
+}
 function parseRows(rows,interval){let cs=(rows||[]).map(r=>({t:toNum(r[0]),o:toNum(r[1]),h:toNum(r[2]),l:toNum(r[3]),c:toNum(r[4])}));if(interval==='2m'){const out=[];for(let i=0;i+1<cs.length;i+=2){const a=cs[i],b=cs[i+1];out.push({t:a.t,o:a.o,h:Math.max(a.h,b.h),l:Math.min(a.l,b.l),c:b.c});}cs=out;}if(interval==='10m'){const out=[];for(let i=0;i+1<cs.length;i+=2){const a=cs[i],b=cs[i+1];out.push({t:a.t,o:a.o,h:Math.max(a.h,b.h),l:Math.min(a.l,b.l),c:b.c});}cs=out;}if(interval==='7d'){const out=[];for(let i=0;i+6<cs.length;i+=7){const a=cs[i],g=cs.slice(i,i+7),z=g[g.length-1];out.push({t:a.t,o:a.o,h:Math.max(...g.map(v=>v.h)),l:Math.min(...g.map(v=>v.l)),c:z.c});}cs=out;}return cs;}
 function cssVar(name,fallback){try{const v=getComputedStyle(document.documentElement).getPropertyValue(name).trim();return v||fallback;}catch(_){return fallback;}}
-function draw(){const v=fit(),x=v.x,W=v.w,H=v.h,padL=70,padR=20,padT=18,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;x.clearRect(0,0,W,H);const bg=cssVar('--panel-bg','#fff');const muted=cssVar('--muted','#64748b');const grid=cssVar('--chart-border','#e5e7eb');x.fillStyle=bg;x.fillRect(0,0,W,H);if(!candles.length){x.fillStyle=muted;x.fillText('暂无数据',16,24);return;}const s=Math.max(0,Math.min(candles.length-1,viewStart)),e=Math.max(s+10,Math.min(candles.length,s+viewCount));const cs=candles.slice(s,e);const minP=Math.min(...cs.map(v=>v.l)),maxP=Math.max(...cs.map(v=>v.h));const span=Math.max(1e-6,maxP-minP);const sx=i=>padL+(i/(cs.length-1))*pw,sy=p=>padT+((maxP-p)/span)*ph;x.strokeStyle=grid;x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*i/4,val=maxP-(span*i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle=muted;x.fillText(val.toFixed(1),6,y+4);}const bodyW=Math.max(3,Math.min(12,pw/Math.max(20,cs.length)));for(let i=0;i<cs.length;i++){const c=cs[i],px=sx(i),yo=sy(c.o),yc=sy(c.c),yh=sy(c.h),yl=sy(c.l),up=c.c>=c.o;x.strokeStyle=up?'#16a34a':'#dc2626';x.beginPath();x.moveTo(px,yh);x.lineTo(px,yl);x.stroke();x.fillStyle=up?'rgba(22,163,74,0.75)':'rgba(220,38,38,0.75)';x.fillRect(px-bodyW/2,Math.min(yo,yc),bodyW,Math.max(1,Math.abs(yc-yo)));}
+function draw(){const v=fit(),x=v.x,W=v.w,H=v.h,padL=70,padR=20,padT=18,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;x.clearRect(0,0,W,H);bubbleHoverMeta=[];hideBubbleTip();const bg=cssVar('--panel-bg','#fff');const muted=cssVar('--muted','#64748b');const grid=cssVar('--chart-border','#e5e7eb');x.fillStyle=bg;x.fillRect(0,0,W,H);if(!candles.length){x.fillStyle=muted;x.fillText('暂无数据',16,24);return;}const s=Math.max(0,Math.min(candles.length-1,viewStart)),e=Math.max(s+10,Math.min(candles.length,s+viewCount));const cs=candles.slice(s,e);const minP=Math.min(...cs.map(v=>v.l)),maxP=Math.max(...cs.map(v=>v.h));const span=Math.max(1e-6,maxP-minP);const sx=i=>padL+(i/(cs.length-1))*pw,sy=p=>padT+((maxP-p)/span)*ph;x.strokeStyle=grid;x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*i/4,val=maxP-(span*i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle=muted;x.fillText(val.toFixed(1),6,y+4);}const bodyW=Math.max(3,Math.min(12,pw/Math.max(20,cs.length)));for(let i=0;i<cs.length;i++){const c=cs[i],px=sx(i),yo=sy(c.o),yc=sy(c.c),yh=sy(c.h),yl=sy(c.l),up=c.c>=c.o;x.strokeStyle=up?'#16a34a':'#dc2626';x.beginPath();x.moveTo(px,yh);x.lineTo(px,yl);x.stroke();x.fillStyle=up?'rgba(22,163,74,0.75)':'rgba(220,38,38,0.75)';x.fillRect(px-bodyW/2,Math.min(yo,yc),bodyW,Math.max(1,Math.abs(yc-yo)));}
 function upperBound(arr,x){let lo=0,hi=arr.length;while(lo<hi){const mid=(lo+hi)>>1;if(arr[mid]<=x)lo=mid+1;else hi=mid;}return lo;}
 const t0=cs[0].t,t1=cs[cs.length-1].t;
 const spanMs=(intervalMs>0?intervalMs:intervalToMs(document.getElementById('iv').value||''))||0;
 const tEnd=t1+(spanMs>0?spanMs:0);
 const times=cs.map(v=>v.t);
-const vis=events.filter(e=>{const tt=toNum(e.event_ts);return tt>=t0&&(tEnd>t0?tt<tEnd:tt<=t1);});
+const vis=visibleEvents().filter(e=>{const tt=toNum(e.event_ts);return tt>=t0&&(tEnd>t0?tt<tEnd:tt<=t1);});
 const maxN=Math.max(1,...vis.map(e=>toNum(e.notional_usd)));
 const highlightStart=times[times.length-1]||t1;
 const highlightEnd=highlightStart+(spanMs>0?spanMs:0);
@@ -5353,18 +5499,19 @@ for(const ev of vis){
   const isLatest=(spanMs>0)?(tt>=highlightStart&&tt<highlightEnd):(idx===times.length-1);
   let color='rgba(148,163,184,0.38)',stroke='rgba(148,163,184,0.85)';
   if(isLatest){
-    color=(side==='long')?'rgba(22,163,74,0.45)':'rgba(220,38,38,0.45)';
-    stroke=(side==='long')?'#16a34a':'#dc2626';
+    color=(side==='long')?'rgba(220,38,38,0.45)':'rgba(22,163,74,0.45)';
+    stroke=(side==='long')?'#dc2626':'#16a34a';
   }
   x.beginPath();x.fillStyle=color;x.strokeStyle=stroke;x.arc(px,py,r,0,Math.PI*2);x.fill();x.stroke();
+  bubbleHoverMeta.push({px:px,py:py,r:r,event:ev});
 }
 x.fillStyle=muted;for(let i=0;i<=6;i++){const k=Math.floor((cs.length-1)*i/6),px=sx(k),t=new Date(cs[k].t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});x.fillText(t,Math.max(padL,px-30),H-10);} }
 function uniqByT(list){const out=[];const seen=new Set();for(const it of (list||[])){const t=toNum(it.t);if(!t||seen.has(t))continue;seen.add(t);out.push(it);}out.sort((a,b)=>a.t-b.t);return out;}
 function mergeEvents(a,b){const out=[];const key=(e)=>String(toNum(e.event_ts))+'|'+String(e.exchange||'')+'|'+String(e.side||'')+'|'+String(toNum(e.price))+'|'+String(toNum(e.qty));const seen=new Set();for(const it of (a||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}for(const it of (b||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}out.sort((x,y)=>toNum(x.event_ts)-toNum(y.event_ts));return out;}
 function setMoreBtnVisible(){const cb=document.getElementById('hist');const b=document.getElementById('moreBtn');if(!cb||!b)return;b.style.display=cb.checked?'inline-block':'none';}
-async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');const kd=await kr.json();candles=uniqByT(parseRows(kd.rows||[],iv));intervalMs=(candles.length>=2)?Math.max(0,toNum(candles[candles.length-1].t)-toNum(candles[candles.length-2].t)):intervalToMs(iv);if(!(intervalMs>0))intervalMs=intervalToMs(iv);latestStart=candles.length?toNum(candles[candles.length-1].t):0;events=[];if(candles.length){const startTS=toNum(candles[0].t);const endTS=latestStart+(intervalMs>0?intervalMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];}viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);setMoreBtnVisible();document.getElementById('meta').textContent='K线来源: '+(kd.source||iv)+' | 区间清算事件 '+events.length+' 条';draw();}
-async function loadMoreHistory(){const cb=document.getElementById('hist');if(!cb||!cb.checked)return;if(!candles.length)return;const iv=document.getElementById('iv').value;const endTS=Math.max(0,toNum(candles[0].t)-1);const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500&end_ts='+encodeURIComponent(endTS));const kd=await kr.json();const more=uniqByT(parseRows(kd.rows||[],iv));if(!more.length){document.getElementById('meta').textContent='没有更多历史K线';return;}const added=more.filter(x=>toNum(x.t)<toNum(candles[0].t));if(!added.length){document.getElementById('meta').textContent='没有更多历史K线';return;}candles=uniqByT(added.concat(candles));const spanMs=(intervalMs>0?intervalMs:intervalToMs(iv));const startTS=toNum(added[0].t),endTS2=toNum(added[added.length-1].t)+(spanMs>0?spanMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS2));const ed=await er.json();events=mergeEvents(ed.rows||[],events);viewStart=Math.max(0,viewStart+added.length);document.getElementById('meta').textContent='K线来源: '+(kd.source||iv)+' | 区间清算事件 '+events.length+' 条';draw();}
-const c=document.getElementById('cv');c.addEventListener('wheel',e=>{if(!candles.length)return;e.preventDefault();const right=Math.min(candles.length,viewStart+viewCount);const factor=e.deltaY<0?0.88:1.12;const nextCount=Math.max(30,Math.min(candles.length,Math.round(viewCount*factor)));viewCount=nextCount;viewStart=Math.max(0,Math.min(candles.length-viewCount,right-viewCount));draw();},{passive:false});c.addEventListener('mousedown',e=>{drag=true;lastX=e.clientX});window.addEventListener('mouseup',()=>drag=false);window.addEventListener('mousemove',e=>{if(!drag||!candles.length)return;const dx=e.clientX-lastX;lastX=e.clientX;const shift=Math.round(-dx/8);if(shift!==0){viewStart=Math.max(0,Math.min(candles.length-viewCount,viewStart+shift));draw();}});window.addEventListener('resize',()=>draw());document.getElementById('iv').addEventListener('change',load);document.getElementById('hist').addEventListener('change',setMoreBtnVisible);
+async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');const kd=await kr.json();candles=uniqByT(parseRows(kd.rows||[],iv));intervalMs=(candles.length>=2)?Math.max(0,toNum(candles[candles.length-1].t)-toNum(candles[candles.length-2].t)):intervalToMs(iv);if(!(intervalMs>0))intervalMs=intervalToMs(iv);latestStart=candles.length?toNum(candles[candles.length-1].t):0;events=[];if(candles.length){const startTS=toNum(candles[0].t);const endTS=latestStart+(intervalMs>0?intervalMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];}viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);setMoreBtnVisible();updateMeta();draw();}
+async function loadMoreHistory(){const cb=document.getElementById('hist');if(!cb||!cb.checked)return;if(!candles.length)return;const iv=document.getElementById('iv').value;const endTS=Math.max(0,toNum(candles[0].t)-1);const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500&end_ts='+encodeURIComponent(endTS));const kd=await kr.json();const more=uniqByT(parseRows(kd.rows||[],iv));if(!more.length){document.getElementById('meta').textContent='没有更多历史K线';return;}const added=more.filter(x=>toNum(x.t)<toNum(candles[0].t));if(!added.length){document.getElementById('meta').textContent='没有更多历史K线';return;}candles=uniqByT(added.concat(candles));const spanMs=(intervalMs>0?intervalMs:intervalToMs(iv));const startTS=toNum(added[0].t),endTS2=toNum(added[added.length-1].t)+(spanMs>0?spanMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS2));const ed=await er.json();events=mergeEvents(ed.rows||[],events);viewStart=Math.max(0,viewStart+added.length);updateMeta();draw();}
+const c=document.getElementById('cv');c.addEventListener('wheel',e=>{if(!candles.length)return;e.preventDefault();const right=Math.min(candles.length,viewStart+viewCount);const factor=e.deltaY<0?0.88:1.12;const nextCount=Math.max(30,Math.min(candles.length,Math.round(viewCount*factor)));viewCount=nextCount;viewStart=Math.max(0,Math.min(candles.length-viewCount,right-viewCount));draw();},{passive:false});c.addEventListener('mousedown',e=>{drag=true;lastX=e.clientX});c.addEventListener('mousemove',e=>{const rect=c.getBoundingClientRect();const mx=e.clientX-rect.left,my=e.clientY-rect.top;let hit=null,dist=1e18;for(const it of bubbleHoverMeta){const d=Math.hypot(mx-it.px,my-it.py);if(d<=it.r+3&&d<dist){dist=d;hit=it.event;}}if(hit)showBubbleTip(hit,e);else hideBubbleTip();});c.addEventListener('mouseleave',()=>hideBubbleTip());window.addEventListener('mouseup',()=>drag=false);window.addEventListener('mousemove',e=>{if(!drag||!candles.length)return;const dx=e.clientX-lastX;lastX=e.clientX;const shift=Math.round(-dx/8);if(shift!==0){viewStart=Math.max(0,Math.min(candles.length-viewCount,viewStart+shift));draw();}});window.addEventListener('resize',()=>draw());document.getElementById('iv').addEventListener('change',load);document.getElementById('hist').addEventListener('change',setMoreBtnVisible);document.getElementById('qtyFilter').addEventListener('change',applyQtyFilter);
 async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
