@@ -38,18 +38,22 @@ const (
 	defaultPriceStep   = 5.0
 	defaultPriceRange  = 400.0
 	fixedLeverageCSV   = "1,5,10,20,30,50,100"
+	// modelAlgoRev invalidates cached model_liqmap_snapshots when the model logic
+	// changes in a way that affects outputs.
+	modelAlgoRev int64 = 3
 )
 
 var bandSizes = []int{10, 20, 30, 40, 50, 60, 80, 100, 125, 150, 175, 200, 250, 300, 350, 400}
 
 type MarketState struct {
-	Exchange    string   `json:"exchange"`
-	Symbol      string   `json:"symbol"`
-	MarkPrice   float64  `json:"mark_price"`
-	OIQty       *float64 `json:"oi_qty,omitempty"`
-	OIValueUSD  *float64 `json:"oi_value_usd,omitempty"`
-	FundingRate *float64 `json:"funding_rate,omitempty"`
-	UpdatedTS   int64    `json:"updated_ts"`
+	Exchange       string   `json:"exchange"`
+	Symbol         string   `json:"symbol"`
+	MarkPrice      float64  `json:"mark_price"`
+	OIQty          *float64 `json:"oi_qty,omitempty"`
+	OIValueUSD     *float64 `json:"oi_value_usd,omitempty"`
+	FundingRate    *float64 `json:"funding_rate,omitempty"`
+	LongShortRatio *float64 `json:"long_short_ratio,omitempty"`
+	UpdatedTS      int64    `json:"updated_ts"`
 }
 
 type BandRow struct {
@@ -198,13 +202,14 @@ type OrderBookHub struct {
 var errResnapshot = errors.New("periodic resnapshot")
 
 type Snapshot struct {
-	Exchange    string
-	Symbol      string
-	MarkPrice   float64
-	OIQty       float64
-	OIValueUSD  float64
-	FundingRate float64
-	UpdatedTS   int64
+	Exchange       string
+	Symbol         string
+	MarkPrice      float64
+	OIQty          float64
+	OIValueUSD     float64
+	FundingRate    float64
+	LongShortRatio float64
+	UpdatedTS      int64
 }
 
 type ChannelSettings struct {
@@ -230,6 +235,7 @@ func initDB(db *sql.DB) error {
 			oi_qty REAL,
 			oi_value_usd REAL,
 			funding_rate REAL,
+			long_short_ratio REAL,
 			updated_ts INTEGER NOT NULL,
 			PRIMARY KEY(exchange, symbol)
 		);`,
@@ -240,6 +246,7 @@ func initDB(db *sql.DB) error {
 			mark_price REAL NOT NULL,
 			oi_value_usd REAL NOT NULL,
 			funding_rate REAL,
+			long_short_ratio REAL,
 			updated_ts INTEGER NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_oi_snapshots_symbol_ts ON oi_snapshots(symbol, updated_ts);`,
@@ -310,7 +317,33 @@ func initDB(db *sql.DB) error {
 			return err
 		}
 	}
+	// Backward-compatible schema upgrades for existing DBs.
+	_ = ensureColumn(db, "market_state", "long_short_ratio", "REAL")
+	_ = ensureColumn(db, "oi_snapshots", "long_short_ratio", "REAL")
 	return nil
+}
+
+func ensureColumn(db *sql.DB, table, col, typ string) error {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if strings.EqualFold(name, col) {
+			return nil
+		}
+	}
+	_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + col + ` ` + typ)
+	return err
 }
 
 func (a *App) window() int {
@@ -541,7 +574,7 @@ func (a *App) handleModelLiquidationMap(w http.ResponseWriter, r *http.Request) 
 			rangeOverridden = true
 		}
 	}
-	configRev := a.getSettingInt64("model_config_rev", 0)
+	configRev := a.getSettingInt64("model_config_rev", 0) + modelAlgoRev*1_000_000
 	useCache := !lookbackOverridden && !bucketOverridden && !stepOverridden && !rangeOverridden && lookbackMin == defaultLookbackMin
 	if useCache {
 		if snap, ok := a.loadModelMapSnapshot(defaultSymbol, windowDays, configRev); ok {
@@ -706,19 +739,19 @@ func (a *App) loadSettings() ChannelSettings {
 }
 
 type ModelConfig struct {
-	LookbackMin   int
-	BucketMin     int
-	PriceStep     float64
-	PriceRange    float64
-	LeverageCSV   string
-	WeightCSV     string
-	MaintMargin   float64
-	MaintMarginCSV string
-	FundingScale  float64
+	LookbackMin     int
+	BucketMin       int
+	PriceStep       float64
+	PriceRange      float64
+	LeverageCSV     string
+	WeightCSV       string
+	MaintMargin     float64
+	MaintMarginCSV  string
+	FundingScale    float64
 	FundingScaleCSV string
-	IntensityScale float64
-	DecayK        float64
-	NeighborShare float64
+	IntensityScale  float64
+	DecayK          float64
+	NeighborShare   float64
 }
 
 func normalizeCSVInput(raw string) string {
@@ -748,22 +781,31 @@ func normalizeCSVInput(raw string) string {
 
 func (a *App) loadModelConfig() ModelConfig {
 	cfg := ModelConfig{
-		LookbackMin:   a.getSettingInt("model_lookback_min", defaultLookbackMin),
-		BucketMin:     a.getSettingInt("model_bucket_min", defaultBucketMin),
-		PriceStep:     a.getSettingFloat("model_price_step", defaultPriceStep),
-		PriceRange:    a.getSettingFloat("model_price_range", defaultPriceRange),
-		LeverageCSV:   fixedLeverageCSV,
-		WeightCSV:     normalizeCSVInput(a.getSetting("model_leverage_weights")),
-		MaintMargin:   a.getSettingFloat("model_mm", 0.005),
-		MaintMarginCSV: normalizeCSVInput(a.getSetting("model_mm_csv")),
-		FundingScale:  a.getSettingFloat("model_funding_scale", 7000),
+		LookbackMin:     a.getSettingInt("model_lookback_min", defaultLookbackMin),
+		BucketMin:       a.getSettingInt("model_bucket_min", defaultBucketMin),
+		PriceStep:       a.getSettingFloat("model_price_step", defaultPriceStep),
+		PriceRange:      a.getSettingFloat("model_price_range", defaultPriceRange),
+		LeverageCSV:     fixedLeverageCSV,
+		WeightCSV:       normalizeCSVInput(a.getSetting("model_leverage_weights")),
+		MaintMargin:     a.getSettingFloat("model_mm", 0.005),
+		MaintMarginCSV:  normalizeCSVInput(a.getSetting("model_mm_csv")),
+		FundingScale:    a.getSettingFloat("model_funding_scale", 7000),
 		FundingScaleCSV: normalizeCSVInput(a.getSetting("model_funding_scale_csv")),
-		IntensityScale: a.getSettingFloat("model_intensity_scale", 1.0),
-		DecayK:        a.getSettingFloat("model_decay_k", 2.2),
-		NeighborShare: a.getSettingFloat("model_neighbor_share", 0.28),
+		IntensityScale:  a.getSettingFloat("model_intensity_scale", 1.0),
+		DecayK:          a.getSettingFloat("model_decay_k", 2.2),
+		NeighborShare:   a.getSettingFloat("model_neighbor_share", 0.28),
 	}
 	if cfg.WeightCSV == "" {
 		cfg.WeightCSV = "0.142857,0.142857,0.142857,0.142857,0.142857,0.142857,0.142857"
+	}
+	// If user didn't specify per-leverage MM, auto-generate a mid-leverage-heavier
+	// MM schedule so the 20x short liquidation band is closer to common Coinglass
+	// levels (e.g. ~2271 when mark~2185).
+	if strings.TrimSpace(cfg.MaintMarginCSV) == "" {
+		levs := parseCSVFloats(cfg.LeverageCSV)
+		if len(levs) > 0 {
+			cfg.MaintMarginCSV = autoMaintMarginCSV(levs, cfg.MaintMargin)
+		}
 	}
 	if cfg.IntensityScale <= 0 || cfg.IntensityScale > 50 {
 		cfg.IntensityScale = 1.0
@@ -796,6 +838,31 @@ func parseCSVNonNegFloats(raw string) []float64 {
 	}
 	return out
 }
+
+func autoMaintMarginForLeverage(lev, mmDefault float64) float64 {
+	if !(lev > 0) {
+		return mmDefault
+	}
+	// Empirical tweak: raise MM for mid leverage so 20x short liq sits closer to
+	// ~+4% band (e.g. 2271 when mark~2185).
+	mm := mmDefault + 0.11/lev
+	if mm < mmDefault {
+		mm = mmDefault
+	}
+	if mm > 0.02 {
+		mm = 0.02
+	}
+	return math.Round(mm*10000) / 10000
+}
+
+func autoMaintMarginCSV(levs []float64, mmDefault float64) string {
+	parts := make([]string, 0, len(levs))
+	for _, lev := range levs {
+		parts = append(parts, fmt.Sprintf("%.4f", autoMaintMarginForLeverage(lev, mmDefault)))
+	}
+	return strings.Join(parts, ",")
+}
+
 func (a *App) handleModelConfig(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
@@ -1438,22 +1505,31 @@ func (a *App) insertOISnapshot(s Snapshot) error {
 	if s.MarkPrice <= 0 || s.OIValueUSD <= 0 {
 		return nil
 	}
-	_, err := a.db.Exec(`INSERT INTO oi_snapshots(exchange, symbol, mark_price, oi_value_usd, funding_rate, updated_ts)
-		VALUES(?, ?, ?, ?, ?, ?)`, strings.ToLower(strings.TrimSpace(s.Exchange)), s.Symbol, s.MarkPrice, s.OIValueUSD, s.FundingRate, s.UpdatedTS)
+	_, err := a.db.Exec(`INSERT INTO oi_snapshots(exchange, symbol, mark_price, oi_value_usd, funding_rate, long_short_ratio, updated_ts)
+		VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		strings.ToLower(strings.TrimSpace(s.Exchange)), s.Symbol, s.MarkPrice, s.OIValueUSD, s.FundingRate, nullableFloat(s.LongShortRatio), s.UpdatedTS)
 	return err
 }
 
 func (a *App) upsertMarketState(s Snapshot) error {
-	_, err := a.db.Exec(`INSERT INTO market_state(exchange, symbol, mark_price, oi_qty, oi_value_usd, funding_rate, updated_ts)
-		VALUES(?, ?, ?, ?, ?, ?, ?)
+	_, err := a.db.Exec(`INSERT INTO market_state(exchange, symbol, mark_price, oi_qty, oi_value_usd, funding_rate, long_short_ratio, updated_ts)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(exchange, symbol) DO UPDATE SET
 			mark_price=excluded.mark_price,
 			oi_qty=excluded.oi_qty,
 			oi_value_usd=excluded.oi_value_usd,
 			funding_rate=excluded.funding_rate,
+			long_short_ratio=excluded.long_short_ratio,
 			updated_ts=excluded.updated_ts`,
-		s.Exchange, s.Symbol, s.MarkPrice, s.OIQty, s.OIValueUSD, s.FundingRate, s.UpdatedTS)
+		s.Exchange, s.Symbol, s.MarkPrice, s.OIQty, s.OIValueUSD, s.FundingRate, nullableFloat(s.LongShortRatio), s.UpdatedTS)
 	return err
+}
+
+func nullableFloat(v float64) any {
+	if !(v > 0) {
+		return nil
+	}
+	return v
 }
 
 func clamp(v, lo, hi float64) float64 {
@@ -1610,6 +1686,89 @@ func (a *App) fetchJSON(url string, out any) error {
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+func (a *App) fetchBinanceLongShortRatio(symbol string) (float64, error) {
+	urls := []string{
+		"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=" + symbol + "&period=5m&limit=1",
+		"https://fapi.binance.com/futures/data/topLongShortPositionRatio?symbol=" + symbol + "&period=5m&limit=1",
+		"https://fapi.binance.com/futures/data/topLongShortAccountRatio?symbol=" + symbol + "&period=5m&limit=1",
+	}
+	var lastErr error
+	for _, u := range urls {
+		var arr []map[string]any
+		if err := a.fetchJSON(u, &arr); err != nil {
+			lastErr = err
+			continue
+		}
+		if len(arr) == 0 {
+			continue
+		}
+		m := arr[len(arr)-1]
+		if v := parseAnyFloat(m["longShortRatio"]); v > 0 {
+			return v, nil
+		}
+		longV := parseAnyFloat(m["longAccount"])
+		if !(longV > 0) {
+			longV = parseAnyFloat(m["longPosition"])
+		}
+		shortV := parseAnyFloat(m["shortAccount"])
+		if !(shortV > 0) {
+			shortV = parseAnyFloat(m["shortPosition"])
+		}
+		if longV > 0 && shortV > 0 {
+			return longV / shortV, nil
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("binance long/short ratio unavailable")
+	}
+	return 0, lastErr
+}
+
+func (a *App) fetchBybitLongShortRatio(symbol string) (float64, error) {
+	urls := []string{
+		"https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=" + symbol + "&period=5min&limit=1",
+		"https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=" + symbol + "&period=5min&limit=50",
+	}
+	var lastErr error
+	for _, u := range urls {
+		var resp map[string]any
+		if err := a.fetchJSON(u, &resp); err != nil {
+			lastErr = err
+			continue
+		}
+		// v5 shape: {retCode, result:{list:[{buyRatio,sellRatio, ...}]}}
+		result, _ := resp["result"].(map[string]any)
+		list, _ := result["list"].([]any)
+		if len(list) == 0 {
+			continue
+		}
+		row, _ := list[0].(map[string]any)
+		if row == nil && len(list) > 0 {
+			row, _ = list[len(list)-1].(map[string]any)
+		}
+		if row == nil {
+			continue
+		}
+		if v := parseAnyFloat(row["longShortRatio"]); v > 0 {
+			return v, nil
+		}
+		buy := parseAnyFloat(row["buyRatio"])
+		sell := parseAnyFloat(row["sellRatio"])
+		if buy > 0 && sell > 0 {
+			return buy / sell, nil
+		}
+		longV := parseAnyFloat(row["longAccount"])
+		shortV := parseAnyFloat(row["shortAccount"])
+		if longV > 0 && shortV > 0 {
+			return longV / shortV, nil
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("bybit long/short ratio unavailable")
+	}
+	return 0, lastErr
+}
+
 func (a *App) fetchBinanceSnapshot(symbol string) (Snapshot, error) {
 	var premium struct {
 		MarkPrice       string `json:"markPrice"`
@@ -1626,14 +1785,16 @@ func (a *App) fetchBinanceSnapshot(symbol string) (Snapshot, error) {
 	}
 	mark := parseFloat(premium.MarkPrice)
 	oiQty := parseFloat(oi.OpenInterest)
+	lsr, _ := a.fetchBinanceLongShortRatio(symbol)
 	return Snapshot{
-		Exchange:    "binance",
-		Symbol:      symbol,
-		MarkPrice:   mark,
-		OIQty:       oiQty,
-		OIValueUSD:  oiQty * mark,
-		FundingRate: parseFloat(premium.LastFundingRate),
-		UpdatedTS:   time.Now().UnixMilli(),
+		Exchange:       "binance",
+		Symbol:         symbol,
+		MarkPrice:      mark,
+		OIQty:          oiQty,
+		OIValueUSD:     oiQty * mark,
+		FundingRate:    parseFloat(premium.LastFundingRate),
+		LongShortRatio: lsr,
+		UpdatedTS:      time.Now().UnixMilli(),
 	}, nil
 }
 
@@ -1663,14 +1824,16 @@ func (a *App) fetchBybitSnapshot(symbol string) (Snapshot, error) {
 	if oiUSD <= 0 {
 		oiUSD = oiQty * mark
 	}
+	lsr, _ := a.fetchBybitLongShortRatio(symbol)
 	return Snapshot{
-		Exchange:    "bybit",
-		Symbol:      symbol,
-		MarkPrice:   mark,
-		OIQty:       oiQty,
-		OIValueUSD:  oiUSD,
-		FundingRate: parseFloat(row.FundingRate),
-		UpdatedTS:   time.Now().UnixMilli(),
+		Exchange:       "bybit",
+		Symbol:         symbol,
+		MarkPrice:      mark,
+		OIQty:          oiQty,
+		OIValueUSD:     oiUSD,
+		FundingRate:    parseFloat(row.FundingRate),
+		LongShortRatio: lsr,
+		UpdatedTS:      time.Now().UnixMilli(),
 	}, nil
 }
 
@@ -2240,7 +2403,7 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 }
 
 func (a *App) loadMarketStates(symbol string) ([]MarketState, error) {
-	rows, err := a.db.Query(`SELECT exchange, symbol, mark_price, oi_qty, oi_value_usd, funding_rate, updated_ts
+	rows, err := a.db.Query(`SELECT exchange, symbol, mark_price, oi_qty, oi_value_usd, funding_rate, long_short_ratio, updated_ts
 		FROM market_state WHERE symbol=? ORDER BY exchange`, symbol)
 	if err != nil {
 		return nil, err
@@ -2249,8 +2412,8 @@ func (a *App) loadMarketStates(symbol string) ([]MarketState, error) {
 	out := []MarketState{}
 	for rows.Next() {
 		var s MarketState
-		var oiQty, oiValue, funding sql.NullFloat64
-		if err := rows.Scan(&s.Exchange, &s.Symbol, &s.MarkPrice, &oiQty, &oiValue, &funding, &s.UpdatedTS); err != nil {
+		var oiQty, oiValue, funding, lsr sql.NullFloat64
+		if err := rows.Scan(&s.Exchange, &s.Symbol, &s.MarkPrice, &oiQty, &oiValue, &funding, &lsr, &s.UpdatedTS); err != nil {
 			return nil, err
 		}
 		if oiQty.Valid {
@@ -2261,6 +2424,9 @@ func (a *App) loadMarketStates(symbol string) ([]MarketState, error) {
 		}
 		if funding.Valid {
 			s.FundingRate = &funding.Float64
+		}
+		if lsr.Valid {
+			s.LongShortRatio = &lsr.Float64
 		}
 		out = append(out, s)
 	}
@@ -2329,9 +2495,10 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 		mark    float64
 		oi      float64
 		funding float64
+		lsr     float64
 		ts      int64
 	}
-	rows, err := a.db.Query(`SELECT LOWER(exchange), mark_price, oi_value_usd, funding_rate, updated_ts
+	rows, err := a.db.Query(`SELECT LOWER(exchange), mark_price, oi_value_usd, funding_rate, long_short_ratio, updated_ts
 		FROM oi_snapshots WHERE symbol=? AND updated_ts>=? ORDER BY exchange, updated_ts`, symbol, start)
 	if err != nil {
 		return nil, err
@@ -2340,12 +2507,15 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 	snaps := make([]snap, 0, 4096)
 	for rows.Next() {
 		var s snap
-		var funding sql.NullFloat64
-		if err := rows.Scan(&s.ex, &s.mark, &s.oi, &funding, &s.ts); err != nil {
+		var funding, lsr sql.NullFloat64
+		if err := rows.Scan(&s.ex, &s.mark, &s.oi, &funding, &lsr, &s.ts); err != nil {
 			continue
 		}
 		if funding.Valid {
 			s.funding = funding.Float64
+		}
+		if lsr.Valid {
+			s.lsr = lsr.Float64
 		}
 		if s.mark <= 0 || s.oi <= 0 {
 			continue
@@ -2361,7 +2531,6 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 		side      string
 	}
 	contribs := make([]contrib, 0, len(snaps)*6)
-	prevOI := map[string]float64{}
 	levs := parseCSVFloats(cfg.LeverageCSV)
 	weights := parseCSVNonNegFloats(cfg.WeightCSV)
 	if len(levs) == 0 {
@@ -2443,30 +2612,74 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 	if neighborShare > 1 {
 		neighborShare = 0.28
 	}
+	type deltaEvent struct {
+		ex      string
+		ts      int64
+		mark    float64
+		delta   float64
+		funding float64
+		lsr     float64
+	}
+	events := make([]deltaEvent, 0, len(snaps))
+	prevOI := map[string]float64{}
+	curOI := map[string]float64{}
+	effOI := map[string]float64{}
 	for _, s := range snaps {
+		curOI[s.ex] = s.oi
 		prev, ok := prevOI[s.ex]
 		prevOI[s.ex] = s.oi
 		if !ok {
 			continue
 		}
 		delta := s.oi - prev
-		if delta <= 0 {
+		if !(delta > 0) {
 			continue
 		}
+		age := float64(now-s.ts) / float64(lookbackMS)
+		decay := math.Exp(-decayK * age)
+		effOI[s.ex] += delta * decay
+		events = append(events, deltaEvent{
+			ex:      s.ex,
+			ts:      s.ts,
+			mark:    s.mark,
+			delta:   delta,
+			funding: s.funding,
+			lsr:     s.lsr,
+		})
+	}
+	scaleByEx := map[string]float64{}
+	for ex, cur := range curOI {
+		base := effOI[ex]
+		if base > 0 {
+			scaleByEx[ex] = clamp(cur/base, 0.3, 3.0)
+		} else {
+			scaleByEx[ex] = 1.0
+		}
+	}
+	for _, e := range events {
+		delta := e.delta * scaleByEx[e.ex]
 		for i, lev := range levs {
 			w := weights[i]
-			longShare := clamp(0.5+s.funding*fundingList[i], 0.2, 0.8)
+			baseLong := 0.5
+			if e.lsr > 0 {
+				baseLong = clamp(e.lsr/(1+e.lsr), 0.2, 0.8)
+			}
+			tilt := e.funding * fundingList[i]
+			if e.lsr > 0 {
+				tilt *= 0.35
+			}
+			longShare := clamp(baseLong+tilt, 0.2, 0.8)
 			shortShare := 1 - longShare
 			mm := mmList[i]
 			longAmt := delta * longShare * w
 			shortAmt := delta * shortShare * w
-			liqLong := s.mark * (1 - 1/lev + mm)
-			liqShort := s.mark * (1 + 1/lev - mm)
+			liqLong := e.mark * (1 - 1/lev + mm)
+			liqShort := e.mark * (1 + 1/lev - mm)
 			if liqLong > 0 && longAmt > 0 {
-				contribs = append(contribs, contrib{ex: s.ex, ts: s.ts, liqPrice: liqLong, intensity: longAmt, side: "long"})
+				contribs = append(contribs, contrib{ex: e.ex, ts: e.ts, liqPrice: liqLong, intensity: longAmt, side: "long"})
 			}
 			if liqShort > 0 && shortAmt > 0 {
-				contribs = append(contribs, contrib{ex: s.ex, ts: s.ts, liqPrice: liqShort, intensity: shortAmt, side: "short"})
+				contribs = append(contribs, contrib{ex: e.ex, ts: e.ts, liqPrice: liqShort, intensity: shortAmt, side: "short"})
 			}
 		}
 	}
@@ -2514,6 +2727,16 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 		exGrid[s.ex] = g
 	}
 
+	spreadSteps := 4
+	spreadW := []float64{1.0, 0.72, 0.42, 0.22}
+	spreadSum := 0.0
+	for i := 0; i < spreadSteps && i < len(spreadW); i++ {
+		spreadSum += spreadW[i]
+	}
+	if spreadSum <= 0 {
+		spreadSum = 1
+	}
+
 	for _, c := range contribs {
 		if c.ts < baseStart || c.ts > now {
 			continue
@@ -2540,16 +2763,27 @@ func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int
 		if g, ok := exGrid[c.ex]; ok {
 			g[row][col] += v
 		}
-		if row > 0 {
-			grid[row-1][col] += v * neighborShare
-			if g, ok := exGrid[c.ex]; ok {
-				g[row-1][col] += v * neighborShare
-			}
-		}
-		if row < rowsN-1 {
-			grid[row+1][col] += v * neighborShare
-			if g, ok := exGrid[c.ex]; ok {
-				g[row+1][col] += v * neighborShare
+		if neighborShare > 0 {
+			for k := 1; k <= spreadSteps; k++ {
+				if k-1 >= len(spreadW) {
+					break
+				}
+				vv := v * neighborShare * (spreadW[k-1] / spreadSum)
+				if vv <= 0 {
+					continue
+				}
+				if row-k >= 0 {
+					grid[row-k][col] += vv
+					if g, ok := exGrid[c.ex]; ok {
+						g[row-k][col] += vv
+					}
+				}
+				if row+k < rowsN {
+					grid[row+k][col] += vv
+					if g, ok := exGrid[c.ex]; ok {
+						g[row+k][col] += vv
+					}
+				}
 			}
 		}
 	}
@@ -3213,7 +3447,7 @@ func (a *App) startModelMapSnapshotter(ctx context.Context) {
 			}
 			cfg := a.loadModelConfig()
 			windowDays := a.window()
-			configRev := a.getSettingInt64("model_config_rev", 0)
+			configRev := a.getSettingInt64("model_config_rev", 0) + modelAlgoRev*1_000_000
 			resp, err := a.buildModelLiquidationMap(defaultSymbol, lookbackMinForWindow(time.Now(), windowDays), cfg.BucketMin, cfg.PriceStep, cfg.PriceRange, cfg)
 			if err != nil {
 				if a.debug {
@@ -3958,12 +4192,198 @@ function bindLiqHover(){
   },{passive:false});
 }
 function heatColor(v,max){if(!(max>0)||!(v>0))return 'rgb(248,250,252)';let t=Math.max(0,Math.min(1,v/max));t=Math.pow(t,0.55);let r,g,b;if(t<0.5){const k=t/0.5;r=Math.round(15+(46-15)*k);g=Math.round(23+(163-23)*k);b=Math.round(42+(242-42)*k);}else{const k=(t-0.5)/0.5;r=Math.round(46+(250-46)*k);g=Math.round(163+(204-163)*k);b=Math.round(242+(21-242)*k);}return 'rgb('+r+','+g+','+b+')';}
-function drawLiqHeat(){const v=fitCanvas('liqHeatMap');if(!v)return;const {c,x,W,H}=v;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);const d=liqMapData;if(!d||!d.prices||!d.intensity_grid||!d.prices.length){hideLiqTip();liqHoverMeta=null;x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const rows=d.prices.length,cols=((d.intensity_grid&&d.intensity_grid[0])?d.intensity_grid[0].length:0);if(rows<2||cols<1){hideLiqTip();liqHoverMeta=null;x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const per=(d.per_exchange)||{};const all=[];for(let ri=0;ri<rows;ri++){const p=Number(d.prices[ri]||0);if(!(p>0))continue;const exVals={};let total=0;for(const ex of exOrder){const arr=per[ex]||per[ex.toUpperCase()]||null;const v=Number((arr&&arr[ri])||0);if(v>0){exVals[ex]=v;total+=v;}}if(!(total>0)){let s=0;for(let ci=0;ci<cols;ci++)s+=Math.max(0,Number((d.intensity_grid[ri]||[])[ci]||0));if(s>0){total=s;exVals.unknown=s;}}if(total>0)all.push({ri:ri,p:p,total:total,ex:exVals});}if(!all.length){hideLiqTip();liqHoverMeta=null;x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const baseMin=all[0].p,baseMax=all[all.length-1].p;const padL=66,padR=20,padT=16,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;const fullSpan=Math.max(1e-6,baseMax-baseMin);if(liqViewMin==null||liqViewMax==null||liqViewMin>=liqViewMax||liqViewMin<baseMin||liqViewMax>baseMax){liqViewMin=baseMin;liqViewMax=baseMax;}const minP=liqViewMin,maxP=liqViewMax,span=Math.max(1e-6,maxP-minP);const pts=all.filter(it=>it.p>=minP&&it.p<=maxP);const maxV=Math.max(1,...pts.map(it=>it.total));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxV)*ph;x.strokeStyle='#e2e8f0';x.strokeRect(padL,padT,pw,ph);x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4),val=maxV*(1-i/4);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#475569';x.fillText(fmtAmount(val),6,y+4);}const minLabelGap=12;const approxLabelW=Math.max(36,x.measureText(fmtPrice(minP)).width,x.measureText(fmtPrice(maxP)).width);const maxTicks=Math.max(2,Math.floor(pw/(approxLabelW+minLabelGap)));const tickCount=Math.max(2,Math.min(10,maxTicks));for(let i=0;i<=tickCount;i++){const p=minP+span*(i/tickCount),px=sx(p);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(px,by);x.lineTo(px,by+4);x.stroke();const label=fmtPrice(p);const lw=x.measureText(label).width;const tx=Math.max(padL,Math.min(px-lw/2,W-padR-lw));x.fillStyle='#64748b';x.fillText(label,tx,by+18);}const barW=Math.max(2,Math.min(12,pw/Math.max(40,pts.length)));const cp=Number(d.current_price||0);for(const it of pts){const px=sx(it.p);let acc=0;for(const ex of exOrder){const v=Number((it.ex||{})[ex]||0);if(!(v>0))continue;const y0=sy(acc),y1=sy(acc+v);x.fillStyle=exColor[ex]||'rgba(148,163,184,0.6)';x.fillRect(px-barW/2,y1,barW,Math.max(1,y0-y1));acc+=v;}if(acc<=0){const y=sy(it.total);x.fillStyle=(cp>0?(it.p<=cp):(it.p<=(minP+maxP)/2))?'rgba(249,115,22,0.78)':'rgba(125,211,252,0.78)';x.fillRect(px-barW/2,y,barW,by-y);} }x.lineWidth=1;if(cp>=minP&&cp<=maxP){const cpX=sx(cp);x.strokeStyle='rgba(220,38,38,0.9)';x.setLineDash([5,4]);x.beginPath();x.moveTo(cpX,padT);x.lineTo(cpX,by);x.stroke();x.setLineDash([]);x.fillStyle='#111827';const txt='当前价:'+fmtPrice(cp);const tw=x.measureText(txt).width;x.fillText(txt,Math.max(padL,Math.min(cpX+4,W-padR-tw)),padT+12);}x.fillStyle='#475569';x.fillText('清算金额',padL,padT-4);const xt='价格';const xtw=x.measureText(xt).width;x.fillText(xt,padL+pw/2-xtw/2,H-8);liqHoverMeta={c:c,pts:pts.map(it=>({p:it.p,total:it.total,ex:it.ex,px:sx(it.p)})),barW:barW,pw:pw,padL:padL,baseMin:baseMin,baseMax:baseMax,fullSpan:fullSpan};}
+function drawLiqHeat(){
+  const v=fitCanvas('liqHeatMap');
+  if(!v) return;
+  const {c,x,W,H}=v;
+  x.clearRect(0,0,W,H);
+  x.fillStyle='#fff';
+  x.fillRect(0,0,W,H);
+
+  const d=liqMapData;
+  if(!d||!d.prices||!d.intensity_grid||!d.prices.length){
+    hideLiqTip();liqHoverMeta=null;
+    x.fillStyle='#64748b';x.font='13px sans-serif';
+    x.fillText('暂无清算地图数据',16,24);
+    return;
+  }
+
+  const rows=d.prices.length;
+  const cols=((d.intensity_grid&&d.intensity_grid[0])?d.intensity_grid[0].length:0);
+  if(rows<2||cols<1){
+    hideLiqTip();liqHoverMeta=null;
+    x.fillStyle='#64748b';x.font='13px sans-serif';
+    x.fillText('暂无清算地图数据',16,24);
+    return;
+  }
+
+  const per=(d.per_exchange)||{};
+  const all=[];
+  for(let ri=0;ri<rows;ri++){
+    const p=Number(d.prices[ri]||0);
+    if(!(p>0)) continue;
+    const exVals={};
+    let total=0;
+    for(const ex of exOrder){
+      const arr=per[ex]||per[ex.toUpperCase()]||null;
+      const vv=Number((arr&&arr[ri])||0);
+      if(vv>0){exVals[ex]=vv;total+=vv;}
+    }
+    if(!(total>0)){
+      let s=0;
+      for(let ci=0;ci<cols;ci++) s+=Math.max(0,Number((d.intensity_grid[ri]||[])[ci]||0));
+      if(s>0){total=s;exVals.unknown=s;}
+    }
+    if(total>0) all.push({ri:ri,p:p,total:total,ex:exVals});
+  }
+  if(!all.length){
+    hideLiqTip();liqHoverMeta=null;
+    x.fillStyle='#64748b';x.font='13px sans-serif';
+    x.fillText('暂无清算地图数据',16,24);
+    return;
+  }
+
+  const baseMin=all[0].p,baseMax=all[all.length-1].p;
+  const padL=66,padR=60,padT=16,padB=42;
+  const pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;
+  const fullSpan=Math.max(1e-6,baseMax-baseMin);
+  if(liqViewMin==null||liqViewMax==null||liqViewMin>=liqViewMax||liqViewMin<baseMin||liqViewMax>baseMax){
+    liqViewMin=baseMin;liqViewMax=baseMax;
+  }
+  const minP=liqViewMin,maxP=liqViewMax,span=Math.max(1e-6,maxP-minP);
+  const pts=all.filter(it=>it.p>=minP&&it.p<=maxP);
+  const maxV=Math.max(1,...pts.map(it=>it.total));
+  const sx=v=>padL+((v-minP)/span)*pw;
+  const sy=v=>by-(v/maxV)*ph;
+
+  x.strokeStyle='#e2e8f0';
+  x.strokeRect(padL,padT,pw,ph);
+  x.font='12px sans-serif';
+  for(let i=0;i<=4;i++){
+    const y=padT+ph*(i/4),val=maxV*(1-i/4);
+    x.strokeStyle='#e5e7eb';
+    x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();
+    x.fillStyle='#475569';
+    x.fillText(fmtAmount(val),6,y+4);
+  }
+
+  const minLabelGap=12;
+  const approxLabelW=Math.max(36,x.measureText(fmtPrice(minP)).width,x.measureText(fmtPrice(maxP)).width);
+  const maxTicks=Math.max(2,Math.floor(pw/(approxLabelW+minLabelGap)));
+  const tickCount=Math.max(2,Math.min(10,maxTicks));
+  for(let i=0;i<=tickCount;i++){
+    const p=minP+span*(i/tickCount),px=sx(p);
+    x.strokeStyle='#e5e7eb';
+    x.beginPath();x.moveTo(px,by);x.lineTo(px,by+4);x.stroke();
+    const label=fmtPrice(p);
+    const lw=x.measureText(label).width;
+    const tx=Math.max(padL,Math.min(px-lw/2,W-padR-lw));
+    x.fillStyle='#64748b';
+    x.fillText(label,tx,by+18);
+  }
+
+  const barW=Math.max(2,Math.min(12,pw/Math.max(40,pts.length)));
+  const cp=Number(d.current_price||0);
+
+  for(const it of pts){
+    const px=sx(it.p);
+    let acc=0;
+    for(const ex of exOrder){
+      const vv=Number((it.ex||{})[ex]||0);
+      if(!(vv>0)) continue;
+      const y0=sy(acc),y1=sy(acc+vv);
+      x.fillStyle=exColor[ex]||'rgba(148,163,184,0.6)';
+      x.fillRect(px-barW/2,y1,barW,Math.max(1,y0-y1));
+      acc+=vv;
+    }
+    if(acc<=0){
+      const y=sy(it.total);
+      x.fillStyle=(cp>0?(it.p<=cp):(it.p<=(minP+maxP)/2))?'rgba(249,115,22,0.78)':'rgba(125,211,252,0.78)';
+      x.fillRect(px-barW/2,y,barW,by-y);
+    }
+  }
+
+  // Cumulative curves (Coinglass-style): right axis.
+  let maxCum=0;
+  const cumShort=[];
+  const cumLong=[];
+  if(cp>0){
+    let runS=0;
+    for(const it of pts){
+      if(it.p>=cp){
+        runS+=it.total;
+        cumShort.push({p:it.p,v:runS});
+        if(runS>maxCum) maxCum=runS;
+      }
+    }
+    let runL=0;
+    for(let i=pts.length-1;i>=0;i--){
+      const it=pts[i];
+      if(it.p<=cp){
+        runL+=it.total;
+        cumLong.push({p:it.p,v:runL});
+        if(runL>maxCum) maxCum=runL;
+      }
+    }
+    cumLong.reverse();
+  }
+  if(maxCum>0){
+    const scy=v=>by-(v/maxCum)*ph;
+    x.fillStyle='#475569';
+    x.fillText('累计',W-padR+8,padT-4);
+    for(let i=0;i<=4;i++){
+      const y=padT+ph*(i/4),val=maxCum*(1-i/4);
+      x.fillStyle='#64748b';
+      x.fillText(fmtAmount(val),W-padR+8,y+4);
+    }
+    const drawLine=(arr,color,fillColor)=>{
+      if(!arr||arr.length<2) return;
+      x.lineWidth=2;
+      x.strokeStyle=color;
+      x.beginPath();
+      for(let i=0;i<arr.length;i++){
+        const px=sx(arr[i].p);
+        const py=scy(arr[i].v);
+        if(i===0) x.moveTo(px,py); else x.lineTo(px,py);
+      }
+      x.stroke();
+      if(fillColor){
+        x.lineTo(sx(arr[arr.length-1].p),by);
+        x.lineTo(sx(arr[0].p),by);
+        x.closePath();
+        x.fillStyle=fillColor;
+        x.fill();
+      }
+    };
+    drawLine(cumShort,'rgba(16,185,129,0.95)','rgba(16,185,129,0.10)');
+    drawLine(cumLong,'rgba(239,68,68,0.95)','rgba(239,68,68,0.10)');
+  }
+
+  x.lineWidth=1;
+  if(cp>=minP&&cp<=maxP){
+    const cpX=sx(cp);
+    x.strokeStyle='rgba(220,38,38,0.9)';
+    x.setLineDash([5,4]);
+    x.beginPath();x.moveTo(cpX,padT);x.lineTo(cpX,by);x.stroke();
+    x.setLineDash([]);
+    x.fillStyle='#111827';
+    const txt='当前价:'+fmtPrice(cp);
+    const tw=x.measureText(txt).width;
+    x.fillText(txt,Math.max(padL,Math.min(cpX+4,W-padR-tw)),padT+12);
+  }
+  x.fillStyle='#475569';
+  x.fillText('清算金额',padL,padT-4);
+  const xt='价格';
+  const xtw=x.measureText(xt).width;
+  x.fillText(xt,padL+pw/2-xtw/2,H-8);
+  liqHoverMeta={c:c,pts:pts.map(it=>({p:it.p,total:it.total,ex:it.ex,px:sx(it.p)})),barW:barW,pw:pw,padL:padL,baseMin:baseMin,baseMax:baseMax,fullSpan:fullSpan};
+}
 function renderLiqDesc(cfg,dash){
   if(!cfg){const el=document.getElementById('liqDesc');if(el)el.textContent='';return;}
   const levs=String(cfg.leverage_csv||cfg.LeverageCSV||cfg.leverage_levels||cfg.leverage||'10,25,50,100');
   const ws=String(cfg.weight_csv||cfg.WeightCSV||cfg.leverage_weights||cfg.weights||'0.25,0.25,0.25,0.25');
   const mm=Number(cfg.maint_margin||cfg.MaintMargin||cfg.mm||0.005);
+  const mmCSV=String(cfg.maint_margin_csv||cfg.MaintMarginCSV||cfg.mm_csv||'').trim();
   const fs=Number(cfg.funding_scale||cfg.FundingScale||7000);
   const dk=Number(cfg.decay_k||cfg.DecayK||2.2);
   const ns=Number(cfg.neighbor_share||cfg.NeighborShare||0.28);
@@ -3985,8 +4405,9 @@ function renderLiqDesc(cfg,dash){
   }
   const el=document.getElementById('liqDesc');
   if(el){
-    el.textContent='数据源：Binance/Bybit/OKX 公共接口的标记价、OI、资金费率。模型：对 OI 增量按杠杆 '+levs+
-      ' 与权重 '+ws+' 分配；多空比例=clamp(0.5+funding×'+fs+',0.2,0.8)；清算价=mark×(1±1/lev∓'+mm.toFixed(4)+')；时间衰减 exp(-'+dk.toFixed(2)+'×age)，邻近价扩散 '+ns.toFixed(2)+
+    const mmText = mmCSV ? ('mm(按档位)='+mmCSV) : ('mm='+mm.toFixed(4));
+    el.textContent='数据源：Binance/Bybit/OKX 公共接口的标记价、OI、资金费率（以及可得的多空比）。模型：对 OI 增量按杠杆 '+levs+
+      ' 与权重 '+ws+' 分配；多空比例=clamp(base+funding×'+fs+',0.2,0.8)，base 优先取 longShortRatio/(1+ratio)；为贴近“存量 OI”，会把衰减后的 ΔOI 分布按当前 OI 归一化；清算价=mark×(1±1/lev∓mm)，'+mmText+'；时间衰减 exp(-'+dk.toFixed(2)+'×age)，邻近价扩散 '+ns.toFixed(2)+
       '。参数：回看 '+windowText+minsText+'，时间桶 '+bucket+' 分钟，价格步长 '+step+'，范围 ±'+range+'。配置入口 /config。';
   }
 }
