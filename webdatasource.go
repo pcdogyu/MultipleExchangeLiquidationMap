@@ -475,14 +475,21 @@ func (m *WebDataSourceManager) captureWindow(ctx context.Context, chromePath, pr
 		return nil, capturedPayloadMeta{}, errors.New("coinglass window selector not found")
 	}
 
+	windowIdx := map[int]int{1: 0, 7: 1, 30: 2}[days]
 	js = fmt.Sprintf(`(() => {
-		const all = Array.from(document.querySelectorAll('[role="option"], .MuiOption-root, li[class*="Option"], li[class*="option"]'));
-		const exact = all.find(el => el.textContent.trim() === %q && el.offsetParent !== null);
-		if (exact) { exact.click(); return true; }
-		const fuzzy = all.find(el => (el.textContent || '').includes(%q) && el.offsetParent !== null);
-		if (fuzzy) { fuzzy.click(); return true; }
+		const norm = s => String(s || '').replace(/\s+/g, '').toLowerCase();
+		const want = norm(%q);
+		const dayNum = String(%d);
+		const optionSel = '[role="option"], .MuiOption-root, li[class*="Option"], li[class*="option"], [data-value]';
+		const all = Array.from(document.querySelectorAll(optionSel)).filter(el => el.offsetParent !== null);
+		const candidates = all.map((el, i) => ({el, i, text: norm(el.textContent), value: norm(el.getAttribute('data-value') || el.getAttribute('value') || '')}));
+		let hit = candidates.find(x => x.text === want || x.value === want);
+		if (!hit) hit = candidates.find(x => x.text.includes(want) || x.value.includes(want));
+		if (!hit) hit = candidates.find(x => x.text === dayNum || x.value === dayNum || x.text.includes(dayNum + 'd') || x.text.includes(dayNum + '天') || x.text.includes(dayNum + '日'));
+		if (!hit && candidates[%d]) hit = candidates[%d];
+		if (hit) { hit.el.click(); return true; }
 		return false;
-	})()`, label, label)
+	})()`, label, days, windowIdx, windowIdx)
 	if err := chromedp.Run(taskCtx, chromedp.Evaluate(js, &ok), chromedp.Sleep(2*time.Second)); err != nil || !ok {
 		return nil, capturedPayloadMeta{}, errors.New("coinglass target window option not found")
 	}
@@ -915,6 +922,8 @@ function fmtPrice(n){n=Number(n||0);if(!isFinite(n))return '-';return n.toLocale
 function fmtTime(ts){if(!ts)return '-';return new Date(ts).toLocaleString('zh-CN',{hour12:false});}
 let currentMap=null;
 let okxLatestClose=0;
+function exKey(v){v=String(v||'').toLowerCase();if(v.includes('binance'))return 'binance';if(v.includes('okx'))return 'okx';if(v.includes('bybit'))return 'bybit';return 'other';}
+const exStyle={binance:{fill:'rgba(249,115,22,0.58)',stroke:'rgba(234,88,12,0.92)',bg:'rgba(255,237,213,0.94)',text:'rgba(194,65,12,0.98)'},okx:{fill:'rgba(234,179,8,0.62)',stroke:'rgba(202,138,4,0.96)',bg:'rgba(254,249,195,0.94)',text:'rgba(133,77,14,0.98)'},bybit:{fill:'rgba(59,130,246,0.55)',stroke:'rgba(37,99,235,0.95)',bg:'rgba(219,234,254,0.94)',text:'rgba(29,78,216,0.98)'},other:{fill:'rgba(148,163,184,0.48)',stroke:'rgba(100,116,139,0.88)',bg:'rgba(241,245,249,0.94)',text:'rgba(71,85,105,0.98)'}};
 async function loadStatus(){const d=await fetch('/api/webdatasource/status').then(r=>r.json()).catch(()=>null);if(!d)return;document.getElementById('intervalMin').value=d.interval_min||15;document.getElementById('chromePath').value=d.chrome_path||'';document.getElementById('profileDir').value=d.profile_dir||'';document.getElementById('statusBox').textContent='运行中: '+(d.running?'是':'否')+' | 默认间隔 '+(d.interval_min||15)+' 分钟 | 最近成功 '+fmtTime(d.last_success_ts)+' | 最近错误 '+(d.last_error||'-');document.getElementById('runState').textContent=d.running?'抓取中':'空闲';const body=document.getElementById('runsBody');body.innerHTML='';for(const it of (d.recent_runs||[])){const tr=document.createElement('tr');tr.innerHTML='<td>'+it.id+'</td><td>'+it.window_days+'天</td><td>'+it.status+'</td><td>'+it.records_count+'</td><td>'+fmtTime(it.started_at)+'</td>';body.appendChild(tr);}}
 async function saveSettings(){const body={interval_min:Number(document.getElementById('intervalMin').value||15),chrome_path:document.getElementById('chromePath').value||'',profile_dir:document.getElementById('profileDir').value||''};const r=await fetch('/api/webdatasource/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('saveMsg').textContent=r.ok?'保存成功':'保存失败';loadStatus();}
 async function runNow(){const raw=document.getElementById('runWindow').value;const body=raw?{window_days:Number(raw)}:{};const r=await fetch('/api/webdatasource/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('saveMsg').textContent=r.ok?'已触发抓取':('触发失败: '+await r.text());loadStatus();}
@@ -925,11 +934,11 @@ if(!currentMap||!currentMap.has_data||!(currentMap.points||[]).length){x.fillSty
 const pts=currentMap.points||[];const minP=Number(currentMap.range_low||Math.min(...pts.map(p=>Number(p.price||0))));const maxP=Number(currentMap.range_high||Math.max(...pts.map(p=>Number(p.price||0))));const span=Math.max(1e-6,maxP-minP),padL=70,padR=20,padT=20,padB=40,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;const maxV=Math.max(1,...pts.map(p=>Number(p.liq_value||0)));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxV)*ph*0.86;
 x.strokeStyle='#e5e7eb';x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4);const val=maxV*(1-i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#64748b';x.fillText(fmtAmt(val),6,y+4);}
 const priceCount=new Set(pts.map(p=>String(Number(p.price||0).toFixed(4)))).size||pts.length;const barW=Math.max(2,Math.min(10,pw/Math.max(80,priceCount*1.35)));
-for(const pt of pts){const price=Number(pt.price||0),val=Number(pt.liq_value||0);if(!(price>0&&val>0))continue;const px=sx(price),py=sy(val),isLong=String(pt.side||'')==='long';x.fillStyle=isLong?'rgba(220,38,38,0.50)':'rgba(22,163,74,0.50)';x.strokeStyle=isLong?'rgba(220,38,38,0.85)':'rgba(22,163,74,0.85)';x.fillRect(px-barW/2,py,barW,Math.max(1,by-py));x.strokeRect(px-barW/2,py,barW,Math.max(1,by-py));}
+for(const pt of pts){const price=Number(pt.price||0),val=Number(pt.liq_value||0);if(!(price>0&&val>0))continue;const px=sx(price),py=sy(val),st=exStyle[exKey(pt.exchange)]||exStyle.other;x.fillStyle=st.fill;x.strokeStyle=st.stroke;x.fillRect(px-barW/2,py,barW,Math.max(1,by-py));x.strokeRect(px-barW/2,py,barW,Math.max(1,by-py));}
 x.fillStyle='#64748b';for(let i=0;i<=6;i++){const p=minP+span*(i/6),px=sx(p),label=fmtPrice(p),lw=x.measureText(label).width;x.fillText(label,Math.max(padL,Math.min(px-lw/2,W-padR-lw)),H-10);}
 const cp=Number(currentMap.current_price||0);if(cp>0){const cpx=sx(cp);x.strokeStyle='#111827';x.setLineDash([6,4]);x.beginPath();x.moveTo(cpx,padT);x.lineTo(cpx,by);x.stroke();x.setLineDash([]);}
 const close=Number(okxLatestClose||0)>0?Number(okxLatestClose):cp;const labels=[...(currentMap.top_longs||[]).map((p,i)=>Object.assign({rank:i,side:'long'},p)),...(currentMap.top_shorts||[]).map((p,i)=>Object.assign({rank:i,side:'short'},p))];x.font='bold 12px sans-serif';
-for(const pt of labels){const price=Number(pt.price||0),val=Number(pt.liq_value||0);if(!(price>=minP&&price<=maxP&&val>0))continue;const px=sx(price),py=sy(val);const pct=close>0?((price-close)/close*100):0;const lines=['$'+fmtPrice(price),fmtYi(val),(pct>=0?'+':'')+pct.toFixed(2)+'%'];const color=pt.side==='long'?'rgba(185,28,28,0.96)':'rgba(21,128,61,0.96)';const bg=pt.side==='long'?'rgba(254,226,226,0.92)':'rgba(220,252,231,0.92)';let tw=0;for(const s of lines)tw=Math.max(tw,x.measureText(s).width);const bw=tw+10,bh=48;let lx=px+8,ly=py-54;if(lx+bw>W-6)lx=px-bw-8;if(lx<6)lx=6;if(ly<6)ly=py+10;if(ly+bh>H-padB)ly=Math.max(6,H-padB-bh);x.fillStyle=bg;x.strokeStyle=color;x.lineWidth=1;x.fillRect(lx,ly,bw,bh);x.strokeRect(lx,ly,bw,bh);x.fillStyle=color;for(let i=0;i<lines.length;i++)x.fillText(lines[i],lx+5,ly+15+i*14);x.fillStyle=color;x.fillRect(px-barW/2,py,barW,Math.max(2,by-py));}
+for(const pt of labels){const price=Number(pt.price||0),val=Number(pt.liq_value||0);if(!(price>=minP&&price<=maxP&&val>0))continue;const px=sx(price),py=sy(val);const pct=close>0?((price-close)/close*100):0;const lines=['$'+fmtPrice(price),fmtYi(val),(pct>=0?'+':'')+pct.toFixed(2)+'%'];const st=exStyle[exKey(pt.exchange)]||exStyle.other;let tw=0;for(const s of lines)tw=Math.max(tw,x.measureText(s).width);const bw=tw+10,bh=48;let lx=px+8,ly=py-54;if(lx+bw>W-6)lx=px-bw-8;if(lx<6)lx=6;if(ly<6)ly=py+10;if(ly+bh>H-padB)ly=Math.max(6,H-padB-bh);x.fillStyle=st.bg;x.strokeStyle=st.stroke;x.lineWidth=1;x.fillRect(lx,ly,bw,bh);x.strokeRect(lx,ly,bw,bh);x.fillStyle=st.text;for(let i=0;i<lines.length;i++)x.fillText(lines[i],lx+5,ly+15+i*14);x.fillStyle=st.stroke;x.fillRect(px-barW/2,py,barW,Math.max(2,by-py));}
 }
 async function loadMap(){const window=document.getElementById('windowSel').value;await loadOKXClose();const d=await fetch('/api/webdatasource/map?window='+encodeURIComponent(window)).then(r=>r.json()).catch(()=>null);currentMap=d;if(!d||!d.has_data){document.getElementById('chartMeta').textContent='暂无成功抓取快照'+(d&&d.last_error?(' | 最近错误: '+d.last_error):'');document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent='-';document.getElementById('cardShort').textContent='-';document.getElementById('cardTime').textContent='-';draw();return;}document.getElementById('chartMeta').textContent='窗口 '+window.toUpperCase()+' | 价格区间 '+fmtPrice(d.range_low)+' - '+fmtPrice(d.range_high)+' | 快照 '+fmtTime(d.generated_at)+' | OKX 1m close '+(okxLatestClose?fmtPrice(okxLatestClose):'不可用');document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent=fmtAmt(d.long_total);document.getElementById('cardShort').textContent=fmtAmt(d.short_total);document.getElementById('cardTime').textContent=fmtTime(d.generated_at);draw();}
 window.addEventListener('resize',draw);initTheme();loadStatus();loadMap();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){}})();setInterval(loadStatus,5000);

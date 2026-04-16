@@ -1484,13 +1484,17 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		if err := a.setSetting("telegram_bot_token", strings.TrimSpace(req.TelegramBotToken)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if token := strings.TrimSpace(req.TelegramBotToken); token != "" {
+			if err := a.setSetting("telegram_bot_token", token); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
-		if err := a.setSetting("telegram_channel", strings.TrimSpace(req.TelegramChannel)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if channel := strings.TrimSpace(req.TelegramChannel); channel != "" {
+			if err := a.setSetting("telegram_channel", channel); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		interval := req.NotifyIntervalMin
 		if interval <= 0 {
