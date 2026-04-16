@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chromedp/chromedp"
 	"github.com/gorilla/websocket"
 
 	_ "modernc.org/sqlite"
@@ -152,6 +155,33 @@ type Dashboard struct {
 	LongestLong  []any             `json:"longest_long"`
 	Events       []EventRow        `json:"events"`
 	Analytics    HeatZoneAnalytics `json:"analytics"`
+}
+
+type HeatReportBand struct {
+	Band            int
+	UpPrice         float64
+	UpNotionalUSD   float64
+	DownPrice       float64
+	DownNotionalUSD float64
+	DiffUSD         float64
+	Highlight       bool
+}
+
+type HeatReportPeak struct {
+	Price         float64
+	SingleUSD     float64
+	CumulativeUSD float64
+	Distance      float64
+}
+
+type HeatReportData struct {
+	GeneratedAt   int64
+	CurrentPrice  float64
+	Bands         []HeatReportBand
+	LongTotalUSD  float64
+	ShortTotalUSD float64
+	LongPeak      HeatReportPeak
+	ShortPeak     HeatReportPeak
 }
 
 type EventRow struct {
@@ -459,6 +489,7 @@ func main() {
 	mux.HandleFunc("/api/model-fit", app.handleModelFit)
 	mux.HandleFunc("/api/liquidations", app.handleLiquidationsAPI)
 	mux.HandleFunc("/api/klines", app.handleKlinesAPI)
+	mux.HandleFunc("/api/okx/latest-close", app.handleOKXLatestCloseAPI)
 	mux.HandleFunc("/api/orderbook", app.handleOrderBook)
 	mux.HandleFunc("/api/coinglass/map", app.handleCoinGlassMap)
 	mux.HandleFunc("/api/window", app.handleWindow)
@@ -1726,6 +1757,53 @@ func (a *App) sendTelegramText(text string) error {
 	return nil
 }
 
+func (a *App) sendTelegramPhoto(caption string, image []byte) error {
+	token := strings.TrimSpace(a.getSetting("telegram_bot_token"))
+	channel := strings.TrimSpace(a.getSetting("telegram_channel"))
+	if token == "" || channel == "" {
+		return fmt.Errorf("telegram bot token or channel is empty")
+	}
+	if len(image) == 0 {
+		return fmt.Errorf("telegram photo image is empty")
+	}
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("chat_id", channel)
+	_ = mw.WriteField("caption", caption)
+	_ = mw.WriteField("parse_mode", "HTML")
+	fw, err := mw.CreateFormFile("photo", "heat-report.png")
+	if err != nil {
+		return err
+	}
+	if _, err := fw.Write(image); err != nil {
+		return err
+	}
+	if err := mw.Close(); err != nil {
+		return err
+	}
+
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendPhoto", token)
+	req, err := http.NewRequest(http.MethodPost, url, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		if len(data) == 0 {
+			return fmt.Errorf("telegram api returned %s", resp.Status)
+		}
+		return fmt.Errorf("telegram api returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
 func (a *App) startTelegramNotifier(ctx context.Context) {
 	go func() {
 		tk := time.NewTicker(30 * time.Second)
@@ -1743,12 +1821,19 @@ func (a *App) startTelegramNotifier(ctx context.Context) {
 				if now-a.lastNotify < int64(interval)*60*1000 {
 					continue
 				}
-				dash, err := a.buildDashboard(1)
-				if err != nil || len(dash.Bands) == 0 {
+				report, err := a.buildModelHeatReportData()
+				if err != nil || len(report.Bands) == 0 {
 					continue
 				}
-				msg := a.buildHeatReportMessage(dash)
-				if err := a.sendTelegramText(msg); err != nil {
+				caption := a.buildHeatReportCaption(report)
+				image, err := a.renderHeatReportPNG(report)
+				if err != nil {
+					if a.debug {
+						log.Printf("telegram heat report image failed: %v", err)
+					}
+					continue
+				}
+				if err := a.sendTelegramPhoto(caption, image); err != nil {
 					if a.debug {
 						log.Printf("telegram auto send failed: %v", err)
 					}
@@ -1774,6 +1859,211 @@ func (a *App) buildHeatReportMessage(d Dashboard) string {
 		lines = append(lines, fmt.Sprintf("%d点内 上方%.1f %.2f万 | 下方%.1f %.2f万", b.Band, b.UpPrice, b.UpNotionalUSD/1e4, b.DownPrice, b.DownNotionalUSD/1e4))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (a *App) buildModelHeatReportData() (HeatReportData, error) {
+	cfg := a.loadModelConfig()
+	model, err := a.buildModelLiquidationMap(defaultSymbol, cfg.LookbackMin, cfg.BucketMin, cfg.PriceStep, cfg.PriceRange, cfg)
+	if err != nil {
+		return HeatReportData{}, err
+	}
+	return buildHeatReportDataFromModel(model), nil
+}
+
+func buildHeatReportDataFromModel(model map[string]any) HeatReportData {
+	current := toFloatAny(model["current_price"])
+	prices, _ := model["prices"].([]float64)
+	grid, _ := model["intensity_grid"].([][]float64)
+	out := HeatReportData{GeneratedAt: time.Now().UnixMilli(), CurrentPrice: current}
+	if v := toFloatAny(model["generated_at"]); v > 0 {
+		out.GeneratedAt = int64(v)
+	}
+	if current <= 0 || len(prices) == 0 || len(grid) == 0 {
+		return out
+	}
+	type pt struct {
+		price float64
+		value float64
+	}
+	points := make([]pt, 0, len(prices))
+	for i, p := range prices {
+		if i >= len(grid) || p <= 0 {
+			continue
+		}
+		sum := 0.0
+		for _, v := range grid[i] {
+			if v > 0 {
+				sum += v
+			}
+		}
+		if sum > 0 {
+			points = append(points, pt{price: p, value: sum})
+		}
+	}
+	bands := []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150, 200, 250, 300}
+	highlight := map[int]bool{20: true, 50: true, 80: true, 100: true, 200: true, 300: true}
+	for _, band := range bands {
+		upTotal, downTotal := 0.0, 0.0
+		upPrice, downPrice := current+float64(band), current-float64(band)
+		for _, p := range points {
+			dist := p.price - current
+			if dist >= 0 && dist <= float64(band) {
+				upTotal += p.value
+			}
+			if dist <= 0 && math.Abs(dist) <= float64(band) {
+				downTotal += p.value
+			}
+		}
+		out.Bands = append(out.Bands, HeatReportBand{
+			Band:            band,
+			UpPrice:         math.Round(upPrice*10) / 10,
+			UpNotionalUSD:   upTotal,
+			DownPrice:       math.Round(downPrice*10) / 10,
+			DownNotionalUSD: downTotal,
+			DiffUSD:         math.Abs(downTotal - upTotal),
+			Highlight:       highlight[band],
+		})
+	}
+	for _, p := range points {
+		if p.price >= current {
+			out.ShortTotalUSD += p.value
+			if p.value > out.ShortPeak.SingleUSD {
+				out.ShortPeak = HeatReportPeak{Price: p.price, SingleUSD: p.value, Distance: math.Abs(p.price - current)}
+			}
+		}
+		if p.price <= current {
+			out.LongTotalUSD += p.value
+			if p.value > out.LongPeak.SingleUSD {
+				out.LongPeak = HeatReportPeak{Price: p.price, SingleUSD: p.value, Distance: math.Abs(p.price - current)}
+			}
+		}
+	}
+	for _, p := range points {
+		if out.ShortPeak.Price > 0 && p.price >= current && p.price <= out.ShortPeak.Price {
+			out.ShortPeak.CumulativeUSD += p.value
+		}
+		if out.LongPeak.Price > 0 && p.price <= current && p.price >= out.LongPeak.Price {
+			out.LongPeak.CumulativeUSD += p.value
+		}
+	}
+	return out
+}
+
+func heatReportBandBySize(r HeatReportData, band int) HeatReportBand {
+	for _, b := range r.Bands {
+		if b.Band == band {
+			return b
+		}
+	}
+	return HeatReportBand{Band: band}
+}
+
+func formatYi1(v float64) string {
+	return fmt.Sprintf("%.1f", v/1e8)
+}
+
+func formatYi2(v float64) string {
+	return fmt.Sprintf("%.2f", v/1e8)
+}
+
+func heatReportBias(up, down float64) string {
+	total := up + down
+	if total <= 0 {
+		return "基本均衡"
+	}
+	if down > up {
+		return "下方偏多"
+	}
+	if up > down {
+		return "上方偏多"
+	}
+	return "基本均衡"
+}
+
+func (a *App) buildHeatReportCaption(r HeatReportData) string {
+	lines := []string{
+		fmt.Sprintf("ETH 清算热区速报 |现价 $%.1f", r.CurrentPrice),
+		fmt.Sprintf("多单总量%s亿 |空单总量%s亿", formatYi1(r.LongTotalUSD), formatYi1(r.ShortTotalUSD)),
+		"",
+		"【多单最长柱】",
+		fmt.Sprintf("价格$%.1f | 距现价约%.0f点", r.LongPeak.Price, r.LongPeak.Distance),
+		fmt.Sprintf("单柱清算规模%s亿 | 累计清算规模%s亿", formatYi1(r.LongPeak.SingleUSD), formatYi1(r.LongPeak.CumulativeUSD)),
+		"【空单最长柱】",
+		fmt.Sprintf("价格$%.1f | 距现价约%.0f点", r.ShortPeak.Price, r.ShortPeak.Distance),
+		fmt.Sprintf("单柱清算规模%s亿 | 累计清算规模%s亿", formatYi1(r.ShortPeak.SingleUSD), formatYi1(r.ShortPeak.CumulativeUSD)),
+		"【多空失衡统计】",
+	}
+	for _, band := range []int{20, 50, 80, 100} {
+		b := heatReportBandBySize(r, band)
+		total := b.UpNotionalUSD + b.DownNotionalUSD
+		upPct, downPct := 0.0, 0.0
+		if total > 0 {
+			upPct = b.UpNotionalUSD / total * 100
+			downPct = b.DownNotionalUSD / total * 100
+		}
+		bias := heatReportBias(b.UpNotionalUSD, b.DownNotionalUSD)
+		lines = append(lines, fmt.Sprintf("%d点内，上 %s亿（%.0f%%）/下 %s亿(%.0f%%) 【<b>%s</b>】",
+			band, formatYi2(b.UpNotionalUSD), upPct, formatYi2(b.DownNotionalUSD), downPct, bias))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (a *App) renderHeatReportPNG(r HeatReportData) ([]byte, error) {
+	chromePath := detectChromePath()
+	if chromePath == "" {
+		return nil, errors.New("chrome/chromium executable not found")
+	}
+	var rows strings.Builder
+	for i, b := range r.Bands {
+		cls := ""
+		if i%2 == 1 {
+			cls += " alt"
+		}
+		if b.Highlight {
+			cls += " hot"
+		}
+		rows.WriteString(fmt.Sprintf(`<tr class="%s"><td>%d点内</td><td>%.1f</td><td>%.1f</td><td>%.1f</td><td>%.1f</td><td>%.1f</td></tr>`,
+			cls, b.Band, b.UpPrice, b.UpNotionalUSD/1e8, b.DownPrice, b.DownNotionalUSD/1e8, b.DiffUSD/1e8))
+	}
+	rows.WriteString(fmt.Sprintf(`<tr class="longest"><td>最长柱</td><td>%.1f</td><td>%.1f</td><td>%.1f</td><td>%.1f</td><td>%.1f</td></tr>`,
+		r.ShortPeak.Price, r.ShortPeak.SingleUSD/1e8, r.LongPeak.Price, r.LongPeak.SingleUSD/1e8, math.Abs(r.LongPeak.SingleUSD-r.ShortPeak.SingleUSD)/1e8))
+	html := `<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;background:#fff;font-family:Arial,"Microsoft YaHei",sans-serif;color:#34445a}
+.shot{width:974px;background:#fff}
+table{width:974px;border-collapse:collapse;table-layout:fixed;font-weight:800;font-size:18px}
+th,td{border:1px solid #f4f6f8;text-align:center;padding:8px 6px;height:24px}
+.title th{background:#394c66;color:#fff;font-size:20px;padding:12px 6px}
+.spot th{background:#394c66;color:#fff;text-align:left;padding-left:46px;font-size:18px}
+.spot .price{text-align:left;padding-left:36px}
+.group th{background:#d8dde5;color:#34445a}
+.group .down{background:#f3e9c3;color:#c96f34}
+.sub th{background:#d8dde5}.sub .down{background:#f5edc8;color:#c96f34}
+tbody tr{background:#eeeeee}tbody tr.alt{background:#e0e0e0}tbody tr.hot{background:#d4d4d4}
+tbody tr.longest{background:#e6e6e6}
+td:nth-child(4),td:nth-child(5),td:nth-child(6){color:#cf7436}
+</style></head><body><div class="shot"><table>
+<thead><tr class="title"><th colspan="6">ETH清算雷区速报（` + time.UnixMilli(r.GeneratedAt).Format("2006.1.2") + `）</th></tr>
+<tr class="spot"><th colspan="1">ETH现价</th><th colspan="5" class="price">` + fmt.Sprintf("%.1f", r.CurrentPrice) + `</th></tr>
+<tr class="group"><th rowspan="2">点数<br>阈值</th><th colspan="2">上方空单</th><th colspan="2" class="down">下方多单</th><th rowspan="2">多空差值<br>（亿）</th></tr>
+<tr class="sub"><th>清算价格</th><th>清算规模(亿)</th><th class="down">清算价格</th><th class="down">清算规模(亿)</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></body></html>`
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath(chromePath),
+		chromedp.Flag("headless", true),
+		chromedp.WindowSize(974, 780),
+	)
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
+	defer cancelAlloc()
+	taskCtx, cancelTask := chromedp.NewContext(allocCtx)
+	defer cancelTask()
+	var png []byte
+	err := chromedp.Run(taskCtx,
+		chromedp.Navigate("data:text/html;charset=utf-8,"+url.QueryEscape(html)),
+		chromedp.Sleep(250*time.Millisecond),
+		chromedp.FullScreenshot(&png, 100),
+	)
+	return png, err
 }
 
 func maskSensitive(s string) string {
@@ -3652,6 +3942,46 @@ func (a *App) handleKlinesAPI(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *App) handleOKXLatestCloseAPI(w http.ResponseWriter, r *http.Request) {
+	if a.debug {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var resp struct {
+		Code string     `json:"code"`
+		Msg  string     `json:"msg"`
+		Data [][]string `json:"data"`
+	}
+	if err := a.fetchJSON("https://www.okx.com/api/v5/market/candles?instId=ETH-USDT-SWAP&bar=1m&limit=1", &resp); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if resp.Code != "" && resp.Code != "0" {
+		http.Error(w, "okx returned "+resp.Code+": "+resp.Msg, http.StatusBadGateway)
+		return
+	}
+	if len(resp.Data) == 0 || len(resp.Data[0]) < 5 {
+		http.Error(w, "okx latest candle not found", http.StatusBadGateway)
+		return
+	}
+	closePrice, err := strconv.ParseFloat(strings.TrimSpace(resp.Data[0][4]), 64)
+	if err != nil || closePrice <= 0 {
+		http.Error(w, "okx latest close invalid", http.StatusBadGateway)
+		return
+	}
+	ts, _ := strconv.ParseInt(strings.TrimSpace(resp.Data[0][0]), 10, 64)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"exchange": "okx",
+		"inst_id":  "ETH-USDT-SWAP",
+		"interval": "1m",
+		"close":    closePrice,
+		"ts":       ts,
+	})
+}
+
 func newOrderBookHub() *OrderBookHub {
 	return &OrderBookHub{
 		books: map[string]*OrderBook{
@@ -5136,6 +5466,7 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui
 .state-list{display:grid;gap:8px;font-weight:700}.state-line{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline}.state-line .mini{font-size:16px;color:var(--text);font-weight:700}.state-line .funding-tag{font-size:14px;color:var(--muted);font-weight:700}
 .main-grid{display:grid;grid-template-columns:1.45fr .9fr;gap:10px}.stack{display:grid;gap:10px}
 table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:center}thead th{background:#5d7291;color:#fff;font-size:13px}
+.heat-report-table{table-layout:fixed;font-weight:800;color:#34445a;font-size:16px}.heat-report-table th,.heat-report-table td{border:1px solid #f4f6f8;padding:8px 6px;font-weight:800}.heat-report-table .title th{background:#394c66;color:#fff;font-size:20px;padding:12px 6px}.heat-report-table .spot th{background:#394c66;color:#fff;text-align:left;padding-left:46px;font-size:18px}.heat-report-table .spot .price{text-align:left;padding-left:36px}.heat-report-table .group th{background:#d8dde5;color:#34445a}.heat-report-table .group .down{background:#f3e9c3;color:#c96f34}.heat-report-table .sub th{background:#d8dde5;color:#34445a}.heat-report-table .sub .down{background:#f5edc8;color:#c96f34}.heat-report-table tbody tr{background:#eeeeee}.heat-report-table tbody tr.alt{background:#e0e0e0}.heat-report-table tbody tr.hot{background:#d4d4d4}.heat-report-table tbody tr.longest{background:#e6e6e6}.heat-report-table .down-cell,.heat-report-table .diff-cell{color:#cf7436}.heat-report-table .up-cell{color:#34445a}
 .metric{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--line)}.metric:last-child{border-bottom:0}
 .bar-row{display:grid;grid-template-columns:72px 1fr 54px;gap:10px;align-items:center;margin:8px 0}.bar{height:10px;background:#e7edf5;border-radius:999px;overflow:hidden}.fill{height:100%;background:linear-gradient(90deg,#56b6d7,#3f7fb1)}
 .triple{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
@@ -5194,9 +5525,7 @@ function buildHeatBandsFromModel(model){
     if(s>0) pts.push({price:p,notional:s});
   }
   if(!pts.length) return [];
-  const desired=[];
-  for(let x=10;x<=100;x+=10) desired.push(x);
-  for(let x=150;x<=400;x+=50) desired.push(x);
+  const desired=[10,20,30,40,50,60,70,80,90,100,150,200,250,300];
   return desired.map(band=>{
     let upPrice=cp+band,upNotional=0,downPrice=cp-band,downNotional=0;
     for(const pt of pts){
@@ -5234,14 +5563,23 @@ function buildHeatBandsFromModel(model){
  function renderHeatReport(d){
    const bands=buildHeatBandsFromModel(monitorLiqMapData);
    if(!bands.length){document.getElementById('heatReport').innerHTML='<div class="hint">暂无数据</div>';return;}
-   let html='<table><thead><tr><th>点数阈值</th><th>上方空单清算价</th><th>上方规模</th><th>下方多单清算价</th><th>下方规模</th><th>多空差异</th></tr></thead><tbody>';
-   for(const b of bands){
+   let topUp={price:0,v:0},topDown={price:0,v:0};
+   for(const b of bands){if(Number(b.up_notional_usd||0)>topUp.v)topUp={price:b.up_price,v:Number(b.up_notional_usd||0)};if(Number(b.down_notional_usd||0)>topDown.v)topDown={price:b.down_price,v:Number(b.down_notional_usd||0)};}
+   const hot={20:true,50:true,80:true,100:true,200:true,300:true};
+   const yi=n=>(Number(n||0)/1e8).toFixed(1);
+   let html='<table class="heat-report-table"><thead>'+
+     '<tr class="title"><th colspan="6">ETH清算雷区速报（'+new Date(d.generated_at).toLocaleDateString('zh-CN').replaceAll('/','.')+'）</th></tr>'+
+     '<tr class="spot"><th>ETH现价</th><th colspan="5" class="price">'+fmtPrice(d.current_price)+'</th></tr>'+
+     '<tr class="group"><th rowspan="2">点数<br>阈值</th><th colspan="2">上方空单</th><th colspan="2" class="down">下方多单</th><th rowspan="2">多空差值<br>（亿）</th></tr>'+
+     '<tr class="sub"><th>清算价格</th><th>清算规模(亿)</th><th class="down">清算价格</th><th class="down">清算规模(亿)</th></tr>'+
+     '</thead><tbody>';
+   for(let i=0;i<bands.length;i++){
+     const b=bands[i];
      const up=Number(b.up_notional_usd||0),down=Number(b.down_notional_usd||0);
-     const diff=down-up;
-     const diffCls=diff>0?'warn':(diff<0?'good':'');
-     html+='<tr><td>'+b.band+'点内</td><td>'+fmtPrice(b.up_price)+'</td><td class="warn">'+fmtAmount(up)+'</td><td>'+fmtPrice(b.down_price)+'</td><td class="good">'+fmtAmount(down)+'</td><td class="'+diffCls+'">'+fmtAmount(diff)+'</td></tr>';
+     const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
+     html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="up-cell">'+fmtPrice(b.up_price)+'</td><td class="up-cell">'+yi(up)+'</td><td class="down-cell">'+fmtPrice(b.down_price)+'</td><td class="down-cell">'+yi(down)+'</td><td class="diff-cell">'+yi(Math.abs(down-up))+'</td></tr>';
    }
-   html+='</tbody></table>';
+   html+='<tr class="longest"><td>最长柱</td><td class="up-cell">'+fmtPrice(topUp.price)+'</td><td class="up-cell">'+yi(topUp.v)+'</td><td class="down-cell">'+fmtPrice(topDown.price)+'</td><td class="down-cell">'+yi(topDown.v)+'</td><td class="diff-cell">'+yi(Math.abs(topDown.v-topUp.v))+'</td></tr></tbody></table>';
    document.getElementById('heatReport').innerHTML=html;
  }
 function renderImbalance(d){const rows=((d.analytics||{}).imbalance_stats)||[];document.getElementById('imbalanceStats').innerHTML=rows.length?rows.map(r=>metricRow(r.band+'点内','上'+fmtAmount(r.up_notional_usd)+' / 下'+fmtAmount(r.down_notional_usd)+' / '+(r.verdict||'-'),String(r.verdict||'').includes('上')?'warn':(String(r.verdict||'').includes('下')?'good':''))).join(''):'<div class="hint">暂无数据</div>'}

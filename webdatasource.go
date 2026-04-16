@@ -71,6 +71,12 @@ type WebDataSourcePoint struct {
 	LiqValue float64 `json:"liq_value"`
 }
 
+type WebDataSourceTopPoint struct {
+	Side     string  `json:"side"`
+	Price    float64 `json:"price"`
+	LiqValue float64 `json:"liq_value"`
+}
+
 type WebDataSourceSnapshotMeta struct {
 	ID         int64   `json:"id"`
 	Symbol     string  `json:"symbol"`
@@ -91,6 +97,8 @@ type WebDataSourceMapResponse struct {
 	TopLongValue  float64                    `json:"top_long_value"`
 	TopShortPrice float64                    `json:"top_short_price"`
 	TopShortValue float64                    `json:"top_short_value"`
+	TopLongs      []WebDataSourceTopPoint    `json:"top_longs"`
+	TopShorts     []WebDataSourceTopPoint    `json:"top_shorts"`
 	LongTotal     float64                    `json:"long_total"`
 	ShortTotal    float64                    `json:"short_total"`
 	ByExchange    []ExchangeContribution     `json:"by_exchange"`
@@ -354,6 +362,10 @@ func detectChromePath() string {
 		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
 		`C:\Program Files\Chromium\Application\chrome.exe`,
 		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
+		"/usr/bin/google-chrome",
+		"/usr/bin/google-chrome-stable",
+		"/usr/bin/chromium",
+		"/usr/bin/chromium-browser",
 	}
 	for _, p := range candidates {
 		p = strings.TrimSpace(p)
@@ -719,6 +731,8 @@ func (m *WebDataSourceManager) loadLatestMap(window string) WebDataSourceMapResp
 	longTotal, shortTotal := 0.0, 0.0
 	topLongPrice, topLongValue := 0.0, 0.0
 	topShortPrice, topShortValue := 0.0, 0.0
+	topLongs := make([]WebDataSourceTopPoint, 0, 8)
+	topShorts := make([]WebDataSourceTopPoint, 0, 8)
 	exMap := map[string]float64{}
 	for rows.Next() {
 		var pt WebDataSourcePoint
@@ -729,15 +743,25 @@ func (m *WebDataSourceManager) loadLatestMap(window string) WebDataSourceMapResp
 		exMap[pt.Exchange] += pt.LiqValue
 		if pt.Side == "long" {
 			longTotal += pt.LiqValue
+			topLongs = append(topLongs, WebDataSourceTopPoint{Side: "long", Price: pt.Price, LiqValue: pt.LiqValue})
 			if pt.LiqValue > topLongValue {
 				topLongValue, topLongPrice = pt.LiqValue, pt.Price
 			}
 		} else {
 			shortTotal += pt.LiqValue
+			topShorts = append(topShorts, WebDataSourceTopPoint{Side: "short", Price: pt.Price, LiqValue: pt.LiqValue})
 			if pt.LiqValue > topShortValue {
 				topShortValue, topShortPrice = pt.LiqValue, pt.Price
 			}
 		}
+	}
+	sort.Slice(topLongs, func(i, j int) bool { return topLongs[i].LiqValue > topLongs[j].LiqValue })
+	sort.Slice(topShorts, func(i, j int) bool { return topShorts[i].LiqValue > topShorts[j].LiqValue })
+	if len(topLongs) > 3 {
+		topLongs = topLongs[:3]
+	}
+	if len(topShorts) > 3 {
+		topShorts = topShorts[:3]
 	}
 	total := longTotal + shortTotal
 	contrib := make([]ExchangeContribution, 0, len(exMap))
@@ -764,6 +788,8 @@ func (m *WebDataSourceManager) loadLatestMap(window string) WebDataSourceMapResp
 		TopLongValue:  topLongValue,
 		TopShortPrice: topShortPrice,
 		TopShortValue: topShortValue,
+		TopLongs:      topLongs,
+		TopShorts:     topShorts,
 		LongTotal:     longTotal,
 		ShortTotal:    shortTotal,
 		ByExchange:    contrib,
@@ -884,13 +910,16 @@ const webDataSourceHTML = `<!doctype html>
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
 function fmtAmt(n){n=Number(n||0);if(!isFinite(n))return '-';if(n>=1e9)return (n/1e9).toFixed(2)+'B';if(n>=1e6)return (n/1e6).toFixed(2)+'M';if(n>=1e3)return (n/1e3).toFixed(2)+'K';return n.toFixed(2);}
+function fmtYi(n){n=Number(n||0);if(!isFinite(n))return '-';return (n/1e8).toFixed(2)+'亿';}
 function fmtPrice(n){n=Number(n||0);if(!isFinite(n))return '-';return n.toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1});}
 function fmtTime(ts){if(!ts)return '-';return new Date(ts).toLocaleString('zh-CN',{hour12:false});}
 let currentMap=null;
+let okxLatestClose=0;
 async function loadStatus(){const d=await fetch('/api/webdatasource/status').then(r=>r.json()).catch(()=>null);if(!d)return;document.getElementById('intervalMin').value=d.interval_min||15;document.getElementById('chromePath').value=d.chrome_path||'';document.getElementById('profileDir').value=d.profile_dir||'';document.getElementById('statusBox').textContent='运行中: '+(d.running?'是':'否')+' | 默认间隔 '+(d.interval_min||15)+' 分钟 | 最近成功 '+fmtTime(d.last_success_ts)+' | 最近错误 '+(d.last_error||'-');document.getElementById('runState').textContent=d.running?'抓取中':'空闲';const body=document.getElementById('runsBody');body.innerHTML='';for(const it of (d.recent_runs||[])){const tr=document.createElement('tr');tr.innerHTML='<td>'+it.id+'</td><td>'+it.window_days+'天</td><td>'+it.status+'</td><td>'+it.records_count+'</td><td>'+fmtTime(it.started_at)+'</td>';body.appendChild(tr);}}
 async function saveSettings(){const body={interval_min:Number(document.getElementById('intervalMin').value||15),chrome_path:document.getElementById('chromePath').value||'',profile_dir:document.getElementById('profileDir').value||''};const r=await fetch('/api/webdatasource/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('saveMsg').textContent=r.ok?'保存成功':'保存失败';loadStatus();}
 async function runNow(){const raw=document.getElementById('runWindow').value;const body=raw?{window_days:Number(raw)}:{};const r=await fetch('/api/webdatasource/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('saveMsg').textContent=r.ok?'已触发抓取':('触发失败: '+await r.text());loadStatus();}
-function draw(){const c=document.getElementById('cv'),x=c.getContext('2d');const rect=c.getBoundingClientRect(),dpr=window.devicePixelRatio||1;const W=Math.max(760,Math.floor(rect.width)),H=Math.max(420,Math.floor(rect.height));c.width=W*dpr;c.height=H*dpr;x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);if(!currentMap||!currentMap.has_data||!(currentMap.points||[]).length){x.fillStyle='#64748b';x.font='14px sans-serif';x.fillText('暂无抓取数据',20,24);return;}const pts=currentMap.points||[];const minP=Number(currentMap.range_low||Math.min(...pts.map(p=>Number(p.price||0))));const maxP=Number(currentMap.range_high||Math.max(...pts.map(p=>Number(p.price||0))));const span=Math.max(1e-6,maxP-minP),padL=70,padR=20,padT=20,padB=40,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/Math.max(1,...pts.map(p=>Number(p.liq_value||0))))*ph*0.8;const maxV=Math.max(1,...pts.map(p=>Number(p.liq_value||0)));x.strokeStyle='#e5e7eb';x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4);const val=maxV*(1-i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#64748b';x.fillText(fmtAmt(val),6,y+4);}for(const pt of pts){const px=sx(Number(pt.price||0)),py=sy(Number(pt.liq_value||0)),r=3+16*Math.sqrt(Math.max(0,Number(pt.liq_value||0))/maxV),isLong=String(pt.side||'')==='long';x.beginPath();x.fillStyle=isLong?'rgba(220,38,38,0.35)':'rgba(22,163,74,0.35)';x.strokeStyle=isLong?'rgba(220,38,38,0.85)':'rgba(22,163,74,0.85)';x.arc(px,py,r,0,Math.PI*2);x.fill();x.stroke();}x.fillStyle='#64748b';for(let i=0;i<=6;i++){const p=minP+span*(i/6),px=sx(p),label=fmtPrice(p),lw=x.measureText(label).width;x.fillText(label,Math.max(padL,Math.min(px-lw/2,W-padR-lw)),H-10);}if(Number(currentMap.current_price||0)>0){const cp=sx(Number(currentMap.current_price));x.strokeStyle='#111827';x.setLineDash([6,4]);x.beginPath();x.moveTo(cp,padT);x.lineTo(cp,by);x.stroke();x.setLineDash([]);}}
-async function loadMap(){const window=document.getElementById('windowSel').value;const d=await fetch('/api/webdatasource/map?window='+encodeURIComponent(window)).then(r=>r.json()).catch(()=>null);currentMap=d;if(!d||!d.has_data){document.getElementById('chartMeta').textContent='暂无成功抓取快照'+(d&&d.last_error?(' | 最近错误: '+d.last_error):'');document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent='-';document.getElementById('cardShort').textContent='-';document.getElementById('cardTime').textContent='-';document.getElementById('exchangeBars').innerHTML='';draw();return;}document.getElementById('chartMeta').textContent='窗口 '+window.toUpperCase()+' | 价格区间 '+fmtPrice(d.range_low)+' - '+fmtPrice(d.range_high)+' | 快照 '+fmtTime(d.generated_at);document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent=fmtAmt(d.long_total);document.getElementById('cardShort').textContent=fmtAmt(d.short_total);document.getElementById('cardTime').textContent=fmtTime(d.generated_at);const bars=document.getElementById('exchangeBars');bars.innerHTML='';for(const it of (d.by_exchange||[])){const row=document.createElement('div');row.style.margin='8px 0';row.innerHTML='<div class="row" style="justify-content:space-between"><span>'+it.exchange+'</span><span>'+fmtAmt(it.notional_usd)+'</span></div><div class="bar"><span style="width:'+Math.max(2,Math.round((Number(it.share||0))*100))+'%"></span></div>';bars.appendChild(row);}draw();}
+async function loadOKXClose(){const d=await fetch('/api/okx/latest-close').then(r=>r.ok?r.json():null).catch(()=>null);okxLatestClose=Number(d&&d.close||0)||0;}
+function draw(){const c=document.getElementById('cv'),x=c.getContext('2d');const rect=c.getBoundingClientRect(),dpr=window.devicePixelRatio||1;const W=Math.max(760,Math.floor(rect.width)),H=Math.max(420,Math.floor(rect.height));c.width=W*dpr;c.height=H*dpr;x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);if(!currentMap||!currentMap.has_data||!(currentMap.points||[]).length){x.fillStyle='#64748b';x.font='14px sans-serif';x.fillText('暂无抓取数据',20,24);return;}const pts=currentMap.points||[];const minP=Number(currentMap.range_low||Math.min(...pts.map(p=>Number(p.price||0))));const maxP=Number(currentMap.range_high||Math.max(...pts.map(p=>Number(p.price||0))));const span=Math.max(1e-6,maxP-minP),padL=70,padR=20,padT=20,padB=40,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/Math.max(1,...pts.map(p=>Number(p.liq_value||0))))*ph*0.8;const maxV=Math.max(1,...pts.map(p=>Number(p.liq_value||0)));x.strokeStyle='#e5e7eb';x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4);const val=maxV*(1-i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#64748b';x.fillText(fmtAmt(val),6,y+4);}for(const pt of pts){const px=sx(Number(pt.price||0)),py=sy(Number(pt.liq_value||0)),r=3+16*Math.sqrt(Math.max(0,Number(pt.liq_value||0))/maxV),isLong=String(pt.side||'')==='long';x.beginPath();x.fillStyle=isLong?'rgba(220,38,38,0.35)':'rgba(22,163,74,0.35)';x.strokeStyle=isLong?'rgba(220,38,38,0.85)':'rgba(22,163,74,0.85)';x.arc(px,py,r,0,Math.PI*2);x.fill();x.stroke();}x.fillStyle='#64748b';for(let i=0;i<=6;i++){const p=minP+span*(i/6),px=sx(p),label=fmtPrice(p),lw=x.measureText(label).width;x.fillText(label,Math.max(padL,Math.min(px-lw/2,W-padR-lw)),H-10);}const cp=Number(currentMap.current_price||0);if(cp>0){const cpx=sx(cp);x.strokeStyle='#111827';x.setLineDash([6,4]);x.beginPath();x.moveTo(cpx,padT);x.lineTo(cpx,by);x.stroke();x.setLineDash([]);}const close=Number(okxLatestClose||0)>0?Number(okxLatestClose):cp;const labels=[...(currentMap.top_longs||[]).map((p,i)=>Object.assign({rank:i,side:'long'},p)),...(currentMap.top_shorts||[]).map((p,i)=>Object.assign({rank:i,side:'short'},p))];x.font='bold 12px sans-serif';for(const pt of labels){const price=Number(pt.price||0),val=Number(pt.liq_value||0);if(!(price>=minP&&price<=maxP&&val>0))continue;const px=sx(price),py=sy(val);const pct=close>0?((price-close)/close*100):0;const lines=['$'+fmtPrice(price),fmtYi(val),(pct>=0?'+':'')+pct.toFixed(2)+'%'];const color=pt.side==='long'?'rgba(185,28,28,0.96)':'rgba(21,128,61,0.96)';const bg=pt.side==='long'?'rgba(254,226,226,0.92)':'rgba(220,252,231,0.92)';let tw=0;for(const s of lines)tw=Math.max(tw,x.measureText(s).width);const bw=tw+10,bh=48;let lx=px+8,ly=py-54;if(lx+bw>W-6)lx=px-bw-8;if(lx<6)lx=6;if(ly<6)ly=py+10;if(ly+bh>H-padB)ly=Math.max(6,H-padB-bh);x.fillStyle=bg;x.strokeStyle=color;x.lineWidth=1;x.fillRect(lx,ly,bw,bh);x.strokeRect(lx,ly,bw,bh);x.fillStyle=color;for(let i=0;i<lines.length;i++)x.fillText(lines[i],lx+5,ly+15+i*14);x.beginPath();x.arc(px,py,4,0,Math.PI*2);x.fill();}}
+async function loadMap(){const window=document.getElementById('windowSel').value;await loadOKXClose();const d=await fetch('/api/webdatasource/map?window='+encodeURIComponent(window)).then(r=>r.json()).catch(()=>null);currentMap=d;if(!d||!d.has_data){document.getElementById('chartMeta').textContent='暂无成功抓取快照'+(d&&d.last_error?(' | 最近错误: '+d.last_error):'');document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent='-';document.getElementById('cardShort').textContent='-';document.getElementById('cardTime').textContent='-';document.getElementById('exchangeBars').innerHTML='';draw();return;}document.getElementById('chartMeta').textContent='窗口 '+window.toUpperCase()+' | 价格区间 '+fmtPrice(d.range_low)+' - '+fmtPrice(d.range_high)+' | 快照 '+fmtTime(d.generated_at)+' | OKX 1m close '+(okxLatestClose?fmtPrice(okxLatestClose):'不可用');document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent=fmtAmt(d.long_total);document.getElementById('cardShort').textContent=fmtAmt(d.short_total);document.getElementById('cardTime').textContent=fmtTime(d.generated_at);const bars=document.getElementById('exchangeBars');bars.innerHTML='';for(const it of (d.by_exchange||[])){const row=document.createElement('div');row.style.margin='8px 0';row.innerHTML='<div class="row" style="justify-content:space-between"><span>'+it.exchange+'</span><span>'+fmtAmt(it.notional_usd)+'</span></div><div class="bar"><span style="width:'+Math.max(2,Math.round((Number(it.share||0))*100))+'%"></span></div>';bars.appendChild(row);}draw();}
 window.addEventListener('resize',draw);initTheme();loadStatus();loadMap();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){}})();setInterval(loadStatus,5000);
 </script></body></html>`
