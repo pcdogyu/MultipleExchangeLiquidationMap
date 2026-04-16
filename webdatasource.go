@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -402,6 +403,10 @@ func (m *WebDataSourceManager) captureWindow(ctx context.Context, chromePath, pr
 
 	var ok bool
 	if err := chromedp.Run(taskCtx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_, err := page.AddScriptToEvaluateOnNewDocument(webDataSourceHookJS).Do(ctx)
+			return err
+		}),
 		chromedp.Navigate("https://www.coinglass.com/zh/pro/futures/LiquidationMap"),
 		chromedp.Sleep(8*time.Second),
 		chromedp.Evaluate(webDataSourceHookJS, nil),
@@ -420,9 +425,12 @@ func (m *WebDataSourceManager) captureWindow(ctx context.Context, chromePath, pr
 				const inputs = container.querySelectorAll('.MuiAutocomplete-input');
 				const btns = container.querySelectorAll('.MuiSelect-button');
 				if (inputs.length > 0 && btns.length > 0) {
+					const norm = s => String(s || '').replace(/\s+/g, '').toLowerCase();
+					let winBtn = Array.from(btns).find(b => /^(1d|7d|30d|1天|7天|30天|1日|7日|30日)$/.test(norm(b.textContent)));
+					if (!winBtn) winBtn = btns[btns.length - 1];
 					window._cgSection = {
 						inputIdx: Array.from(document.querySelectorAll('.MuiAutocomplete-input')).indexOf(inputs[0]),
-						btnIdx: Array.from(document.querySelectorAll('.MuiSelect-button')).indexOf(btns[btns.length - 1])
+						btnIdx: Array.from(document.querySelectorAll('.MuiSelect-button')).indexOf(winBtn)
 					};
 					return true;
 				}
@@ -468,7 +476,7 @@ func (m *WebDataSourceManager) captureWindow(ctx context.Context, chromePath, pr
 	js = fmt.Sprintf(`(() => {
 		const btn = document.querySelectorAll('.MuiSelect-button')[%d];
 		if (!btn) return false;
-		btn.click();
+		for (const type of ['pointerdown','mousedown','mouseup','click']) btn.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
 		return true;
 	})()`, btnIdx)
 	if err := chromedp.Run(taskCtx, chromedp.Evaluate(js, &ok), chromedp.Sleep(1200*time.Millisecond)); err != nil || !ok {
@@ -480,14 +488,15 @@ func (m *WebDataSourceManager) captureWindow(ctx context.Context, chromePath, pr
 		const norm = s => String(s || '').replace(/\s+/g, '').toLowerCase();
 		const want = norm(%q);
 		const dayNum = String(%d);
-		const optionSel = '[role="option"], .MuiOption-root, li[class*="Option"], li[class*="option"], [data-value]';
+		const wants = [want, dayNum + 'd', dayNum + '天', dayNum + '日', dayNum + 'day', dayNum + 'days'];
+		const optionSel = '[role="option"], [role="menuitem"], .MuiOption-root, .MuiMenuItem-root, li[class*="Option"], li[class*="option"], li[class*="MenuItem"], [data-value]';
 		const all = Array.from(document.querySelectorAll(optionSel)).filter(el => el.offsetParent !== null);
 		const candidates = all.map((el, i) => ({el, i, text: norm(el.textContent), value: norm(el.getAttribute('data-value') || el.getAttribute('value') || '')}));
-		let hit = candidates.find(x => x.text === want || x.value === want);
-		if (!hit) hit = candidates.find(x => x.text.includes(want) || x.value.includes(want));
-		if (!hit) hit = candidates.find(x => x.text === dayNum || x.value === dayNum || x.text.includes(dayNum + 'd') || x.text.includes(dayNum + '天') || x.text.includes(dayNum + '日'));
+		let hit = candidates.find(x => wants.includes(x.text) || wants.includes(x.value));
+		if (!hit) hit = candidates.find(x => wants.some(w => x.text.includes(w) || x.value.includes(w)));
+		if (!hit) hit = candidates.find(x => x.text === dayNum || x.value === dayNum);
 		if (!hit && candidates[%d]) hit = candidates[%d];
-		if (hit) { hit.el.click(); return true; }
+		if (hit) { for (const type of ['pointerdown','mousedown','mouseup','click']) hit.el.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window})); return true; }
 		return false;
 	})()`, label, days, windowIdx, windowIdx)
 	if err := chromedp.Run(taskCtx, chromedp.Evaluate(js, &ok), chromedp.Sleep(2*time.Second)); err != nil || !ok {
@@ -891,8 +900,20 @@ func (a *App) handleWebDataSourceMap(w http.ResponseWriter, r *http.Request) {
 }
 
 const webDataSourceHookJS = `(() => {
+	if (window._liqHookInstalled) return 'hook_exists';
+	window._liqHookInstalled = true;
 	window._liqData = null;
 	window._liqLog = [];
+	const captureText = (text, from) => {
+		try {
+			if (!text || !String(text).includes('liqMapV2')) return;
+			window._liqLog.push('hit liqMapV2 via ' + from + ', len=' + String(text).length);
+			const parsed = JSON.parse(text);
+			window._liqData = parsed;
+		} catch(e) {
+			try { window._liqLog.push('parse failed via ' + from + ': ' + e.message); } catch(_) {}
+		}
+	};
 	const _orig = JSON.parse;
 	JSON.parse = function(str) {
 		let res;
@@ -905,6 +926,28 @@ const webDataSourceHookJS = `(() => {
 		} catch(e) {}
 		return res;
 	};
+	const _fetch = window.fetch;
+	if (_fetch) {
+		window.fetch = async function(...args) {
+			const resp = await _fetch.apply(this, args);
+			try { resp.clone().text().then(t => captureText(t, 'fetch')).catch(()=>{}); } catch(e) {}
+			return resp;
+		};
+	}
+	const _open = XMLHttpRequest.prototype.open;
+	const _send = XMLHttpRequest.prototype.send;
+	XMLHttpRequest.prototype.open = function(method, url) {
+		this._liqURL = url;
+		return _open.apply(this, arguments);
+	};
+	XMLHttpRequest.prototype.send = function() {
+		try {
+			this.addEventListener('load', function() {
+				try { captureText(this.responseText, 'xhr:' + (this._liqURL || '')); } catch(e) {}
+			});
+		} catch(e) {}
+		return _send.apply(this, arguments);
+	};
 	return 'hook_injected';
 })()`
 
@@ -912,7 +955,7 @@ const webDataSourceHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>页面数据源</title>
 <style>:root{--bg:#f5f7fb;--text:#1f2937;--muted:#64748b;--nav-bg:#0b1220;--nav-border:#243145;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#fff;--panel-border:#dce3ec;--ctl-bg:#fff;--ctl-text:#111827;--ctl-border:#cbd5e1;--chart-border:#e5e7eb}[data-theme="dark"]{--bg:#000;--text:#e5e7eb;--muted:#94a3b8;--nav-bg:#000;--nav-border:#111827;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#000;--panel-border:#1f2937;--ctl-bg:#000;--ctl-text:#e5e7eb;--ctl-border:#334155;--chart-border:#1f2937}html,body{height:100%}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;overflow:hidden}.nav{height:56px;background:var(--nav-bg);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10;box-sizing:border-box}.nav-left,.nav-right{display:flex;align-items:center;gap:14px}.brand{font-size:18px;font-weight:700;color:var(--nav-text)}.menu a{color:var(--link);text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:var(--nav-text);cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{width:100%;height:calc(100vh - 56px);margin:0;padding:12px;box-sizing:border-box;display:flex;flex-direction:column}.grid{display:grid;grid-template-columns:330px minmax(0,1fr);gap:12px;min-height:0;flex:1}.panel{border:1px solid var(--panel-border);background:var(--panel-bg);padding:12px;border-radius:8px;box-sizing:border-box}.grid>.panel{overflow:auto}.main-area{display:flex;flex-direction:column;min-width:0;min-height:0}.small{font-size:12px;color:var(--muted)}.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}.field input,.field select,button{height:36px;border:1px solid var(--ctl-border);border-radius:8px;background:var(--ctl-bg);color:var(--ctl-text);padding:0 10px}.field input{width:100%;box-sizing:border-box}button{cursor:pointer}.primary{background:#0f172a;color:#eef3f9;border-color:#0f172a}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:10px}.card{border:1px solid var(--panel-border);border-radius:8px;padding:10px;background:var(--panel-bg)}.card .k{font-size:12px;color:var(--muted)}.card .v{margin-top:6px;font-size:22px;font-weight:700}.chart-panel{display:flex;flex-direction:column;min-height:0;flex:1}.chart{width:100%;height:100%;min-height:420px;border:1px solid var(--chart-border);border-radius:8px;display:block;background:var(--panel-bg);box-sizing:border-box;flex:1}.runs{max-height:260px;overflow:auto}.runs table{width:100%;border-collapse:collapse}.runs th,.runs td{padding:6px 8px;border-bottom:1px solid var(--panel-border);font-size:12px;text-align:left}.tag{display:inline-block;padding:2px 8px;border-radius:999px;background:rgba(37,99,235,.12);color:#2563eb;font-size:12px}.footer{display:none}@media (max-width:1100px){body{overflow:auto}.wrap{height:auto}.grid{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.chart{height:560px}}</style></head>
 <body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource" class="active">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div></div></div>
-<div class="wrap"><div class="grid"><div class="panel"><h2 style="margin:0 0 8px 0">抓取任务</h2><div id="statusBox" class="small">加载中...</div><div class="field" style="margin-top:12px"><label>抓取间隔（分钟）</label><input id="intervalMin" type="number" min="1" step="1"></div><div class="field" style="margin-top:12px"><label>Chrome 路径</label><input id="chromePath" placeholder="留空自动探测"></div><div class="field" style="margin-top:12px"><label>Profile 目录</label><input id="profileDir"></div><div class="row" style="margin-top:14px"><button class="primary" onclick="saveSettings()">保存设置</button><button onclick="runNow()">立即抓取</button><select id="runWindow"><option value="">抓取全部窗口</option><option value="1">仅 1 天</option><option value="7">仅 7 天</option><option value="30">仅 30 天</option></select></div><div class="small" id="saveMsg" style="margin-top:8px"></div><div style="margin-top:16px"><div class="row" style="justify-content:space-between"><h3 style="margin:0">最近运行</h3><span class="tag" id="runState">-</span></div><div class="runs" style="margin-top:8px"><table><thead><tr><th>ID</th><th>窗口</th><th>状态</th><th>记录数</th><th>开始</th></tr></thead><tbody id="runsBody"></tbody></table></div></div></div><div class="main-area"><div class="cards"><div class="card"><div class="k">当前窗口</div><div class="v" id="cardWindow">-</div></div><div class="card"><div class="k">多单总强度</div><div class="v" id="cardLong">-</div></div><div class="card"><div class="k">空单总强度</div><div class="v" id="cardShort">-</div></div><div class="card"><div class="k">最新抓取</div><div class="v" id="cardTime" style="font-size:16px">-</div></div></div><div class="panel chart-panel"><div class="row" style="justify-content:space-between;margin-bottom:10px"><div><strong>ETH 页面数据源清算地图</strong><div class="small" id="chartMeta">加载中...</div></div><div class="row"><select id="windowSel" onchange="loadMap()"><option value="30d">30D</option><option value="7d">7D</option><option value="1d">1D</option></select></div></div><canvas id="cv" class="chart" width="1000" height="520"></canvas></div></div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
+<div class="wrap"><div class="grid"><div class="panel"><h2 style="margin:0 0 8px 0">抓取任务</h2><div id="statusBox" class="small">加载中...</div><div class="field" style="margin-top:12px"><label>抓取间隔（分钟）</label><input id="intervalMin" type="number" min="1" step="1"></div><div class="field" style="margin-top:12px"><label>Chrome 路径</label><input id="chromePath" placeholder="留空自动探测"></div><div class="field" style="margin-top:12px"><label>Profile 目录</label><input id="profileDir"></div><div class="row" style="margin-top:14px"><button class="primary" onclick="saveSettings()">保存设置</button><button onclick="runNow()">立即抓取</button><select id="runWindow"><option value="">抓取全部窗口</option><option value="1">仅 1 天</option><option value="7">仅 7 天</option><option value="30">仅 30 天</option></select></div><div class="small" id="saveMsg" style="margin-top:8px"></div><div style="margin-top:16px"><div class="row" style="justify-content:space-between"><h3 style="margin:0">最近运行</h3><span class="tag" id="runState">-</span></div><div class="runs" style="margin-top:8px"><table><thead><tr><th>ID</th><th>窗口</th><th>状态</th><th>记录数</th><th>开始</th><th>错误</th></tr></thead><tbody id="runsBody"></tbody></table></div></div></div><div class="main-area"><div class="cards"><div class="card"><div class="k">当前窗口</div><div class="v" id="cardWindow">-</div></div><div class="card"><div class="k">多单总强度</div><div class="v" id="cardLong">-</div></div><div class="card"><div class="k">空单总强度</div><div class="v" id="cardShort">-</div></div><div class="card"><div class="k">最新抓取</div><div class="v" id="cardTime" style="font-size:16px">-</div></div></div><div class="panel chart-panel"><div class="row" style="justify-content:space-between;margin-bottom:10px"><div><strong>ETH 页面数据源清算地图</strong><div class="small" id="chartMeta">加载中...</div></div><div class="row"><select id="windowSel" onchange="loadMap()"><option value="30d">30D</option><option value="7d">7D</option><option value="1d">1D</option></select></div></div><canvas id="cv" class="chart" width="1000" height="520"></canvas></div></div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
 <script>
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
@@ -920,6 +963,7 @@ function fmtAmt(n){n=Number(n||0);if(!isFinite(n))return '-';if(n>=1e9)return (n
 function fmtYi(n){n=Number(n||0);if(!isFinite(n))return '-';return (n/1e8).toFixed(2)+'亿';}
 function fmtPrice(n){n=Number(n||0);if(!isFinite(n))return '-';return n.toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1});}
 function fmtTime(ts){if(!ts)return '-';return new Date(ts).toLocaleString('zh-CN',{hour12:false});}
+function escHTML(v){return String(v||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 let currentMap=null;
 let okxLatestClose=0;
 function exKey(v){v=String(v||'').toLowerCase();if(v.includes('binance'))return 'binance';if(v.includes('okx'))return 'okx';if(v.includes('bybit'))return 'bybit';return 'other';}
@@ -932,7 +976,24 @@ return Array.from(groups.values()).sort((a,b)=>a.price-b.price);
 }
 function dominantExchange(g){let best='other',bestVal=0;for(const ex of stackOrder){const v=Number((g.parts||{})[ex]||0);if(v>bestVal){best=ex;bestVal=v;}}return best;}
 function topStackLabels(groups){const out=[];for(const side of ['long','short']){out.push(...groups.filter(g=>g.side===side).sort((a,b)=>b.total-a.total).slice(0,3));}return out;}
-async function loadStatus(){const d=await fetch('/api/webdatasource/status').then(r=>r.json()).catch(()=>null);if(!d)return;document.getElementById('intervalMin').value=d.interval_min||15;document.getElementById('chromePath').value=d.chrome_path||'';document.getElementById('profileDir').value=d.profile_dir||'';document.getElementById('statusBox').textContent='运行中: '+(d.running?'是':'否')+' | 默认间隔 '+(d.interval_min||15)+' 分钟 | 最近成功 '+fmtTime(d.last_success_ts)+' | 最近错误 '+(d.last_error||'-');document.getElementById('runState').textContent=d.running?'抓取中':'空闲';const body=document.getElementById('runsBody');body.innerHTML='';for(const it of (d.recent_runs||[])){const tr=document.createElement('tr');tr.innerHTML='<td>'+it.id+'</td><td>'+it.window_days+'天</td><td>'+it.status+'</td><td>'+it.records_count+'</td><td>'+fmtTime(it.started_at)+'</td>';body.appendChild(tr);}}
+const sideLabelStyle={long:{bg:'rgba(220,252,231,0.96)',stroke:'rgba(22,163,74,0.96)',text:'rgba(21,128,61,0.98)',line:'rgba(22,163,74,0.92)'},short:{bg:'rgba(252,231,243,0.96)',stroke:'rgba(219,39,119,0.96)',text:'rgba(190,24,93,0.98)',line:'rgba(219,39,119,0.92)'}};
+function rectsOverlap(a,b,pad=4){return !(a.x+a.w+pad<b.x||b.x+b.w+pad<a.x||a.y+a.h+pad<b.y||b.y+b.h+pad<a.y);}
+function placeLabel(px,py,bw,bh,W,H,padB,occupied){
+const tries=[{x:px+8,y:py-54},{x:px-bw-8,y:py-54},{x:px+8,y:py+10},{x:px-bw-8,y:py+10},{x:px-bw/2,y:py-70},{x:px-bw/2,y:py+18}];
+for(const t of tries){let r={x:Math.max(6,Math.min(t.x,W-6-bw)),y:Math.max(6,Math.min(t.y,H-padB-bh)),w:bw,h:bh};if(!occupied.some(o=>rectsOverlap(r,o))){occupied.push(r);return r;}}
+let r={x:Math.max(6,Math.min(px+8,W-6-bw)),y:Math.max(6,Math.min(py-54,H-padB-bh)),w:bw,h:bh};for(let step=0;step<8&&occupied.some(o=>rectsOverlap(r,o));step++){r.y=Math.max(6,Math.min(r.y+(step%2===0?1:-1)*(bh+8)*(Math.floor(step/2)+1),H-padB-bh));}
+occupied.push(r);return r;
+}
+function drawCumulativeLine(x,groups,side,sx,padT,by,minP,maxP){
+const arr=groups.filter(g=>g.side===side&&g.price>=minP&&g.price<=maxP&&g.total>0).sort((a,b)=>a.price-b.price);
+if(arr.length<2)return;
+let run=0;const pts=arr.map(g=>{run+=g.total;return{price:g.price,total:run};});
+const maxCum=Math.max(1,pts[pts.length-1].total);
+x.save();x.strokeStyle=sideLabelStyle[side].line;x.lineWidth=2;x.setLineDash([5,3]);x.beginPath();
+for(let i=0;i<pts.length;i++){const p=pts[i],px=sx(p.price),py=by-(p.total/maxCum)*(by-padT)*0.82;if(i===0)x.moveTo(px,py);else x.lineTo(px,py);}
+x.stroke();x.setLineDash([]);x.restore();
+}
+async function loadStatus(){const d=await fetch('/api/webdatasource/status').then(r=>r.json()).catch(()=>null);if(!d)return;document.getElementById('intervalMin').value=d.interval_min||15;document.getElementById('chromePath').value=d.chrome_path||'';document.getElementById('profileDir').value=d.profile_dir||'';document.getElementById('statusBox').textContent='运行中: '+(d.running?'是':'否')+' | 默认间隔 '+(d.interval_min||15)+' 分钟 | 最近成功 '+fmtTime(d.last_success_ts)+' | 最近错误 '+(d.last_error||'-');document.getElementById('runState').textContent=d.running?'抓取中':'空闲';const body=document.getElementById('runsBody');body.innerHTML='';for(const it of (d.recent_runs||[])){const err=escHTML(it.error_message||'-');const tr=document.createElement('tr');tr.innerHTML='<td>'+it.id+'</td><td>'+it.window_days+'天</td><td>'+escHTML(it.status)+'</td><td>'+it.records_count+'</td><td>'+fmtTime(it.started_at)+'</td><td title="'+err+'">'+err+'</td>';body.appendChild(tr);}}
 async function saveSettings(){const body={interval_min:Number(document.getElementById('intervalMin').value||15),chrome_path:document.getElementById('chromePath').value||'',profile_dir:document.getElementById('profileDir').value||''};const r=await fetch('/api/webdatasource/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('saveMsg').textContent=r.ok?'保存成功':'保存失败';loadStatus();}
 async function runNow(){const raw=document.getElementById('runWindow').value;const body=raw?{window_days:Number(raw)}:{};const r=await fetch('/api/webdatasource/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('saveMsg').textContent=r.ok?'已触发抓取':('触发失败: '+await r.text());loadStatus();}
 async function loadOKXClose(){const d=await fetch('/api/okx/latest-close').then(r=>r.ok?r.json():null).catch(()=>null);okxLatestClose=Number(d&&d.close||0)||0;}
@@ -943,10 +1004,11 @@ const pts=currentMap.points||[],groups=buildStackGroups(pts);const minP=Number(c
 x.strokeStyle='#e5e7eb';x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4);const val=maxV*(1-i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#64748b';x.fillText(fmtAmt(val),6,y+4);}
 const priceCount=new Set(groups.map(g=>String(Number(g.price||0).toFixed(4)))).size||groups.length;const barW=Math.max(2,Math.min(10,pw/Math.max(80,priceCount*1.35)));
 for(const g of groups){const px=sx(g.price);let acc=0;for(const ex of stackOrder){const val=Number((g.parts||{})[ex]||0);if(!(val>0))continue;const y0=sy(acc),y1=sy(acc+val),h=Math.max(1,y0-y1),st=exStyle[ex]||exStyle.other;x.fillStyle=st.fill;x.strokeStyle=st.stroke;x.fillRect(px-barW/2,y1,barW,h);x.strokeRect(px-barW/2,y1,barW,h);acc+=val;}}
+drawCumulativeLine(x,groups,'long',sx,padT,by,minP,maxP);drawCumulativeLine(x,groups,'short',sx,padT,by,minP,maxP);
 x.fillStyle='#64748b';for(let i=0;i<=6;i++){const p=minP+span*(i/6),px=sx(p),label=fmtPrice(p),lw=x.measureText(label).width;x.fillText(label,Math.max(padL,Math.min(px-lw/2,W-padR-lw)),H-10);}
 const cp=Number(currentMap.current_price||0);if(cp>0){const cpx=sx(cp);x.strokeStyle='#111827';x.setLineDash([6,4]);x.beginPath();x.moveTo(cpx,padT);x.lineTo(cpx,by);x.stroke();x.setLineDash([]);}
 const close=Number(okxLatestClose||0)>0?Number(okxLatestClose):cp;const labels=topStackLabels(groups);x.font='bold 12px sans-serif';
-for(const g of labels){const price=Number(g.price||0),val=Number(g.total||0);if(!(price>=minP&&price<=maxP&&val>0))continue;const px=sx(price),py=sy(val);const pct=close>0?((price-close)/close*100):0;const lines=['$'+fmtPrice(price),fmtYi(val),(pct>=0?'+':'')+pct.toFixed(2)+'%'];const st=exStyle[dominantExchange(g)]||exStyle.other;let tw=0;for(const s of lines)tw=Math.max(tw,x.measureText(s).width);const bw=tw+10,bh=48;let lx=px+8,ly=py-54;if(lx+bw>W-6)lx=px-bw-8;if(lx<6)lx=6;if(ly<6)ly=py+10;if(ly+bh>H-padB)ly=Math.max(6,H-padB-bh);x.fillStyle=st.bg;x.strokeStyle=st.stroke;x.lineWidth=1;x.fillRect(lx,ly,bw,bh);x.strokeRect(lx,ly,bw,bh);x.fillStyle=st.text;for(let i=0;i<lines.length;i++)x.fillText(lines[i],lx+5,ly+15+i*14);}
+const occupied=[];for(const g of labels){const price=Number(g.price||0),val=Number(g.total||0);if(!(price>=minP&&price<=maxP&&val>0))continue;const px=sx(price),py=sy(val);const pct=close>0?((price-close)/close*100):0;const lines=['$'+fmtPrice(price),fmtYi(val),(pct>=0?'+':'')+pct.toFixed(2)+'%'];const st=sideLabelStyle[g.side]||sideLabelStyle.long;let tw=0;for(const s of lines)tw=Math.max(tw,x.measureText(s).width);const bw=tw+10,bh=48;const r=placeLabel(px,py,bw,bh,W,H,padB,occupied);x.fillStyle=st.bg;x.strokeStyle=st.stroke;x.lineWidth=1;x.fillRect(r.x,r.y,r.w,r.h);x.strokeRect(r.x,r.y,r.w,r.h);x.fillStyle=st.text;for(let i=0;i<lines.length;i++)x.fillText(lines[i],r.x+5,r.y+15+i*14);}
 }
 async function loadMap(){const window=document.getElementById('windowSel').value;await loadOKXClose();const d=await fetch('/api/webdatasource/map?window='+encodeURIComponent(window)).then(r=>r.json()).catch(()=>null);currentMap=d;if(!d||!d.has_data){document.getElementById('chartMeta').textContent='暂无成功抓取快照'+(d&&d.last_error?(' | 最近错误: '+d.last_error):'');document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent='-';document.getElementById('cardShort').textContent='-';document.getElementById('cardTime').textContent='-';draw();return;}document.getElementById('chartMeta').textContent='窗口 '+window.toUpperCase()+' | 价格区间 '+fmtPrice(d.range_low)+' - '+fmtPrice(d.range_high)+' | 快照 '+fmtTime(d.generated_at)+' | OKX 1m close '+(okxLatestClose?fmtPrice(okxLatestClose):'不可用');document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent=fmtAmt(d.long_total);document.getElementById('cardShort').textContent=fmtAmt(d.short_total);document.getElementById('cardTime').textContent=fmtTime(d.generated_at);draw();}
 window.addEventListener('resize',draw);initTheme();loadStatus();loadMap();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){}})();setInterval(loadStatus,5000);
