@@ -3949,15 +3949,84 @@ func (a *App) handleKlinesAPI(w http.ResponseWriter, r *http.Request) {
 	if endTS > 0 {
 		url += fmt.Sprintf("&endTime=%d", endTS)
 	}
+	source := "binance:" + binInterval
 	if err := a.fetchJSON(url, &rows); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+		okxRows, okxSource, okxErr := a.fetchOKXKlines(binInterval, limit, startTS, endTS)
+		if okxErr != nil {
+			http.Error(w, "binance klines failed: "+err.Error()+"; okx fallback failed: "+okxErr.Error(), http.StatusBadGateway)
+			return
+		}
+		rows = okxRows
+		source = okxSource
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"interval": interval,
-		"source":   binInterval,
+		"source":   source,
 		"rows":     rows,
 	})
+}
+
+func (a *App) fetchOKXKlines(interval string, limit int, startTS, endTS int64) ([][]any, string, error) {
+	bar := okxKlineBar(interval)
+	if bar == "" {
+		return nil, "", fmt.Errorf("unsupported okx interval %q", interval)
+	}
+	var resp struct {
+		Code string     `json:"code"`
+		Msg  string     `json:"msg"`
+		Data [][]string `json:"data"`
+	}
+	url := fmt.Sprintf("https://www.okx.com/api/v5/market/candles?instId=ETH-USDT-SWAP&bar=%s&limit=%d", url.QueryEscape(bar), limit)
+	if startTS > 0 {
+		url += fmt.Sprintf("&after=%d", startTS)
+	}
+	if endTS > 0 {
+		url += fmt.Sprintf("&before=%d", endTS)
+	}
+	if err := a.fetchJSON(url, &resp); err != nil {
+		return nil, "", err
+	}
+	if resp.Code != "" && resp.Code != "0" {
+		return nil, "", fmt.Errorf("okx returned %s: %s", resp.Code, resp.Msg)
+	}
+	rows := make([][]any, 0, len(resp.Data))
+	for i := len(resp.Data) - 1; i >= 0; i-- {
+		r := resp.Data[i]
+		if len(r) < 5 {
+			continue
+		}
+		rows = append(rows, []any{r[0], r[1], r[2], r[3], r[4]})
+	}
+	return rows, "okx:" + bar, nil
+}
+
+func okxKlineBar(interval string) string {
+	switch interval {
+	case "1m":
+		return "1m"
+	case "5m":
+		return "5m"
+	case "15m":
+		return "15m"
+	case "30m":
+		return "30m"
+	case "1h":
+		return "1H"
+	case "4h":
+		return "4H"
+	case "8h":
+		return "6H"
+	case "12h":
+		return "12H"
+	case "1d":
+		return "1D"
+	case "3d":
+		return "3D"
+	case "1w":
+		return "1W"
+	default:
+		return ""
+	}
 }
 
 func (a *App) handleOKXLatestCloseAPI(w http.ResponseWriter, r *http.Request) {
@@ -5778,14 +5847,14 @@ const channelHTML = `<!doctype html>
 <body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel" class="active">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel"><h2 style="margin-top:0">Telegram 消息通道</h2><div class="small">配置 Telegram 机器人与频道，系统将按设定间隔发送通知。</div><label class="switch-row"><span><strong>启用自动推送</strong><div class="small">默认关闭；开启后按通知间隔推送清算热区速报。</div></span><input id="notify-enabled" type="checkbox"></label><div style="margin-top:14px"><label>Telegram Bot Token</label><input id="token" autocomplete="off" placeholder="123456:ABC..."></div><div style="margin-top:14px"><label>Telegram Channel / Chat ID</label><input id="channel" autocomplete="off" placeholder="@mychannel 或 -100123456789"></div><div style="margin-top:14px"><label>通知间隔（分钟）</label><input id="notify-interval" type="number" min="1" step="1" placeholder="15"></div><div style="margin-top:16px" class="row"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="testTelegram()">测试发送</button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
 <script>
-let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawEnabled={{.NotifyEnabled}};
+let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawEnabled={{.NotifyEnabled}},tokenDirty=false,channelDirty=false;
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
-function syncInputs(){const t=document.getElementById('token'),c=document.getElementById('channel'),n=document.getElementById('notify-interval'),e=document.getElementById('notify-enabled');t.value=rawToken||'';c.value=rawChannel||'';n.value=rawInterval||15;e.checked=!!rawEnabled;}function currentValue(i){return i?String(i.value||''):'';}syncInputs();initTheme();
+function maskInput(v){v=String(v||'');if(!v)return '';if(v.length<=8)return '*'.repeat(v.length);return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}function syncInputs(){const t=document.getElementById('token'),c=document.getElementById('channel'),n=document.getElementById('notify-interval'),e=document.getElementById('notify-enabled');if(!tokenDirty)t.value=maskInput(rawToken);if(!channelDirty)c.value=maskInput(rawChannel);n.value=rawInterval||15;e.checked=!!rawEnabled;}function currentValue(i,raw,dirty){return dirty?(i?String(i.value||''):''):raw;}document.getElementById('token').addEventListener('input',()=>{tokenDirty=true});document.getElementById('channel').addEventListener('input',()=>{channelDirty=true});syncInputs();initTheme();
 async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
-async function save(){const n=document.getElementById('notify-interval');const iv=Math.max(1,Number((n&&n.value)||rawInterval||15)|0);const body={telegram_bot_token:currentValue(document.getElementById('token')),telegram_channel:currentValue(document.getElementById('channel')),notify_interval_min:iv,notify_enabled:document.getElementById('notify-enabled').checked};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=iv;rawEnabled=body.notify_enabled;syncInputs();document.getElementById('msg').textContent='保存成功';}else{document.getElementById('msg').textContent='保存失败';}}
+async function save(){const n=document.getElementById('notify-interval');const iv=Math.max(1,Number((n&&n.value)||rawInterval||15)|0);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken,tokenDirty),telegram_channel:currentValue(document.getElementById('channel'),rawChannel,channelDirty),notify_interval_min:iv,notify_enabled:document.getElementById('notify-enabled').checked};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=iv;rawEnabled=body.notify_enabled;tokenDirty=false;channelDirty=false;syncInputs();document.getElementById('msg').textContent='保存成功';}else{document.getElementById('msg').textContent='保存失败';}}
 async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='正在发送测试消息...';const r=await fetch('/api/channel/test',{method:'POST'});msg.textContent=r.ok?'测试发送成功':('测试发送失败: '+await r.text());}
 </script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
@@ -5840,7 +5909,7 @@ const bubblesHTML = `<!doctype html>
 <body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles" class="active">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel"><div class="row"><span>周期</span><select id="iv"><option value="1m">1M</option><option value="2m">2M</option><option value="5m" selected>5M</option><option value="10m">10M</option><option value="15m">15M</option><option value="30m">30M</option><option value="1h">1H</option><option value="4h">4H</option><option value="8h">8H</option><option value="12h">12H</option><option value="1d">1D</option><option value="3d">3D</option><option value="7d">7D</option></select><button onclick="load()">刷新</button><span class="small">过滤小单 ETH 数量</span><input id="qtyFilter" type="number" min="0" step="0.1" value="50"><button id="filterBtn" onclick="applyQtyFilter()">应用过滤</button><label class="small" style="display:inline-flex;align-items:center;gap:6px;margin-left:6px"><input id="hist" type="checkbox">历史</label><button id="moreBtn" style="display:none" onclick="loadMoreHistory()">向左加载</button><span id="meta" class="small"></span></div><div class="chart-wrap"><canvas id="cv" class="chart" width="1600" height="620"></canvas><div id="bubbleTip" class="bubble-tip"></div></div><div class="legend small"><div>气泡大小代表清算金额，颜色代表多空方向。滚轮缩放（默认以最右侧K线为锚点），按住鼠标左键左右拖动。</div><div class="tag"><span class="dot" style="background:#dc2626"></span><span>红色=多单爆仓</span><span class="dot" style="margin-left:10px;background:#16a34a"></span><span>绿色=空单爆仓</span></div></div></div></div>
 <script>
-let candles=[],events=[],viewStart=0,viewCount=120,drag=false,lastX=0,intervalMs=0,latestStart=0,qtyFilter=50,filterApplied=false,bubbleHoverMeta=[];
+let candles=[],events=[],viewStart=0,viewCount=120,drag=false,lastX=0,intervalMs=0,latestStart=0,qtyFilter=50,filterApplied=false,bubbleHoverMeta=[],klineSource='-';
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
 function intervalToMs(iv){switch(String(iv||'')){case '1m':return 60e3;case '2m':return 120e3;case '5m':return 300e3;case '10m':return 600e3;case '15m':return 900e3;case '30m':return 1800e3;case '1h':return 3600e3;case '4h':return 14400e3;case '8h':return 28800e3;case '12h':return 43200e3;case '1d':return 86400e3;case '3d':return 3*86400e3;case '7d':return 7*86400e3;default:return 0;}}
@@ -5850,7 +5919,8 @@ function mapInterval(v){if(v==='10m')return '5m';if(v==='7d')return '1w';return 
 function visibleEvents(){return (events||[]).filter(ev=>toNum(ev.qty)>=qtyFilter);}
 function syncFilterBtn(){const btn=document.getElementById('filterBtn');if(btn)btn.classList.toggle('btn-applied',!!filterApplied);}
 function applyQtyFilter(){const input=document.getElementById('qtyFilter');qtyFilter=Math.max(0,toNum(input&&input.value));if(input)input.value=String(qtyFilter);filterApplied=true;syncFilterBtn();draw();updateMeta();}
-function updateMeta(){const meta=document.getElementById('meta');if(!meta)return;meta.textContent='K线来源: '+((document.getElementById('iv')&&document.getElementById('iv').value)||'-')+' | 区间清算事件 '+visibleEvents().length+' 条 | 已过滤小于 '+qtyFilter+' ETH';}
+function updateMeta(){const meta=document.getElementById('meta');if(!meta)return;meta.textContent='K线来源: '+(klineSource||((document.getElementById('iv')&&document.getElementById('iv').value)||'-'))+' | 区间清算事件 '+visibleEvents().length+' 条 | 已过滤小于 '+qtyFilter+' ETH';}
+function drawMessage(msg){const v=fit(),x=v.x,W=v.w,H=v.h;x.clearRect(0,0,W,H);x.fillStyle=cssVar('--panel-bg','#fff');x.fillRect(0,0,W,H);x.fillStyle=cssVar('--muted','#64748b');x.font='14px sans-serif';x.fillText(msg,16,26);}
 function fmtAmt(n){n=toNum(n);if(!isFinite(n))return '-';return n.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function fmtQty(n){return toNum(n).toLocaleString('zh-CN',{maximumFractionDigits:4});}
 function fmtPrice(n){return toNum(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1});}
@@ -5910,8 +5980,8 @@ x.fillStyle=muted;for(let i=0;i<=6;i++){const k=Math.floor((cs.length-1)*i/6),px
 function uniqByT(list){const out=[];const seen=new Set();for(const it of (list||[])){const t=toNum(it.t);if(!t||seen.has(t))continue;seen.add(t);out.push(it);}out.sort((a,b)=>a.t-b.t);return out;}
 function mergeEvents(a,b){const out=[];const key=(e)=>String(toNum(e.event_ts))+'|'+String(e.exchange||'')+'|'+String(e.side||'')+'|'+String(toNum(e.price))+'|'+String(toNum(e.qty));const seen=new Set();for(const it of (a||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}for(const it of (b||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}out.sort((x,y)=>toNum(x.event_ts)-toNum(y.event_ts));return out;}
 function setMoreBtnVisible(){const cb=document.getElementById('hist');const b=document.getElementById('moreBtn');if(!cb||!b)return;b.style.display=cb.checked?'inline-block':'none';}
-async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');const kd=await kr.json();candles=uniqByT(parseRows(kd.rows||[],iv));intervalMs=(candles.length>=2)?Math.max(0,toNum(candles[candles.length-1].t)-toNum(candles[candles.length-2].t)):intervalToMs(iv);if(!(intervalMs>0))intervalMs=intervalToMs(iv);latestStart=candles.length?toNum(candles[candles.length-1].t):0;events=[];if(candles.length){const startTS=toNum(candles[0].t);const endTS=latestStart+(intervalMs>0?intervalMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];}viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);setMoreBtnVisible();updateMeta();draw();}
-async function loadMoreHistory(){const cb=document.getElementById('hist');if(!cb||!cb.checked)return;if(!candles.length)return;const iv=document.getElementById('iv').value;const endTS=Math.max(0,toNum(candles[0].t)-1);const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500&end_ts='+encodeURIComponent(endTS));const kd=await kr.json();const more=uniqByT(parseRows(kd.rows||[],iv));if(!more.length){document.getElementById('meta').textContent='没有更多历史K线';return;}const added=more.filter(x=>toNum(x.t)<toNum(candles[0].t));if(!added.length){document.getElementById('meta').textContent='没有更多历史K线';return;}candles=uniqByT(added.concat(candles));const spanMs=(intervalMs>0?intervalMs:intervalToMs(iv));const startTS=toNum(added[0].t),endTS2=toNum(added[added.length-1].t)+(spanMs>0?spanMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS2));const ed=await er.json();events=mergeEvents(ed.rows||[],events);viewStart=Math.max(0,viewStart+added.length);updateMeta();draw();}
+async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');if(!kr.ok){const msg='K线加载失败: '+await kr.text();candles=[];events=[];klineSource='-';updateMeta();drawMessage(msg);return;}const kd=await kr.json();klineSource=kd.source||iv;candles=uniqByT(parseRows(kd.rows||[],iv));if(!candles.length){events=[];updateMeta();drawMessage('K线加载失败: 返回数据为空');return;}intervalMs=(candles.length>=2)?Math.max(0,toNum(candles[candles.length-1].t)-toNum(candles[candles.length-2].t)):intervalToMs(iv);if(!(intervalMs>0))intervalMs=intervalToMs(iv);latestStart=candles.length?toNum(candles[candles.length-1].t):0;events=[];if(candles.length){const startTS=toNum(candles[0].t);const endTS=latestStart+(intervalMs>0?intervalMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];}viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);setMoreBtnVisible();updateMeta();draw();}
+async function loadMoreHistory(){const cb=document.getElementById('hist');if(!cb||!cb.checked)return;if(!candles.length)return;const iv=document.getElementById('iv').value;const endTS=Math.max(0,toNum(candles[0].t)-1);const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500&end_ts='+encodeURIComponent(endTS));if(!kr.ok){document.getElementById('meta').textContent='历史K线加载失败: '+await kr.text();return;}const kd=await kr.json();klineSource=kd.source||klineSource;const more=uniqByT(parseRows(kd.rows||[],iv));if(!more.length){document.getElementById('meta').textContent='没有更多历史K线';return;}const added=more.filter(x=>toNum(x.t)<toNum(candles[0].t));if(!added.length){document.getElementById('meta').textContent='没有更多历史K线';return;}candles=uniqByT(added.concat(candles));const spanMs=(intervalMs>0?intervalMs:intervalToMs(iv));const startTS=toNum(added[0].t),endTS2=toNum(added[added.length-1].t)+(spanMs>0?spanMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS2));const ed=await er.json();events=mergeEvents(ed.rows||[],events);viewStart=Math.max(0,viewStart+added.length);updateMeta();draw();}
 const c=document.getElementById('cv');c.addEventListener('wheel',e=>{if(!candles.length)return;e.preventDefault();const right=Math.min(candles.length,viewStart+viewCount);const factor=e.deltaY<0?0.88:1.12;const nextCount=Math.max(30,Math.min(candles.length,Math.round(viewCount*factor)));viewCount=nextCount;viewStart=Math.max(0,Math.min(candles.length-viewCount,right-viewCount));draw();},{passive:false});c.addEventListener('mousedown',e=>{drag=true;lastX=e.clientX});c.addEventListener('mousemove',e=>{const rect=c.getBoundingClientRect();const mx=e.clientX-rect.left,my=e.clientY-rect.top;let hit=null,dist=1e18;for(const it of bubbleHoverMeta){const d=Math.hypot(mx-it.px,my-it.py);if(d<=it.r+3&&d<dist){dist=d;hit=it.event;}}if(hit)showBubbleTip(hit,e);else hideBubbleTip();});c.addEventListener('mouseleave',()=>hideBubbleTip());window.addEventListener('mouseup',()=>drag=false);window.addEventListener('mousemove',e=>{if(!drag||!candles.length)return;const dx=e.clientX-lastX;lastX=e.clientX;const shift=Math.round(-dx/8);if(shift!==0){viewStart=Math.max(0,Math.min(candles.length-viewCount,viewStart+shift));draw();}});window.addEventListener('resize',()=>draw());document.getElementById('iv').addEventListener('change',load);document.getElementById('hist').addEventListener('change',setMoreBtnVisible);document.getElementById('qtyFilter').addEventListener('input',()=>{filterApplied=false;syncFilterBtn();});document.getElementById('qtyFilter').addEventListener('change',applyQtyFilter);
 async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}

@@ -336,6 +336,12 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) err
 		if rangeHigh == 0 && meta.RangeHigh != 0 {
 			rangeHigh = meta.RangeHigh
 		}
+		if len(points) == 0 {
+			err := errors.New("coinglass payload parsed 0 points")
+			_ = m.updateRun(runID, "failed", err.Error(), 0)
+			m.finishRunState("failed", err.Error(), 0)
+			return err
+		}
 		snapshotID, err := m.insertSnapshot(days, rangeLow, rangeHigh, payload)
 		if err != nil {
 			_ = m.updateRun(runID, "failed", err.Error(), 0)
@@ -393,7 +399,6 @@ func (m *WebDataSourceManager) captureWindow(ctx context.Context, chromePath, pr
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
 		chromedp.UserDataDir(profileDir),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.Flag("headless", true),
 		chromedp.WindowSize(1440, 900),
 	)
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
@@ -732,7 +737,10 @@ func (m *WebDataSourceManager) loadLatestMap(window string) WebDataSourceMapResp
 	}
 	var snap WebDataSourceSnapshotMeta
 	err := m.app.db.QueryRow(`SELECT id, symbol, window_days, captured_at, range_low, range_high
-		FROM webdatasource_snapshots WHERE symbol='ETH' AND window_days=? ORDER BY captured_at DESC LIMIT 1`, windowDays).
+		FROM webdatasource_snapshots
+		WHERE symbol='ETH' AND window_days=?
+			AND EXISTS (SELECT 1 FROM webdatasource_points WHERE snapshot_id=webdatasource_snapshots.id LIMIT 1)
+		ORDER BY captured_at DESC LIMIT 1`, windowDays).
 		Scan(&snap.ID, &snap.Symbol, &snap.WindowDays, &snap.CapturedAt, &snap.RangeLow, &snap.RangeHigh)
 	if err != nil {
 		status := m.loadStatus()
@@ -976,6 +984,7 @@ return Array.from(groups.values()).sort((a,b)=>a.price-b.price);
 }
 function dominantExchange(g){let best='other',bestVal=0;for(const ex of stackOrder){const v=Number((g.parts||{})[ex]||0);if(v>bestVal){best=ex;bestVal=v;}}return best;}
 function topStackLabels(groups){const out=[];for(const side of ['long','short']){out.push(...groups.filter(g=>g.side===side).sort((a,b)=>b.total-a.total).slice(0,3));}return out;}
+function sideGroupsForClose(groups,close){if(!(close>0))return groups;return groups.filter(g=>(g.side==='long'&&g.price<=close)||(g.side==='short'&&g.price>=close));}
 const sideLabelStyle={long:{bg:'rgba(220,252,231,0.96)',stroke:'rgba(22,163,74,0.96)',text:'rgba(21,128,61,0.98)',line:'rgba(22,163,74,0.92)'},short:{bg:'rgba(252,231,243,0.96)',stroke:'rgba(219,39,119,0.96)',text:'rgba(190,24,93,0.98)',line:'rgba(219,39,119,0.92)'}};
 function rectsOverlap(a,b,pad=4){return !(a.x+a.w+pad<b.x||b.x+b.w+pad<a.x||a.y+a.h+pad<b.y||b.y+b.h+pad<a.y);}
 function placeLabel(px,py,bw,bh,W,H,padB,occupied){
@@ -985,7 +994,7 @@ let r={x:Math.max(6,Math.min(px+8,W-6-bw)),y:Math.max(6,Math.min(py-54,H-padB-bh
 occupied.push(r);return r;
 }
 function drawCumulativeLine(x,groups,side,sx,padT,by,minP,maxP){
-const arr=groups.filter(g=>g.side===side&&g.price>=minP&&g.price<=maxP&&g.total>0).sort((a,b)=>a.price-b.price);
+const arr=groups.filter(g=>g.side===side&&g.price>=minP&&g.price<=maxP&&g.total>0).sort((a,b)=>side==='long'?b.price-a.price:a.price-b.price);
 if(arr.length<2)return;
 let run=0;const pts=arr.map(g=>{run+=g.total;return{price:g.price,total:run};});
 const maxCum=Math.max(1,pts[pts.length-1].total);
@@ -995,21 +1004,21 @@ x.stroke();x.setLineDash([]);x.restore();
 }
 async function loadStatus(){const d=await fetch('/api/webdatasource/status').then(r=>r.json()).catch(()=>null);if(!d)return;document.getElementById('intervalMin').value=d.interval_min||15;document.getElementById('chromePath').value=d.chrome_path||'';document.getElementById('profileDir').value=d.profile_dir||'';document.getElementById('statusBox').textContent='运行中: '+(d.running?'是':'否')+' | 默认间隔 '+(d.interval_min||15)+' 分钟 | 最近成功 '+fmtTime(d.last_success_ts)+' | 最近错误 '+(d.last_error||'-');document.getElementById('runState').textContent=d.running?'抓取中':'空闲';const body=document.getElementById('runsBody');body.innerHTML='';for(const it of (d.recent_runs||[])){const err=escHTML(it.error_message||'-');const tr=document.createElement('tr');tr.innerHTML='<td>'+it.id+'</td><td>'+it.window_days+'天</td><td>'+escHTML(it.status)+'</td><td>'+it.records_count+'</td><td>'+fmtTime(it.started_at)+'</td><td title="'+err+'">'+err+'</td>';body.appendChild(tr);}}
 async function saveSettings(){const body={interval_min:Number(document.getElementById('intervalMin').value||15),chrome_path:document.getElementById('chromePath').value||'',profile_dir:document.getElementById('profileDir').value||''};const r=await fetch('/api/webdatasource/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('saveMsg').textContent=r.ok?'保存成功':'保存失败';loadStatus();}
-async function runNow(){const raw=document.getElementById('runWindow').value;const body=raw?{window_days:Number(raw)}:{};const r=await fetch('/api/webdatasource/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('saveMsg').textContent=r.ok?'已触发抓取':('触发失败: '+await r.text());loadStatus();}
+async function runNow(){const raw=document.getElementById('runWindow').value;const body=raw?{window_days:Number(raw)}:{};const msg=document.getElementById('saveMsg');const r=await fetch('/api/webdatasource/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok){msg.textContent='触发失败: '+await r.text();loadStatus();return;}msg.textContent='已触发，等待结果...';for(let i=0;i<120;i++){await new Promise(res=>setTimeout(res,1000));const d=await fetch('/api/webdatasource/status').then(x=>x.json()).catch(()=>null);if(!d)continue;await loadStatus();if(!d.running){const lr=d.last_run||{};if(String(lr.status)==='success'&&Number(lr.records_count||0)>0){msg.textContent='抓取成功: '+lr.records_count+' 条';loadMap();}else{msg.textContent='抓取失败: '+(lr.error_message||d.last_error||('记录数 '+(lr.records_count||0)));}return;}}msg.textContent='抓取仍在进行，请稍后查看最近运行';}
 async function loadOKXClose(){const d=await fetch('/api/okx/latest-close').then(r=>r.ok?r.json():null).catch(()=>null);okxLatestClose=Number(d&&d.close||0)||0;}
 function draw(){
 const c=document.getElementById('cv'),x=c.getContext('2d');const rect=c.getBoundingClientRect(),dpr=window.devicePixelRatio||1;const W=Math.max(760,Math.floor(rect.width)),H=Math.max(420,Math.floor(rect.height));c.width=W*dpr;c.height=H*dpr;x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);
-if(!currentMap||!currentMap.has_data||!(currentMap.points||[]).length){x.fillStyle='#64748b';x.font='14px sans-serif';x.fillText('暂无抓取数据',20,24);return;}
-const pts=currentMap.points||[],groups=buildStackGroups(pts);const minP=Number(currentMap.range_low||Math.min(...pts.map(p=>Number(p.price||0))));const maxP=Number(currentMap.range_high||Math.max(...pts.map(p=>Number(p.price||0))));const span=Math.max(1e-6,maxP-minP),padL=70,padR=20,padT=20,padB=40,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;const maxV=Math.max(1,...groups.map(g=>Number(g.total||0)));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxV)*ph*0.86;
+if(!currentMap||!currentMap.has_data||!(currentMap.points||[]).length){x.fillStyle='#64748b';x.font='14px sans-serif';x.fillText('暂无有效抓取点位',20,24);return;}
+const pts=currentMap.points||[],allGroups=buildStackGroups(pts);const minP=Number(currentMap.range_low||Math.min(...pts.map(p=>Number(p.price||0))));const maxP=Number(currentMap.range_high||Math.max(...pts.map(p=>Number(p.price||0))));const span=Math.max(1e-6,maxP-minP),padL=70,padR=20,padT=20,padB=40,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;const cp=Number(currentMap.current_price||0),close=Number(okxLatestClose||0)>0?Number(okxLatestClose):cp;const groups=sideGroupsForClose(allGroups,close);const maxV=Math.max(1,...groups.map(g=>Number(g.total||0)));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxV)*ph*0.86;
 x.strokeStyle='#e5e7eb';x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4);const val=maxV*(1-i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#64748b';x.fillText(fmtAmt(val),6,y+4);}
 const priceCount=new Set(groups.map(g=>String(Number(g.price||0).toFixed(4)))).size||groups.length;const barW=Math.max(2,Math.min(10,pw/Math.max(80,priceCount*1.35)));
 for(const g of groups){const px=sx(g.price);let acc=0;for(const ex of stackOrder){const val=Number((g.parts||{})[ex]||0);if(!(val>0))continue;const y0=sy(acc),y1=sy(acc+val),h=Math.max(1,y0-y1),st=exStyle[ex]||exStyle.other;x.fillStyle=st.fill;x.strokeStyle=st.stroke;x.fillRect(px-barW/2,y1,barW,h);x.strokeRect(px-barW/2,y1,barW,h);acc+=val;}}
 drawCumulativeLine(x,groups,'long',sx,padT,by,minP,maxP);drawCumulativeLine(x,groups,'short',sx,padT,by,minP,maxP);
 x.fillStyle='#64748b';for(let i=0;i<=6;i++){const p=minP+span*(i/6),px=sx(p),label=fmtPrice(p),lw=x.measureText(label).width;x.fillText(label,Math.max(padL,Math.min(px-lw/2,W-padR-lw)),H-10);}
-const cp=Number(currentMap.current_price||0);if(cp>0){const cpx=sx(cp);x.strokeStyle='#111827';x.setLineDash([6,4]);x.beginPath();x.moveTo(cpx,padT);x.lineTo(cpx,by);x.stroke();x.setLineDash([]);}
-const close=Number(okxLatestClose||0)>0?Number(okxLatestClose):cp;const labels=topStackLabels(groups);x.font='bold 12px sans-serif';
+if(close>0){const cpx=sx(close);x.strokeStyle='#111827';x.setLineDash([6,4]);x.beginPath();x.moveTo(cpx,padT);x.lineTo(cpx,by);x.stroke();x.setLineDash([]);}
+const labels=topStackLabels(groups);x.font='bold 12px sans-serif';
 const occupied=[];for(const g of labels){const price=Number(g.price||0),val=Number(g.total||0);if(!(price>=minP&&price<=maxP&&val>0))continue;const px=sx(price),py=sy(val);const pct=close>0?((price-close)/close*100):0;const lines=['$'+fmtPrice(price),fmtYi(val),(pct>=0?'+':'')+pct.toFixed(2)+'%'];const st=sideLabelStyle[g.side]||sideLabelStyle.long;let tw=0;for(const s of lines)tw=Math.max(tw,x.measureText(s).width);const bw=tw+10,bh=48;const r=placeLabel(px,py,bw,bh,W,H,padB,occupied);x.fillStyle=st.bg;x.strokeStyle=st.stroke;x.lineWidth=1;x.fillRect(r.x,r.y,r.w,r.h);x.strokeRect(r.x,r.y,r.w,r.h);x.fillStyle=st.text;for(let i=0;i<lines.length;i++)x.fillText(lines[i],r.x+5,r.y+15+i*14);}
 }
-async function loadMap(){const window=document.getElementById('windowSel').value;await loadOKXClose();const d=await fetch('/api/webdatasource/map?window='+encodeURIComponent(window)).then(r=>r.json()).catch(()=>null);currentMap=d;if(!d||!d.has_data){document.getElementById('chartMeta').textContent='暂无成功抓取快照'+(d&&d.last_error?(' | 最近错误: '+d.last_error):'');document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent='-';document.getElementById('cardShort').textContent='-';document.getElementById('cardTime').textContent='-';draw();return;}document.getElementById('chartMeta').textContent='窗口 '+window.toUpperCase()+' | 价格区间 '+fmtPrice(d.range_low)+' - '+fmtPrice(d.range_high)+' | 快照 '+fmtTime(d.generated_at)+' | OKX 1m close '+(okxLatestClose?fmtPrice(okxLatestClose):'不可用');document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent=fmtAmt(d.long_total);document.getElementById('cardShort').textContent=fmtAmt(d.short_total);document.getElementById('cardTime').textContent=fmtTime(d.generated_at);draw();}
+async function loadMap(){const window=document.getElementById('windowSel').value;await loadOKXClose();const d=await fetch('/api/webdatasource/map?window='+encodeURIComponent(window)).then(r=>r.json()).catch(()=>null);currentMap=d;if(!d||!d.has_data||!(d.points||[]).length){document.getElementById('chartMeta').textContent='暂无有效抓取点位'+(d&&d.last_error?(' | 最近错误: '+d.last_error):'');document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent='-';document.getElementById('cardShort').textContent='-';document.getElementById('cardTime').textContent='-';draw();return;}document.getElementById('chartMeta').textContent='窗口 '+window.toUpperCase()+' | 价格区间 '+fmtPrice(d.range_low)+' - '+fmtPrice(d.range_high);document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent=fmtAmt(d.long_total);document.getElementById('cardShort').textContent=fmtAmt(d.short_total);document.getElementById('cardTime').textContent=fmtTime(d.generated_at);draw();}
 window.addEventListener('resize',draw);initTheme();loadStatus();loadMap();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){}})();setInterval(loadStatus,5000);
 </script></body></html>`
