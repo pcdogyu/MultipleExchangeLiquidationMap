@@ -255,6 +255,11 @@ type ChannelSettings struct {
 	NotifyEnabled     bool   `json:"notify_enabled"`
 }
 
+type ManagedUser struct {
+	Email   string `json:"email"`
+	IsAdmin bool   `json:"is_admin"`
+}
+
 func getenv(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
@@ -373,19 +378,23 @@ func initDB(db *sql.DB) error {
 			payload_json TEXT NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_webdatasource_snapshots_key_ts ON webdatasource_snapshots(symbol, window_days, captured_at);`,
-		`CREATE TABLE IF NOT EXISTS webdatasource_points (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			snapshot_id INTEGER NOT NULL,
-			symbol TEXT NOT NULL,
-			window_days INTEGER NOT NULL,
+			`CREATE TABLE IF NOT EXISTS webdatasource_points (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				snapshot_id INTEGER NOT NULL,
+				symbol TEXT NOT NULL,
+				window_days INTEGER NOT NULL,
 			side TEXT NOT NULL,
 			exchange TEXT NOT NULL,
 			price REAL NOT NULL,
-			liq_value REAL NOT NULL,
-			captured_at INTEGER NOT NULL
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_webdatasource_points_snapshot_id ON webdatasource_points(snapshot_id);`,
-	}
+				liq_value REAL NOT NULL,
+				captured_at INTEGER NOT NULL
+			);`,
+			`CREATE INDEX IF NOT EXISTS idx_webdatasource_points_snapshot_id ON webdatasource_points(snapshot_id);`,
+			`CREATE TABLE IF NOT EXISTS users (
+				email TEXT PRIMARY KEY,
+				is_admin INTEGER NOT NULL DEFAULT 0
+			);`,
+		}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
 			return err
@@ -484,6 +493,7 @@ func main() {
 	mux.HandleFunc("/bubbles", app.handleBubbles)
 	mux.HandleFunc("/webdatasource", app.handleWebDataSource)
 	mux.HandleFunc("/channel", app.handleChannel)
+	mux.HandleFunc("/users", app.handleUsersPage)
 	mux.HandleFunc("/api/dashboard", app.handleDashboard)
 	mux.HandleFunc("/api/model/liquidation-map", app.handleModelLiquidationMap)
 	mux.HandleFunc("/api/model-config", app.handleModelConfig)
@@ -495,8 +505,10 @@ func main() {
 	mux.HandleFunc("/api/coinglass/map", app.handleCoinGlassMap)
 	mux.HandleFunc("/api/window", app.handleWindow)
 	mux.HandleFunc("/api/settings", app.handleSettings)
+	mux.HandleFunc("/api/users", app.handleUsersAPI)
 	mux.HandleFunc("/api/channel/test", app.handleChannelTest)
 	mux.HandleFunc("/api/upgrade/pull", app.handleUpgradePull)
+	mux.HandleFunc("/api/upgrade/restart", app.handleUpgradeRestart)
 	mux.HandleFunc("/api/upgrade/progress", app.handleUpgradeProgress)
 	mux.HandleFunc("/api/version", app.handleVersion)
 	mux.HandleFunc("/api/price-events", app.handlePriceEvents)
@@ -577,6 +589,84 @@ func (a *App) handleChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	tpl := template.Must(template.New("channel").Parse(channelHTML))
 	_ = tpl.Execute(w, a.loadSettings())
+}
+
+func (a *App) handleUsersPage(w http.ResponseWriter, r *http.Request) {
+	if a.debug {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	tpl := template.Must(template.New("users").Parse(usersHTML))
+	_ = tpl.Execute(w, nil)
+}
+
+func (a *App) handleUsersAPI(w http.ResponseWriter, r *http.Request) {
+	if a.debug {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	switch r.Method {
+	case http.MethodGet:
+		users, err := a.loadUsers()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"users": users})
+	case http.MethodPost:
+		var req struct {
+			Users []ManagedUser `json:"users"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		tx, err := a.db.Begin()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer func() {
+			_ = tx.Rollback()
+		}()
+		if _, err := tx.Exec(`DELETE FROM users`); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		stmt, err := tx.Prepare(`INSERT INTO users(email, is_admin) VALUES(?, ?)`)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer stmt.Close()
+
+		for _, u := range req.Users {
+			email := strings.ToLower(strings.TrimSpace(u.Email))
+			if email == "" {
+				continue
+			}
+			isAdmin := 0
+			if u.IsAdmin {
+				isAdmin = 1
+			}
+			if _, err := stmt.Exec(email, isAdmin); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		users, err := a.loadUsers()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"users": users})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (a *App) handleWindow(w http.ResponseWriter, r *http.Request) {
@@ -769,6 +859,33 @@ func (a *App) getSettingFloat(key string, fallback float64) float64 {
 func (a *App) setSetting(key, value string) error {
 	_, err := a.db.Exec(`INSERT INTO app_settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
+}
+
+func (a *App) loadUsers() ([]ManagedUser, error) {
+	rows, err := a.db.Query(`SELECT email, is_admin FROM users ORDER BY email`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	users := make([]ManagedUser, 0)
+	for rows.Next() {
+		var (
+			email   string
+			isAdmin int
+		)
+		if err := rows.Scan(&email, &isAdmin); err != nil {
+			return nil, err
+		}
+		users = append(users, ManagedUser{
+			Email:   email,
+			IsAdmin: isAdmin == 1,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return users, nil
 }
 
 func (a *App) loadModelMapSnapshot(symbol string, windowDays int, configRev int64) (map[string]any, bool) {
@@ -1542,11 +1659,31 @@ func (a *App) handleUpgradePull(w http.ResponseWriter, r *http.Request) {
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-	go func() {
+		go func() {
 		// Use systemd-run --scope so the upgrade process survives `systemctl restart liqmap.service`
 		// without creating a liqmap-upgrade.service unit.
 		upgradeCmd := exec.Command("bash", "-lc", "rm -f /tmp/liqmap-upgrade.exit /tmp/liqmap-upgrade.pid /tmp/liqmap-upgrade.unit; : >/tmp/liqmap-upgrade.log; unit=liqmap-upgrade.scope; echo \"$unit\" > /tmp/liqmap-upgrade.unit; systemd-run --scope --collect --no-block --unit=liqmap-upgrade /bin/bash -lc 'cd /opt/MultipleExchangeLiquidationMap && echo [git fetch] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git fetch --all --prune\" && git fetch --all --prune && echo [git reset] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git reset --hard origin/golang\" && git reset --hard origin/golang && echo [go build] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# go build -o multipleexchangeliquidationmap.exe .\" && go build -o multipleexchangeliquidationmap.exe . && echo [restart service] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl restart liqmap.service\" && systemctl restart liqmap.service && echo [service status] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl status liqmap.service --no-pager\" && systemctl status liqmap.service --no-pager; ec=$?; echo $ec >/tmp/liqmap-upgrade.exit' >>/tmp/liqmap-upgrade.log 2>&1")
 		_, _ = upgradeCmd.CombinedOutput()
+	}()
+}
+
+func (a *App) handleUpgradeRestart(w http.ResponseWriter, r *http.Request) {
+	if a.debug {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"output": "restart queued",
+	})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	go func() {
+		_ = exec.Command("bash", "-lc", "systemctl restart liqmap.service").Run()
 	}()
 }
 
@@ -5856,6 +5993,35 @@ function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 async function save(){const n=document.getElementById('notify-interval');const iv=Math.max(1,Number((n&&n.value)||rawInterval||15)|0);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken,tokenDirty),telegram_channel:currentValue(document.getElementById('channel'),rawChannel,channelDirty),notify_interval_min:iv,notify_enabled:document.getElementById('notify-enabled').checked};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=iv;rawEnabled=body.notify_enabled;tokenDirty=false;channelDirty=false;syncInputs();document.getElementById('msg').textContent='保存成功';}else{document.getElementById('msg').textContent='保存失败';}}
 async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='正在发送测试消息...';const r=await fetch('/api/channel/test',{method:'POST'});msg.textContent=r.ok?'测试发送成功':('测试发送失败: '+await r.text());}
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+
+const usersHTML = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>用户管理</title>
+<style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu{display:flex;align-items:center;flex-wrap:wrap}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.admin-state{font-size:12px;color:#9ca3af}.wrap{max-width:980px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.small{font-size:12px;color:#6b7280}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}.btn.primary{background:#22c55e;color:#fff;border-color:#22c55e}.btn.secondary{background:#fff}.table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:center;font-size:13px}td input{width:100%;box-sizing:border-box;padding:8px;border:1px solid #cbd5e1;border-radius:6px}.admin-only{display:none}.admin-toolbar{display:flex;gap:10px;align-items:center}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/users" class="active">用户管理</a><a href="/" class="admin-only">清算热区</a><a href="/config" class="admin-only">模型配置</a><a href="/monitor" class="admin-only">雷区监控</a><a href="/map" class="admin-only">盘口汇总</a><a href="/liquidations" class="admin-only">强平清算</a><a href="/bubbles" class="admin-only">气泡图</a><a href="/webdatasource" class="admin-only">页面数据源</a><a href="/channel" class="admin-only">消息通道</a></div></div><div class="nav-right"><div class="admin-state" id="adminState"></div><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade admin-only" onclick="return doUpgrade(event)">程序升级</a><a href="#" class="upgrade admin-only" onclick="return doRestart(event)">程序重启</a></div></div>
+<div class="wrap"><div class="panel"><div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">用户管理</h2><div class="admin-toolbar"><button class="btn secondary" onclick="addRow()">新增邮箱</button><button class="btn primary" onclick="saveUsers()">保存</button><span id="msg" class="small" style="margin-left:10px"></span></div></div><div id="adminHint" class="small" style="margin-top:8px">勾选“管理员”后展示全部顶部菜单和程序升级/重启入口；取消后仅保留本页。</div><table><thead><tr><th>邮箱</th><th>管理员</th><th>操作</th></tr></thead><tbody id="userBody"></tbody></table></div></div>
+<script>
+let users=[];
+let hasAdmin=false;
+function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
+function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
+function applyAdminVisibility(){hasAdmin=(users||[]).some(u=>!!u.is_admin);document.querySelectorAll('.admin-only').forEach(el=>{el.style.display=hasAdmin?'':'none';});const st=document.getElementById('adminState');if(st){st.textContent=hasAdmin?'管理员模式：显示全部菜单':'仅用户管理';}}
+function renderUsers(){const tb=document.getElementById('userBody');if(!tb)return;tb.innerHTML='';if(!Array.isArray(users)||!users.length){tb.innerHTML='<tr><td colspan="3">暂无邮箱配置</td></tr>';applyAdminVisibility();return;}for(let i=0;i<users.length;i++){const u=users[i];const email=(u.email||'').trim();const checked=!!u.is_admin;tb.insertAdjacentHTML('beforeend','<tr data-index="'+i+'"><td><input class="email-input" data-index="'+i+'" value="'+escapeHtml(email)+'" placeholder="name@example.com"></td><td><input type="checkbox" class="admin-input" data-index="'+i+'" '+(checked?'checked':'')+'></td><td><button class="btn secondary" onclick="removeRow('+i+')">删除</button></td></tr>');}applyAdminVisibility();}
+function escapeHtml(v){return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function collectUsers(){const out=[];const rows=document.querySelectorAll('#userBody tr');for(const r of rows){const email=((r.querySelector('.email-input')||{}).value||'').trim();if(!email)continue;const isAdmin=!!((r.querySelector('.admin-input')||{}).checked);out.push({email:email.toLowerCase(),is_admin:isAdmin});}return out;}
+function syncFromInputs(){users=collectUsers();applyAdminVisibility();}
+function addRow(){users.push({email:'',is_admin:false});renderUsers();}
+function removeRow(i){if(!Array.isArray(users)||i<0||i>=users.length)return;users.splice(i,1);renderUsers();}
+async function loadUsers(){try{const r=await fetch('/api/users');const d=await r.json();users=Array.isArray(d.users)?d.users:[];}catch(_){users=[];}renderUsers();}
+async function saveUsers(){const msg=document.getElementById('msg');const payload={users:collectUsers()};try{const r=await fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!r.ok){if(msg)msg.textContent='保存失败';return;}const d=await r.json();users=Array.isArray(d.users)?d.users:payload.users;renderUsers();if(msg)msg.textContent='保存成功';}catch(_){if(msg)msg.textContent='保存失败';}}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
+async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
+async function doRestart(event){if(event)event.preventDefault();const btn=event&&event.currentTarget;if(!hasAdmin)return false;if(btn)btn.textContent='重启中...';try{const r=await fetch('/api/upgrade/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});if(r.ok){const msg=document.getElementById('msg');if(msg)msg.textContent='已触发服务重启';}else{const msg=document.getElementById('msg');if(msg)msg.textContent='重启触发失败';}}finally{if(btn)btn.textContent='程序重启';}return false;}
+document.addEventListener('input',e=>{if(e.target&&e.target.classList&&(e.target.classList.contains('email-input')||e.target.classList.contains('admin-input'))){syncFromInputs();}});
+document.addEventListener('change',e=>{if(e.target&&e.target.classList&&e.target.classList.contains('admin-input')){syncFromInputs();}});
+initTheme();loadUsers();
+(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();
 </script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
 const configHTMLLegacy = `<!doctype html>
