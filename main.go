@@ -403,6 +403,10 @@ func initDB(db *sql.DB) error {
 	// Backward-compatible schema upgrades for existing DBs.
 	_ = ensureColumn(db, "market_state", "long_short_ratio", "REAL")
 	_ = ensureColumn(db, "oi_snapshots", "long_short_ratio", "REAL")
+	_ = ensureColumn(db, "webdatasource_runs", "source_meta_json", "TEXT NOT NULL DEFAULT ''")
+	_ = ensureColumn(db, "webdatasource_snapshots", "range_low", "REAL NOT NULL DEFAULT 0")
+	_ = ensureColumn(db, "webdatasource_snapshots", "range_high", "REAL NOT NULL DEFAULT 0")
+	_ = ensureColumn(db, "webdatasource_points", "window_days", "INTEGER NOT NULL DEFAULT 0")
 	return nil
 }
 

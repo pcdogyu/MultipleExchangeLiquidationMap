@@ -358,7 +358,9 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) err
 	for _, days := range windows {
 		runID, err := m.insertRun(days, "running", "", 0)
 		if err != nil {
-			continue
+			m.finishRunState("failed", err.Error(), 0)
+			log.Printf("webdatasource capture setup failed: window=%dd error=%v", days, err)
+			return fmt.Errorf("insert webdatasource run failed for %dd: %w", days, err)
 		}
 		log.Printf("webdatasource capture started: window=%dd chrome_path=%q profile_dir=%q timeout_sec=%d max_retries=%d", days, chromePath, cfg.ProfileDir, cfg.CaptureTimeoutSec, cfg.MaxRetries)
 		payload, meta, err := m.captureWindow(ctx, chromePath, cfg.ProfileDir, days, cfg)
@@ -400,6 +402,12 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) err
 		_, _ = m.app.db.Exec(`UPDATE webdatasource_runs SET source_meta_json=? WHERE id=?`, string(metaJSON), runID)
 		_ = m.updateRun(runID, "success", "", len(points))
 		log.Printf("webdatasource capture succeeded: window=%dd records=%d snapshot_id=%d range_low=%.2f range_high=%.2f attempt=%d detected_by=%q hook_hits=%d", days, len(points), snapshotID, rangeLow, rangeHigh, meta.Attempt, meta.DetectedBy, meta.HookHits)
+	}
+	if totalRecords == 0 {
+		err := errors.New("webdatasource run completed with 0 records")
+		m.finishRunState("failed", err.Error(), 0)
+		log.Printf("webdatasource capture failed: error=%v", err)
+		return err
 	}
 	m.finishRunState("success", "", totalRecords)
 	log.Printf("webdatasource capture completed: total_records=%d windows=%v", totalRecords, windows)
@@ -471,6 +479,7 @@ func (m *WebDataSourceManager) captureWindowAttempt(parent context.Context, chro
 	if label == "" {
 		label = fmt.Sprintf("%d天", days)
 	}
+	log.Printf("webdatasource browser attempt starting: window=%dd attempt=%d chrome_path=%q profile_dir=%q timeout_sec=%d", days, attempt, chromePath, profileDir, timeoutSec)
 	ctx, cancel := context.WithTimeout(parent, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
@@ -484,6 +493,7 @@ func (m *WebDataSourceManager) captureWindowAttempt(parent context.Context, chro
 		chromedp.Flag("disable-background-networking", true),
 		chromedp.Flag("disable-default-apps", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("headless", false),
 		chromedp.Flag("no-first-run", true),
 		chromedp.Flag("no-default-browser-check", true),
 		chromedp.WindowSize(1440, 900),
