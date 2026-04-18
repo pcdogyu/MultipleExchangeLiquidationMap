@@ -21,7 +21,12 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-const defaultWebDataSourceIntervalMin = 15
+const (
+	defaultWebDataSourceIntervalMin   = 15
+	defaultWebDataSourceTimeoutSec    = 75
+	defaultWebDataSourceMaxRetries    = 3
+	defaultWebDataSourcePageWarmupSec = 10
+)
 
 type WebDataSourceManager struct {
 	app *App
@@ -35,6 +40,8 @@ type WebDataSourceSettings struct {
 	IntervalMin        int    `json:"interval_min"`
 	ChromePath         string `json:"chrome_path"`
 	ProfileDir         string `json:"profile_dir"`
+	CaptureTimeoutSec  int    `json:"capture_timeout_sec"`
+	MaxRetries         int    `json:"max_retries"`
 	LastError          string `json:"last_error,omitempty"`
 	LastSuccessTS      int64  `json:"last_success_ts,omitempty"`
 	LastRunStartedTS   int64  `json:"last_run_started_ts,omitempty"`
@@ -59,6 +66,8 @@ type WebDataSourceStatus struct {
 	IntervalMin   int                   `json:"interval_min"`
 	ChromePath    string                `json:"chrome_path"`
 	ProfileDir    string                `json:"profile_dir"`
+	CaptureTimeoutSec int               `json:"capture_timeout_sec"`
+	MaxRetries    int                   `json:"max_retries"`
 	LastError     string                `json:"last_error,omitempty"`
 	LastSuccessTS int64                 `json:"last_success_ts,omitempty"`
 	LastRun       *WebDataSourceRunRow  `json:"last_run,omitempty"`
@@ -112,6 +121,8 @@ type capturedPayloadMeta struct {
 	RangeLow  float64 `json:"range_low"`
 	RangeHigh float64 `json:"range_high"`
 	HookHits  int     `json:"hook_hits"`
+	Attempt   int     `json:"attempt"`
+	DetectedBy string `json:"detected_by,omitempty"`
 }
 
 func newWebDataSourceManager(app *App) *WebDataSourceManager {
@@ -163,10 +174,16 @@ func (m *WebDataSourceManager) getSettingBool(key string, fallback bool) bool {
 	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
 }
 
+func sanitizeStoredPath(raw string) string {
+	raw = strings.TrimSpace(raw)
+	raw = strings.Trim(raw, `"'`)
+	return strings.TrimSpace(raw)
+}
+
 func (m *WebDataSourceManager) loadSettings() WebDataSourceSettings {
 	wd, _ := os.Getwd()
 	profileDir := filepath.Join(wd, "coinglass_profile")
-	rawProfile := strings.TrimSpace(m.getSetting("profile_dir"))
+	rawProfile := sanitizeStoredPath(m.getSetting("profile_dir"))
 	if rawProfile != "" {
 		profileDir = rawProfile
 	}
@@ -174,11 +191,21 @@ func (m *WebDataSourceManager) loadSettings() WebDataSourceSettings {
 	if intervalMin <= 0 {
 		intervalMin = defaultWebDataSourceIntervalMin
 	}
+	captureTimeoutSec := m.getSettingInt("capture_timeout_sec", defaultWebDataSourceTimeoutSec)
+	if captureTimeoutSec < 20 {
+		captureTimeoutSec = defaultWebDataSourceTimeoutSec
+	}
+	maxRetries := m.getSettingInt("max_retries", defaultWebDataSourceMaxRetries)
+	if maxRetries <= 0 {
+		maxRetries = defaultWebDataSourceMaxRetries
+	}
 	return WebDataSourceSettings{
 		Enabled:            m.getSettingBool("enabled", true),
 		IntervalMin:        intervalMin,
-		ChromePath:         strings.TrimSpace(m.getSetting("chrome_path")),
+		ChromePath:         sanitizeStoredPath(m.getSetting("chrome_path")),
 		ProfileDir:         profileDir,
+		CaptureTimeoutSec:  captureTimeoutSec,
+		MaxRetries:         maxRetries,
 		LastError:          strings.TrimSpace(m.getSetting("last_error")),
 		LastSuccessTS:      m.getSettingInt64("last_success_ts", 0),
 		LastRunStartedTS:   m.getSettingInt64("last_run_started_ts", 0),
@@ -226,7 +253,17 @@ func (m *WebDataSourceManager) triggerRun(parent context.Context, windowDays *in
 			m.running = false
 			m.mu.Unlock()
 		}()
-		ctx, cancel := context.WithTimeout(parent, 4*time.Minute)
+		cfg := m.loadSettings()
+		windowCount := 3
+		if windowDays != nil && (*windowDays == 1 || *windowDays == 7 || *windowDays == 30) {
+			windowCount = 1
+		}
+		perAttempt := time.Duration(cfg.CaptureTimeoutSec+defaultWebDataSourcePageWarmupSec+15) * time.Second
+		totalTimeout := time.Duration(cfg.MaxRetries) * perAttempt * time.Duration(windowCount)
+		if totalTimeout < 4*time.Minute {
+			totalTimeout = 4 * time.Minute
+		}
+		ctx, cancel := context.WithTimeout(parent, totalTimeout)
 		defer cancel()
 		if err := m.runOnce(ctx, windowDays); err != nil {
 			log.Printf("webdatasource run failed: %v", err)
@@ -323,10 +360,12 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) err
 		if err != nil {
 			continue
 		}
-		payload, meta, err := m.captureWindow(ctx, chromePath, cfg.ProfileDir, days)
+		log.Printf("webdatasource capture started: window=%dd chrome_path=%q profile_dir=%q timeout_sec=%d max_retries=%d", days, chromePath, cfg.ProfileDir, cfg.CaptureTimeoutSec, cfg.MaxRetries)
+		payload, meta, err := m.captureWindow(ctx, chromePath, cfg.ProfileDir, days, cfg)
 		if err != nil {
 			_ = m.updateRun(runID, "failed", err.Error(), 0)
 			m.finishRunState("failed", err.Error(), 0)
+			log.Printf("webdatasource capture failed: window=%dd error=%v", days, err)
 			return err
 		}
 		points, rangeLow, rangeHigh := normalizeWebDataSourcePayload(payload)
@@ -340,25 +379,30 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) err
 			err := errors.New("coinglass payload parsed 0 points")
 			_ = m.updateRun(runID, "failed", err.Error(), 0)
 			m.finishRunState("failed", err.Error(), 0)
+			log.Printf("webdatasource capture failed: window=%dd error=%v", days, err)
 			return err
 		}
 		snapshotID, err := m.insertSnapshot(days, rangeLow, rangeHigh, payload)
 		if err != nil {
 			_ = m.updateRun(runID, "failed", err.Error(), 0)
 			m.finishRunState("failed", err.Error(), 0)
+			log.Printf("webdatasource capture failed: window=%dd error=%v", days, err)
 			return err
 		}
 		if err := m.insertPoints(snapshotID, days, points); err != nil {
 			_ = m.updateRun(runID, "failed", err.Error(), 0)
 			m.finishRunState("failed", err.Error(), 0)
+			log.Printf("webdatasource capture failed: window=%dd error=%v", days, err)
 			return err
 		}
 		totalRecords += len(points)
 		metaJSON, _ := json.Marshal(meta)
 		_, _ = m.app.db.Exec(`UPDATE webdatasource_runs SET source_meta_json=? WHERE id=?`, string(metaJSON), runID)
 		_ = m.updateRun(runID, "success", "", len(points))
+		log.Printf("webdatasource capture succeeded: window=%dd records=%d snapshot_id=%d range_low=%.2f range_high=%.2f attempt=%d detected_by=%q hook_hits=%d", days, len(points), snapshotID, rangeLow, rangeHigh, meta.Attempt, meta.DetectedBy, meta.HookHits)
 	}
 	m.finishRunState("success", "", totalRecords)
+	log.Printf("webdatasource capture completed: total_records=%d windows=%v", totalRecords, windows)
 	return nil
 }
 
@@ -386,24 +430,67 @@ func detectChromePath() string {
 	return ""
 }
 
-func (m *WebDataSourceManager) captureWindow(ctx context.Context, chromePath, profileDir string, days int) (map[string]any, capturedPayloadMeta, error) {
+func chromedpErrorfFilter(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if strings.Contains(msg, "unknown ClientNavigationReason value: initialFrameNavigation") {
+		return
+	}
+	log.Print(msg)
+}
+
+func (m *WebDataSourceManager) captureWindow(ctx context.Context, chromePath, profileDir string, days int, cfg WebDataSourceSettings) (map[string]any, capturedPayloadMeta, error) {
+	attempts := cfg.MaxRetries
+	if attempts <= 0 {
+		attempts = defaultWebDataSourceMaxRetries
+	}
+	timeoutSec := cfg.CaptureTimeoutSec
+	if timeoutSec < 20 {
+		timeoutSec = defaultWebDataSourceTimeoutSec
+	}
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		payload, meta, err := m.captureWindowAttempt(ctx, chromePath, profileDir, days, timeoutSec, attempt)
+		if err == nil {
+			meta.Attempt = attempt
+			return payload, meta, nil
+		}
+		lastErr = err
+		log.Printf("webdatasource attempt %d/%d failed for %dd: %v", attempt, attempts, days, err)
+		if ctx.Err() != nil {
+			return nil, capturedPayloadMeta{}, ctx.Err()
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("coinglass capture failed without explicit error")
+	}
+	return nil, capturedPayloadMeta{}, fmt.Errorf("coinglass capture failed after %d attempts: %w", attempts, lastErr)
+}
+
+func (m *WebDataSourceManager) captureWindowAttempt(parent context.Context, chromePath, profileDir string, days, timeoutSec, attempt int) (map[string]any, capturedPayloadMeta, error) {
 	label := map[int]string{1: "1天", 7: "7天", 30: "30天"}[days]
 	if label == "" {
 		label = fmt.Sprintf("%d天", days)
 	}
+	ctx, cancel := context.WithTimeout(parent, time.Duration(timeoutSec)*time.Second)
+	defer cancel()
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
 		return nil, capturedPayloadMeta{}, err
 	}
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(chromePath),
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"),
 		chromedp.UserDataDir(profileDir),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-background-networking", true),
+		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("no-default-browser-check", true),
 		chromedp.WindowSize(1440, 900),
 	)
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
 	defer cancelAlloc()
-	taskCtx, cancelTask := chromedp.NewContext(allocCtx)
+	taskCtx, cancelTask := chromedp.NewContext(allocCtx, chromedp.WithErrorf(chromedpErrorfFilter))
 	defer cancelTask()
 
 	var ok bool
@@ -413,7 +500,7 @@ func (m *WebDataSourceManager) captureWindow(ctx context.Context, chromePath, pr
 			return err
 		}),
 		chromedp.Navigate("https://www.coinglass.com/zh/pro/futures/LiquidationMap"),
-		chromedp.Sleep(8*time.Second),
+		chromedp.Sleep(defaultWebDataSourcePageWarmupSec*time.Second),
 		chromedp.Evaluate(webDataSourceHookJS, nil),
 		chromedp.Evaluate(`(() => {
 			const headings = Array.from(document.querySelectorAll('h1'));
@@ -516,13 +603,21 @@ func (m *WebDataSourceManager) captureWindow(ctx context.Context, chromePath, pr
 		return nil, capturedPayloadMeta{}, errors.New("coinglass refresh button not found")
 	}
 
-	deadline := time.Now().Add(40 * time.Second)
+	deadline := time.Now().Add(time.Duration(timeoutSec-defaultWebDataSourcePageWarmupSec) * time.Second)
+	if timeoutSec <= defaultWebDataSourcePageWarmupSec+5 {
+		deadline = time.Now().Add(20 * time.Second)
+	}
 	for time.Now().Before(deadline) {
 		var data map[string]any
-		if err := chromedp.Run(taskCtx, chromedp.Evaluate(`window._liqData`, &data)); err == nil && len(data) > 0 {
+		var detectedBy string
+		if err := chromedp.Run(taskCtx,
+			chromedp.Evaluate(`window._liqData || window._liqPayload || window._liqCandidate || null`, &data),
+			chromedp.Evaluate(`window._liqDetectedBy || ''`, &detectedBy),
+		); err == nil && len(data) > 0 {
 			meta := capturedPayloadMeta{
-				RangeLow:  toFloatFromAny(data["rangeLow"]),
-				RangeHigh: toFloatFromAny(data["rangeHigh"]),
+				RangeLow:   toFloatFromAny(data["rangeLow"]),
+				RangeHigh:  toFloatFromAny(data["rangeHigh"]),
+				DetectedBy: detectedBy,
 			}
 			var logs []any
 			_ = chromedp.Run(taskCtx, chromedp.Evaluate(`window._liqLog || []`, &logs))
@@ -535,7 +630,12 @@ func (m *WebDataSourceManager) captureWindow(ctx context.Context, chromePath, pr
 		case <-time.After(1200 * time.Millisecond):
 		}
 	}
-	return nil, capturedPayloadMeta{}, errors.New("timed out waiting for coinglass liqMapV2 payload")
+	var logs []string
+	_ = chromedp.Run(taskCtx, chromedp.Evaluate(`(window._liqLog || []).slice(-8)`, &logs))
+	if len(logs) > 0 {
+		return nil, capturedPayloadMeta{}, fmt.Errorf("timed out waiting for coinglass payload on attempt %d: %s", attempt, strings.Join(logs, " | "))
+	}
+	return nil, capturedPayloadMeta{}, fmt.Errorf("timed out waiting for coinglass payload on attempt %d", attempt)
 }
 
 func toFloatFromAny(v any) float64 {
@@ -717,15 +817,17 @@ func (m *WebDataSourceManager) loadStatus() WebDataSourceStatus {
 		lastRun = &runs[0]
 	}
 	return WebDataSourceStatus{
-		Enabled:       cfg.Enabled,
-		Running:       running,
-		IntervalMin:   cfg.IntervalMin,
-		ChromePath:    cfg.ChromePath,
-		ProfileDir:    cfg.ProfileDir,
-		LastError:     cfg.LastError,
-		LastSuccessTS: cfg.LastSuccessTS,
-		LastRun:       lastRun,
-		RecentRuns:    runs,
+		Enabled:           cfg.Enabled,
+		Running:           running,
+		IntervalMin:       cfg.IntervalMin,
+		ChromePath:        cfg.ChromePath,
+		ProfileDir:        cfg.ProfileDir,
+		CaptureTimeoutSec: cfg.CaptureTimeoutSec,
+		MaxRetries:        cfg.MaxRetries,
+		LastError:         cfg.LastError,
+		LastSuccessTS:     cfg.LastSuccessTS,
+		LastRun:           lastRun,
+		RecentRuns:        runs,
 	}
 }
 
@@ -851,8 +953,14 @@ func (a *App) handleWebDataSourceRun(w http.ResponseWriter, r *http.Request) {
 	if req.WindowDays == 1 || req.WindowDays == 7 || req.WindowDays == 30 {
 		days = &req.WindowDays
 	}
+	if days != nil {
+		log.Printf("webdatasource manual run requested: window=%dd", *days)
+	} else {
+		log.Printf("webdatasource manual run requested: all windows")
+	}
 	started, err := a.webds.triggerRun(context.Background(), days)
 	if err != nil {
+		log.Printf("webdatasource manual run rejected: error=%v", err)
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
@@ -873,10 +981,12 @@ func (a *App) handleWebDataSourceSettings(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req struct {
-		Enabled     *bool  `json:"enabled"`
-		IntervalMin int    `json:"interval_min"`
-		ChromePath  string `json:"chrome_path"`
-		ProfileDir  string `json:"profile_dir"`
+		Enabled           *bool  `json:"enabled"`
+		IntervalMin       int    `json:"interval_min"`
+		ChromePath        string `json:"chrome_path"`
+		ProfileDir        string `json:"profile_dir"`
+		CaptureTimeoutSec int    `json:"capture_timeout_sec"`
+		MaxRetries        int    `json:"max_retries"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -888,11 +998,19 @@ func (a *App) handleWebDataSourceSettings(w http.ResponseWriter, r *http.Request
 	if req.IntervalMin > 0 {
 		_ = a.webds.setSetting("interval_min", strconv.Itoa(req.IntervalMin))
 	}
-	_ = a.webds.setSetting("chrome_path", strings.TrimSpace(req.ChromePath))
-	if strings.TrimSpace(req.ProfileDir) != "" {
-		_ = a.webds.setSetting("profile_dir", strings.TrimSpace(req.ProfileDir))
+	if req.CaptureTimeoutSec >= 20 {
+		_ = a.webds.setSetting("capture_timeout_sec", strconv.Itoa(req.CaptureTimeoutSec))
 	}
-	_ = json.NewEncoder(w).Encode(a.webds.loadStatus())
+	if req.MaxRetries > 0 {
+		_ = a.webds.setSetting("max_retries", strconv.Itoa(req.MaxRetries))
+	}
+	_ = a.webds.setSetting("chrome_path", sanitizeStoredPath(req.ChromePath))
+	if profileDir := sanitizeStoredPath(req.ProfileDir); profileDir != "" {
+		_ = a.webds.setSetting("profile_dir", profileDir)
+	}
+	status := a.webds.loadStatus()
+	log.Printf("webdatasource settings saved: enabled=%t interval_min=%d capture_timeout_sec=%d max_retries=%d chrome_path=%q profile_dir=%q", status.Enabled, status.IntervalMin, status.CaptureTimeoutSec, status.MaxRetries, status.ChromePath, status.ProfileDir)
+	_ = json.NewEncoder(w).Encode(status)
 }
 
 func (a *App) handleWebDataSourceMap(w http.ResponseWriter, r *http.Request) {
@@ -911,13 +1029,57 @@ const webDataSourceHookJS = `(() => {
 	if (window._liqHookInstalled) return 'hook_exists';
 	window._liqHookInstalled = true;
 	window._liqData = null;
+	window._liqPayload = null;
+	window._liqCandidate = null;
+	window._liqDetectedBy = '';
 	window._liqLog = [];
+	const hasPointArray = (arr) => Array.isArray(arr) && arr.some(it => Array.isArray(it) ? it.length >= 2 : !!it && typeof it === 'object');
+	const looksLikePayload = (obj) => {
+		if (!obj || typeof obj !== 'object') return false;
+		if (obj.rangeLow || obj.rangeHigh || obj.priceLow || obj.priceHigh) return true;
+		for (const key of ['liqMapV2', 'liqMap', 'data', 'list', 'result', 'payload']) {
+			const val = obj[key];
+			if (val && typeof val === 'object' && looksLikePayload(val)) return true;
+		}
+		for (const key of ['long', 'short', 'longs', 'shorts', 'longData', 'shortData', 'longLiquidationData', 'shortLiquidationData']) {
+			if (hasPointArray(obj[key])) return true;
+		}
+		return false;
+	};
+	const unwrapPayload = (obj) => {
+		if (!obj || typeof obj !== 'object') return null;
+		if (obj.liqMapV2 && typeof obj.liqMapV2 === 'object') return obj.liqMapV2;
+		for (const key of ['data', 'result', 'payload']) {
+			if (obj[key] && typeof obj[key] === 'object') {
+				const inner = unwrapPayload(obj[key]);
+				if (inner) return inner;
+			}
+		}
+		return looksLikePayload(obj) ? obj : null;
+	};
+	const storePayload = (obj, from) => {
+		try {
+			const payload = unwrapPayload(obj);
+			if (!payload) return false;
+			window._liqData = payload;
+			window._liqPayload = payload;
+			window._liqCandidate = obj;
+			window._liqDetectedBy = from;
+			window._liqLog.push('payload via ' + from);
+			return true;
+		} catch (e) {
+			try { window._liqLog.push('store failed via ' + from + ': ' + e.message); } catch (_) {}
+			return false;
+		}
+	};
 	const captureText = (text, from) => {
 		try {
-			if (!text || !String(text).includes('liqMapV2')) return;
-			window._liqLog.push('hit liqMapV2 via ' + from + ', len=' + String(text).length);
-			const parsed = JSON.parse(text);
-			window._liqData = parsed;
+			if (!text) return;
+			const raw = String(text);
+			if (!/liqMapV2|liqMap|longLiquidationData|shortLiquidationData/i.test(raw)) return;
+			window._liqLog.push('candidate via ' + from + ', len=' + raw.length);
+			const parsed = JSON.parse(raw);
+			storePayload(parsed, from + ':text');
 		} catch(e) {
 			try { window._liqLog.push('parse failed via ' + from + ': ' + e.message); } catch(_) {}
 		}
@@ -927,9 +1089,9 @@ const webDataSourceHookJS = `(() => {
 		let res;
 		try { res = _orig.call(this, str); } catch(e) { throw e; }
 		try {
-			if (str && str.includes('liqMapV2')) {
-				window._liqLog.push('hit liqMapV2, len=' + str.length);
-				window._liqData = res;
+			if (typeof str === 'string' && /liqMapV2|liqMap|longLiquidationData|shortLiquidationData/i.test(str)) {
+				window._liqLog.push('JSON.parse hit, len=' + str.length);
+				storePayload(res, 'json.parse');
 			}
 		} catch(e) {}
 		return res;
@@ -963,7 +1125,7 @@ const webDataSourceHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>页面数据源</title>
 <style>:root{--bg:#f5f7fb;--text:#1f2937;--muted:#64748b;--nav-bg:#0b1220;--nav-border:#243145;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#fff;--panel-border:#dce3ec;--ctl-bg:#fff;--ctl-text:#111827;--ctl-border:#cbd5e1;--chart-border:#e5e7eb}[data-theme="dark"]{--bg:#000;--text:#e5e7eb;--muted:#94a3b8;--nav-bg:#000;--nav-border:#111827;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#000;--panel-border:#1f2937;--ctl-bg:#000;--ctl-text:#e5e7eb;--ctl-border:#334155;--chart-border:#1f2937}html,body{height:100%}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;overflow:hidden}.nav{height:56px;background:var(--nav-bg);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10;box-sizing:border-box}.nav-left,.nav-right{display:flex;align-items:center;gap:14px}.brand{font-size:18px;font-weight:700;color:var(--nav-text)}.menu a{color:var(--link);text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:var(--nav-text);cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{width:100%;height:calc(100vh - 56px);margin:0;padding:12px;box-sizing:border-box;display:flex;flex-direction:column}.grid{display:grid;grid-template-columns:330px minmax(0,1fr);gap:12px;min-height:0;flex:1}.panel{border:1px solid var(--panel-border);background:var(--panel-bg);padding:12px;border-radius:8px;box-sizing:border-box}.grid>.panel{overflow:auto}.main-area{display:flex;flex-direction:column;min-width:0;min-height:0}.small{font-size:12px;color:var(--muted)}.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}.field input,.field select,button{height:36px;border:1px solid var(--ctl-border);border-radius:8px;background:var(--ctl-bg);color:var(--ctl-text);padding:0 10px}.field input{width:100%;box-sizing:border-box}button{cursor:pointer}.primary{background:#0f172a;color:#eef3f9;border-color:#0f172a}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:10px}.card{border:1px solid var(--panel-border);border-radius:8px;padding:10px;background:var(--panel-bg)}.card .k{font-size:12px;color:var(--muted)}.card .v{margin-top:6px;font-size:22px;font-weight:700}.chart-panel{display:flex;flex-direction:column;min-height:0;flex:1}.chart{width:100%;height:100%;min-height:420px;border:1px solid var(--chart-border);border-radius:8px;display:block;background:var(--panel-bg);box-sizing:border-box;flex:1}.runs{max-height:260px;overflow:auto}.runs table{width:100%;border-collapse:collapse}.runs th,.runs td{padding:6px 8px;border-bottom:1px solid var(--panel-border);font-size:12px;text-align:left}.tag{display:inline-block;padding:2px 8px;border-radius:999px;background:rgba(37,99,235,.12);color:#2563eb;font-size:12px}.footer{display:none}@media (max-width:1100px){body{overflow:auto}.wrap{height:auto}.grid{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.chart{height:560px}}</style></head>
 <body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource" class="active">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div></div></div>
-<div class="wrap"><div class="grid"><div class="panel"><h2 style="margin:0 0 8px 0">抓取任务</h2><div id="statusBox" class="small">加载中...</div><div class="field" style="margin-top:12px"><label>抓取间隔（分钟）</label><input id="intervalMin" type="number" min="1" step="1"></div><div class="field" style="margin-top:12px"><label>Chrome 路径</label><input id="chromePath" placeholder="留空自动探测"></div><div class="field" style="margin-top:12px"><label>Profile 目录</label><input id="profileDir"></div><div class="row" style="margin-top:14px"><button class="primary" onclick="saveSettings()">保存设置</button><button onclick="runNow()">立即抓取</button><select id="runWindow"><option value="">抓取全部窗口</option><option value="1">仅 1 天</option><option value="7">仅 7 天</option><option value="30">仅 30 天</option></select></div><div class="small" id="saveMsg" style="margin-top:8px"></div><div style="margin-top:16px"><div class="row" style="justify-content:space-between"><h3 style="margin:0">最近运行</h3><span class="tag" id="runState">-</span></div><div class="runs" style="margin-top:8px"><table><thead><tr><th>ID</th><th>窗口</th><th>状态</th><th>记录数</th><th>开始</th><th>错误</th></tr></thead><tbody id="runsBody"></tbody></table></div></div></div><div class="main-area"><div class="cards"><div class="card"><div class="k">当前窗口</div><div class="v" id="cardWindow">-</div></div><div class="card"><div class="k">多单总强度</div><div class="v" id="cardLong">-</div></div><div class="card"><div class="k">空单总强度</div><div class="v" id="cardShort">-</div></div><div class="card"><div class="k">最新抓取</div><div class="v" id="cardTime" style="font-size:16px">-</div></div></div><div class="panel chart-panel"><div class="row" style="justify-content:space-between;margin-bottom:10px"><div><strong>ETH 页面数据源清算地图</strong><div class="small" id="chartMeta">加载中...</div></div><div class="row"><select id="windowSel" onchange="loadMap()"><option value="30d">30D</option><option value="7d">7D</option><option value="1d">1D</option></select></div></div><canvas id="cv" class="chart" width="1000" height="520"></canvas></div></div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
+<div class="wrap"><div class="grid"><div class="panel"><h2 style="margin:0 0 8px 0">抓取任务</h2><div id="statusBox" class="small">加载中...</div><div class="field" style="margin-top:12px"><label>抓取间隔（分钟）</label><input id="intervalMin" type="number" min="1" step="1"></div><div class="field" style="margin-top:12px"><label>单次超时（秒）</label><input id="captureTimeoutSec" type="number" min="20" step="5"></div><div class="field" style="margin-top:12px"><label>最大重试次数</label><input id="maxRetries" type="number" min="1" step="1"></div><div class="field" style="margin-top:12px"><label>Chrome 路径</label><input id="chromePath" placeholder="留空自动探测"></div><div class="field" style="margin-top:12px"><label>Profile 目录</label><input id="profileDir"></div><div class="row" style="margin-top:14px"><button class="primary" onclick="saveSettings()">保存设置</button><button onclick="runNow()">立即抓取</button><select id="runWindow"><option value="">抓取全部窗口</option><option value="1">仅 1 天</option><option value="7">仅 7 天</option><option value="30">仅 30 天</option></select></div><div class="small" id="saveMsg" style="margin-top:8px"></div><div style="margin-top:16px"><div class="row" style="justify-content:space-between"><h3 style="margin:0">最近运行</h3><span class="tag" id="runState">-</span></div><div class="runs" style="margin-top:8px"><table><thead><tr><th>ID</th><th>窗口</th><th>状态</th><th>记录数</th><th>开始</th><th>错误</th></tr></thead><tbody id="runsBody"></tbody></table></div></div></div><div class="main-area"><div class="cards"><div class="card"><div class="k">当前窗口</div><div class="v" id="cardWindow">-</div></div><div class="card"><div class="k">多单总强度</div><div class="v" id="cardLong">-</div></div><div class="card"><div class="k">空单总强度</div><div class="v" id="cardShort">-</div></div><div class="card"><div class="k">最新抓取</div><div class="v" id="cardTime" style="font-size:16px">-</div></div></div><div class="panel chart-panel"><div class="row" style="justify-content:space-between;margin-bottom:10px"><div><strong>ETH 页面数据源清算地图</strong><div class="small" id="chartMeta">加载中...</div></div><div class="row"><select id="windowSel" onchange="loadMap()"><option value="30d">30D</option><option value="7d">7D</option><option value="1d">1D</option></select></div></div><canvas id="cv" class="chart" width="1000" height="520"></canvas></div></div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
 <script>
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
@@ -1002,8 +1164,8 @@ x.save();x.strokeStyle=sideLabelStyle[side].line;x.lineWidth=2;x.setLineDash([5,
 for(let i=0;i<pts.length;i++){const p=pts[i],px=sx(p.price),py=by-(p.total/maxCum)*(by-padT)*0.82;if(i===0)x.moveTo(px,py);else x.lineTo(px,py);}
 x.stroke();x.setLineDash([]);x.restore();
 }
-async function loadStatus(){const d=await fetch('/api/webdatasource/status').then(r=>r.json()).catch(()=>null);if(!d)return;document.getElementById('intervalMin').value=d.interval_min||15;document.getElementById('chromePath').value=d.chrome_path||'';document.getElementById('profileDir').value=d.profile_dir||'';document.getElementById('statusBox').textContent='运行中: '+(d.running?'是':'否')+' | 默认间隔 '+(d.interval_min||15)+' 分钟 | 最近成功 '+fmtTime(d.last_success_ts)+' | 最近错误 '+(d.last_error||'-');document.getElementById('runState').textContent=d.running?'抓取中':'空闲';const body=document.getElementById('runsBody');body.innerHTML='';for(const it of (d.recent_runs||[])){const err=escHTML(it.error_message||'-');const tr=document.createElement('tr');tr.innerHTML='<td>'+it.id+'</td><td>'+it.window_days+'天</td><td>'+escHTML(it.status)+'</td><td>'+it.records_count+'</td><td>'+fmtTime(it.started_at)+'</td><td title="'+err+'">'+err+'</td>';body.appendChild(tr);}}
-async function saveSettings(){const body={interval_min:Number(document.getElementById('intervalMin').value||15),chrome_path:document.getElementById('chromePath').value||'',profile_dir:document.getElementById('profileDir').value||''};const r=await fetch('/api/webdatasource/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('saveMsg').textContent=r.ok?'保存成功':'保存失败';loadStatus();}
+async function loadStatus(){const d=await fetch('/api/webdatasource/status').then(r=>r.json()).catch(()=>null);if(!d)return;document.getElementById('intervalMin').value=d.interval_min||15;document.getElementById('captureTimeoutSec').value=d.capture_timeout_sec||75;document.getElementById('maxRetries').value=d.max_retries||3;document.getElementById('chromePath').value=d.chrome_path||'';document.getElementById('profileDir').value=d.profile_dir||'';document.getElementById('statusBox').textContent='运行中: '+(d.running?'是':'否')+' | 默认间隔 '+(d.interval_min||15)+' 分钟 | 单次超时 '+(d.capture_timeout_sec||75)+' 秒 | 最大重试 '+(d.max_retries||3)+' 次 | 最近成功 '+fmtTime(d.last_success_ts)+' | 最近错误 '+(d.last_error||'-');document.getElementById('runState').textContent=d.running?'抓取中':'空闲';const body=document.getElementById('runsBody');body.innerHTML='';for(const it of (d.recent_runs||[])){const err=escHTML(it.error_message||'-');const tr=document.createElement('tr');tr.innerHTML='<td>'+it.id+'</td><td>'+it.window_days+'天</td><td>'+escHTML(it.status)+'</td><td>'+it.records_count+'</td><td>'+fmtTime(it.started_at)+'</td><td title="'+err+'">'+err+'</td>';body.appendChild(tr);}}
+async function saveSettings(){const body={interval_min:Number(document.getElementById('intervalMin').value||15),capture_timeout_sec:Number(document.getElementById('captureTimeoutSec').value||75),max_retries:Number(document.getElementById('maxRetries').value||3),chrome_path:document.getElementById('chromePath').value||'',profile_dir:document.getElementById('profileDir').value||''};const r=await fetch('/api/webdatasource/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('saveMsg').textContent=r.ok?'保存成功':'保存失败';loadStatus();}
 async function runNow(){const raw=document.getElementById('runWindow').value;const body=raw?{window_days:Number(raw)}:{};const msg=document.getElementById('saveMsg');const r=await fetch('/api/webdatasource/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok){msg.textContent='触发失败: '+await r.text();loadStatus();return;}msg.textContent='已触发，等待结果...';for(let i=0;i<120;i++){await new Promise(res=>setTimeout(res,1000));const d=await fetch('/api/webdatasource/status').then(x=>x.json()).catch(()=>null);if(!d)continue;await loadStatus();if(!d.running){const lr=d.last_run||{};if(String(lr.status)==='success'&&Number(lr.records_count||0)>0){msg.textContent='抓取成功: '+lr.records_count+' 条';loadMap();}else{msg.textContent='抓取失败: '+(lr.error_message||d.last_error||('记录数 '+(lr.records_count||0)));}return;}}msg.textContent='抓取仍在进行，请稍后查看最近运行';}
 async function loadOKXClose(){const d=await fetch('/api/okx/latest-close').then(r=>r.ok?r.json():null).catch(()=>null);okxLatestClose=Number(d&&d.close||0)||0;}
 function draw(){
