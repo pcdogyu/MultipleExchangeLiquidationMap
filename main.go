@@ -270,6 +270,7 @@ func getenv(key, fallback string) string {
 func initDB(db *sql.DB) error {
 	stmts := []string{
 		`PRAGMA journal_mode=WAL;`,
+		`PRAGMA busy_timeout=5000;`,
 		`CREATE TABLE IF NOT EXISTS market_state (
 			exchange TEXT NOT NULL,
 			symbol TEXT NOT NULL,
@@ -466,6 +467,8 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if err := initDB(db); err != nil {
 		log.Fatal(err)
 	}
@@ -518,6 +521,7 @@ func main() {
 	mux.HandleFunc("/api/price-events", app.handlePriceEvents)
 	mux.HandleFunc("/api/webdatasource/status", app.handleWebDataSourceStatus)
 	mux.HandleFunc("/api/webdatasource/run", app.handleWebDataSourceRun)
+	mux.HandleFunc("/api/webdatasource/init", app.handleWebDataSourceInit)
 	mux.HandleFunc("/api/webdatasource/map", app.handleWebDataSourceMap)
 	mux.HandleFunc("/api/webdatasource/runs", app.handleWebDataSourceRuns)
 	mux.HandleFunc("/api/webdatasource/settings", app.handleWebDataSourceSettings)
