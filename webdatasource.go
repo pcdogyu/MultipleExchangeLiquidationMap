@@ -29,6 +29,7 @@ const (
 	defaultWebDataSourcePageWarmupSec = 3
 	defaultWebDataSourceLoginHoldSec  = 180
 	coinglassLiquidationMapURL        = "https://www.coinglass.com/pro/futures/LiquidationMap"
+	webDataSourceWindowSwitchDelay    = 3 * time.Second
 )
 
 type WebDataSourceManager struct {
@@ -67,20 +68,20 @@ type WebDataSourceRunRow struct {
 }
 
 type WebDataSourceStatus struct {
-	Enabled            bool                  `json:"enabled"`
-	Running            bool                  `json:"running"`
-	LoginInitRunning   bool                  `json:"login_init_running"`
-	LoginInitUntilTS   int64                 `json:"login_init_until_ts,omitempty"`
-	IntervalMin        int                   `json:"interval_min"`
-	ChromePath         string                `json:"chrome_path"`
-	ProfileDir         string                `json:"profile_dir"`
-	CaptureTimeoutSec  int                   `json:"capture_timeout_sec"`
-	LoginHoldSec       int                   `json:"login_hold_sec"`
-	MaxRetries         int                   `json:"max_retries"`
-	LastError          string                `json:"last_error,omitempty"`
-	LastSuccessTS      int64                 `json:"last_success_ts,omitempty"`
-	LastRun            *WebDataSourceRunRow  `json:"last_run,omitempty"`
-	RecentRuns         []WebDataSourceRunRow `json:"recent_runs,omitempty"`
+	Enabled           bool                  `json:"enabled"`
+	Running           bool                  `json:"running"`
+	LoginInitRunning  bool                  `json:"login_init_running"`
+	LoginInitUntilTS  int64                 `json:"login_init_until_ts,omitempty"`
+	IntervalMin       int                   `json:"interval_min"`
+	ChromePath        string                `json:"chrome_path"`
+	ProfileDir        string                `json:"profile_dir"`
+	CaptureTimeoutSec int                   `json:"capture_timeout_sec"`
+	LoginHoldSec      int                   `json:"login_hold_sec"`
+	MaxRetries        int                   `json:"max_retries"`
+	LastError         string                `json:"last_error,omitempty"`
+	LastSuccessTS     int64                 `json:"last_success_ts,omitempty"`
+	LastRun           *WebDataSourceRunRow  `json:"last_run,omitempty"`
+	RecentRuns        []WebDataSourceRunRow `json:"recent_runs,omitempty"`
 }
 
 type WebDataSourcePoint struct {
@@ -133,6 +134,30 @@ type capturedPayloadMeta struct {
 	Attempt         int     `json:"attempt"`
 	DetectedBy      string  `json:"detected_by,omitempty"`
 	ChartOptionPath string  `json:"chart_option_path,omitempty"`
+}
+
+type webDataSourceBrowserSession struct {
+	cancelCtx      context.CancelFunc
+	taskCtx        context.Context
+	cancelTask     context.CancelFunc
+	cancelAlloc    context.CancelFunc
+	dayBtnIdx      int
+	refreshIdx     int
+	symbolInputIdx int
+	symbolPopupIdx int
+	timeoutSec     int
+	currentDays    int
+}
+
+type webDataSourceProgressLogger struct {
+	cancel  context.CancelFunc
+	scope   string
+	days    int
+	attempt int
+	started time.Time
+
+	mu    sync.Mutex
+	stage string
 }
 
 type webDataSourceSettingsPayload struct {
@@ -393,6 +418,23 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) err
 	}
 
 	totalRecords := 0
+	var sharedSession *webDataSourceBrowserSession
+	if len(windows) > 1 {
+		sessionTimeoutSec := cfg.CaptureTimeoutSec * len(windows)
+		if sessionTimeoutSec < defaultWebDataSourceTimeoutSec {
+			sessionTimeoutSec = defaultWebDataSourceTimeoutSec
+		}
+		sessionTimeoutSec += 30
+		log.Printf("webdatasource shared browser session starting: windows=%v chrome_path=%q profile_dir=%q timeout_sec=%d", windows, chromePath, cfg.ProfileDir, sessionTimeoutSec)
+		session, err := newWebDataSourceBrowserSession(ctx, chromePath, cfg.ProfileDir, sessionTimeoutSec, 1)
+		if err != nil {
+			m.finishRunState("failed", err.Error(), 0)
+			log.Printf("webdatasource shared browser session failed: %v", err)
+			return err
+		}
+		sharedSession = session
+		defer sharedSession.close()
+	}
 	for _, days := range windows {
 		runID, err := m.insertRun(days, "running", "", 0)
 		if err != nil {
@@ -401,7 +443,20 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) err
 			return fmt.Errorf("insert webdatasource run failed for %dd: %w", days, err)
 		}
 		log.Printf("webdatasource capture started: window=%dd chrome_path=%q profile_dir=%q timeout_sec=%d max_retries=%d", days, chromePath, cfg.ProfileDir, cfg.CaptureTimeoutSec, cfg.MaxRetries)
-		payload, meta, err := m.captureWindow(ctx, chromePath, cfg.ProfileDir, days, cfg)
+		var payload map[string]any
+		var meta capturedPayloadMeta
+		if sharedSession != nil {
+			payload, meta, err = captureWindowWithOpenSession(sharedSession, days, 1)
+			meta.Attempt = 1
+			if err != nil {
+				log.Printf("webdatasource shared browser capture failed for %dd, falling back to dedicated browser: %v", days, err)
+				sharedSession.close()
+				sharedSession = nil
+				payload, meta, err = m.captureWindow(ctx, chromePath, cfg.ProfileDir, days, cfg)
+			}
+		} else {
+			payload, meta, err = m.captureWindow(ctx, chromePath, cfg.ProfileDir, days, cfg)
+		}
 		if err != nil {
 			_ = m.updateRun(runID, "failed", err.Error(), 0)
 			m.finishRunState("failed", err.Error(), 0)
@@ -417,8 +472,13 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) err
 		}
 		if len(points) == 0 {
 			err := errors.New("coinglass payload parsed 0 points")
+			if path, dumpErr := writeWebDataSourcePayloadDump(days, meta.Attempt, meta.DetectedBy, payload); dumpErr == nil && path != "" {
+				err = fmt.Errorf("%w (payload_path=%s)", err, path)
+			} else if dumpErr != nil {
+				log.Printf("webdatasource payload export failed: window=%dd attempt=%d detected_by=%q error=%v", days, meta.Attempt, meta.DetectedBy, dumpErr)
+			}
 			if meta.ChartOptionPath != "" {
-				err = fmt.Errorf("coinglass payload parsed 0 points (chart_option_path=%s)", meta.ChartOptionPath)
+				err = fmt.Errorf("%w (chart_option_path=%s)", err, meta.ChartOptionPath)
 			}
 			_ = m.updateRun(runID, "failed", err.Error(), 0)
 			m.finishRunState("failed", err.Error(), 0)
@@ -479,12 +539,503 @@ func detectChromePath() string {
 	return ""
 }
 
+func (s *webDataSourceBrowserSession) close() {
+	if s == nil {
+		return
+	}
+	if s.cancelTask != nil {
+		s.cancelTask()
+	}
+	if s.cancelAlloc != nil {
+		s.cancelAlloc()
+	}
+	if s.cancelCtx != nil {
+		s.cancelCtx()
+	}
+}
+
+func newWebDataSourceProgressLogger(parent context.Context, scope string, days, attempt int, stage string) *webDataSourceProgressLogger {
+	ctx, cancel := context.WithCancel(parent)
+	l := &webDataSourceProgressLogger{
+		cancel:  cancel,
+		scope:   scope,
+		days:    days,
+		attempt: attempt,
+		started: time.Now(),
+		stage:   strings.TrimSpace(stage),
+	}
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				l.log("heartbeat")
+			}
+		}
+	}()
+	return l
+}
+
+func (l *webDataSourceProgressLogger) SetStage(stage string) {
+	if l == nil {
+		return
+	}
+	stage = strings.TrimSpace(stage)
+	l.mu.Lock()
+	changed := stage != l.stage
+	l.stage = stage
+	l.mu.Unlock()
+	if changed {
+		l.log("stage")
+	}
+}
+
+func (l *webDataSourceProgressLogger) Stop() {
+	if l == nil || l.cancel == nil {
+		return
+	}
+	l.cancel()
+}
+
+func (l *webDataSourceProgressLogger) log(kind string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	stage := l.stage
+	l.mu.Unlock()
+	window := "-"
+	if l.days > 0 {
+		window = fmt.Sprintf("%dd", l.days)
+	}
+	log.Printf("webdatasource progress %s: scope=%s window=%s attempt=%d elapsed=%s stage=%q", kind, l.scope, window, l.attempt, time.Since(l.started).Truncate(time.Second), stage)
+}
+
 func chromedpErrorfFilter(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	if strings.Contains(msg, "unknown ClientNavigationReason value: initialFrameNavigation") {
 		return
 	}
 	log.Print(msg)
+}
+
+func readWebDataSourceDevToolsWS(profileDir string) string {
+	raw, err := os.ReadFile(filepath.Join(profileDir, "DevToolsActivePort"))
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
+	if len(lines) < 2 {
+		return ""
+	}
+	port := strings.TrimSpace(lines[0])
+	path := strings.TrimSpace(lines[1])
+	if port == "" || path == "" {
+		return ""
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return "ws://127.0.0.1:" + port + path
+}
+
+func shouldClearWebDataSourceDevToolsPort(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "could not dial") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "actively refused") ||
+		strings.Contains(msg, "closed network connection") ||
+		strings.Contains(msg, "i/o timeout")
+}
+
+func clearWebDataSourceDevToolsPort(profileDir string) {
+	path := filepath.Join(profileDir, "DevToolsActivePort")
+	if err := os.Remove(path); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Printf("webdatasource could not remove stale DevToolsActivePort: path=%q error=%v", path, err)
+		}
+		return
+	}
+	log.Printf("webdatasource removed stale DevToolsActivePort: path=%q", path)
+}
+
+func webDataSourceWindowSelectionMatchesJS(dayBtnIdx, days int) string {
+	return fmt.Sprintf(`(() => {
+		const norm = s => String(s || '').replace(/\s+/g, '').toLowerCase();
+		const controls = document.querySelectorAll('.MuiSelect-root button[role="combobox"], button.MuiSelect-button[role="combobox"], .MuiSelect-button[role="combobox"], .MuiSelect-root select, select');
+		const btn = controls[%d];
+		if (!btn) return false;
+		const txt = norm(btn.tagName === 'SELECT' ? ((btn.selectedOptions && btn.selectedOptions[0] && btn.selectedOptions[0].textContent) || btn.value || '') : (btn.textContent || btn.value || ''));
+		return txt === '%dday' || txt === '%dd' || txt === '%d';
+	})()`, dayBtnIdx, days, days, days)
+}
+
+func waitForWebDataSourceWindowSelection(ctx context.Context, dayBtnIdx, days int, timeout time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		var ok bool
+		if err := chromedp.Run(ctx, chromedp.Evaluate(webDataSourceWindowSelectionMatchesJS(dayBtnIdx, days), &ok)); err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+		if time.Now().After(deadline) {
+			return false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+func webDataSourceSelectWindowJS(dayBtnIdx, targetDays, currentDays int) string {
+	currentRank := map[int]int{1: 0, 7: 1, 30: 2}[currentDays]
+	targetRank := map[int]int{1: 0, 7: 1, 30: 2}[targetDays]
+	delta := targetRank - currentRank
+	return fmt.Sprintf(`(() => {
+		const norm = s => String(s || '').replace(/\s+/g, '').toLowerCase();
+		const isVisible = el => {
+			if (!el) return false;
+			if (el.offsetParent === null && getComputedStyle(el).position !== 'fixed') return false;
+			const rect = el.getBoundingClientRect();
+			return rect.width > 0 && rect.height > 0;
+		};
+		const activate = el => {
+			if (!el) return false;
+			for (const type of ['pointerdown','mousedown','mouseup','click']) {
+				el.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
+			}
+			return true;
+		};
+		const controls = document.querySelectorAll('.MuiSelect-root button[role="combobox"], button.MuiSelect-button[role="combobox"], .MuiSelect-button[role="combobox"], .MuiSelect-root select, select');
+		const btn = controls[%d];
+		if (!btn) return 'missing_button';
+		const targetDays = %d;
+		const delta = %d;
+		const wants = [targetDays + 'day', targetDays + 'd', String(targetDays)];
+		if (btn.tagName === 'SELECT') {
+			const options = Array.from(btn.options || []);
+			const idx = options.findIndex(opt => {
+				const txt = norm(opt.textContent || '');
+				const val = norm(opt.value || '');
+				return wants.some(w => txt === w || txt.includes(w) || val === w || val.includes(w));
+			});
+			if (idx < 0) return 'not_found';
+			btn.selectedIndex = idx;
+			btn.value = options[idx].value;
+			btn.dispatchEvent(new Event('input', {bubbles:true}));
+			btn.dispatchEvent(new Event('change', {bubbles:true}));
+			return 'selected_native';
+		}
+		if (delta !== 0) {
+			btn.focus();
+			const key = delta > 0 ? 'ArrowDown' : 'ArrowUp';
+			const steps = Math.abs(delta);
+			const fire = (target, type, keyName) => target.dispatchEvent(new KeyboardEvent(type, {key:keyName, code:keyName, bubbles:true, cancelable:true}));
+			for (let i = 0; i < steps; i++) {
+				fire(btn, 'keydown', key);
+				fire(btn, 'keyup', key);
+			}
+			fire(btn, 'keydown', 'Enter');
+			fire(btn, 'keyup', 'Enter');
+			return 'selected_keyboard';
+		}
+		const optionSel = '[role="option"], li[role="option"], .MuiOption-root, .MuiMenuItem-root, li[class*="Option"], li[class*="option"], [data-value]';
+		const popupId = btn.getAttribute('aria-controls') || btn.getAttribute('aria-owns') || '';
+		let containers = [];
+		if (popupId) {
+			const popup = document.getElementById(popupId);
+			if (popup) containers.push(popup);
+		}
+		containers = containers.concat(Array.from(document.querySelectorAll('[role="listbox"], ul.MuiMenu-list, .MuiMenu-paper, .MuiPopover-root, .MuiPopper-root')).filter(isVisible));
+		const uniqContainers = containers.filter((el, idx) => el && containers.indexOf(el) === idx);
+		let options = [];
+		for (const root of uniqContainers) {
+			const found = Array.from(root.querySelectorAll(optionSel)).filter(isVisible);
+			if (found.length) {
+				options = found;
+				break;
+			}
+		}
+		if (!options.length) {
+			options = Array.from(document.querySelectorAll(optionSel)).filter(isVisible);
+		}
+		if (!options.length) return 'no_options';
+		const currentWants = [%d].filter(Boolean).flatMap(v => [v + 'day', v + 'd', String(v)]);
+		const selectedIdx = options.findIndex(el => {
+			const cls = norm(el.className || '');
+			return String(el.getAttribute('aria-selected') || '').toLowerCase() === 'true' ||
+				String(el.getAttribute('data-focus-visible') || '').toLowerCase() === 'true' ||
+				cls.includes('selected') || cls.includes('active') || cls.includes('focus');
+		});
+		const exactIdx = options.findIndex(el => {
+			const txt = norm(el.textContent || '');
+			const val = norm(el.getAttribute('data-value') || el.getAttribute('value') || '');
+			return wants.some(w => txt === w || txt.includes(w) || val === w || val.includes(w));
+		});
+		if (exactIdx >= 0) {
+			activate(options[exactIdx]);
+			return 'selected_exact';
+		}
+		let currentIdx = selectedIdx;
+		if (currentIdx < 0 && currentWants.length) {
+			currentIdx = options.findIndex(el => {
+				const txt = norm(el.textContent || '');
+				const val = norm(el.getAttribute('data-value') || el.getAttribute('value') || '');
+				return currentWants.some(w => txt === w || txt.includes(w) || val === w || val.includes(w));
+			});
+		}
+		if (currentIdx >= 0 && delta !== 0) {
+			const nextIdx = currentIdx + delta;
+			if (nextIdx >= 0 && nextIdx < options.length) {
+				activate(options[nextIdx]);
+				return 'selected_relative';
+			}
+		}
+		const fallbackIdx = {1: 0, 7: 1, 30: 2}[targetDays];
+		if (typeof fallbackIdx === 'number' && fallbackIdx >= 0 && fallbackIdx < options.length) {
+			activate(options[fallbackIdx]);
+			return 'selected_fallback';
+		}
+		return 'not_found';
+	})()`, dayBtnIdx, targetDays, delta, currentDays)
+}
+
+func newWebDataSourceBrowserSession(parent context.Context, chromePath, profileDir string, timeoutSec, attempt int) (*webDataSourceBrowserSession, error) {
+	effectiveTimeoutSec := timeoutSec
+	if effectiveTimeoutSec < defaultWebDataSourceTimeoutSec {
+		effectiveTimeoutSec = defaultWebDataSourceTimeoutSec
+	}
+	log.Printf("webdatasource browser attempt starting: attempt=%d chrome_path=%q profile_dir=%q timeout_sec=%d", attempt, chromePath, profileDir, effectiveTimeoutSec)
+	progress := newWebDataSourceProgressLogger(parent, "browser_session", 0, attempt, "prepare browser session")
+	defer progress.Stop()
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		return nil, err
+	}
+	initSession := func(allocCtx context.Context, cancelAlloc context.CancelFunc, mode string) (*webDataSourceBrowserSession, error) {
+		taskCtx, cancelTask := chromedp.NewContext(allocCtx, chromedp.WithErrorf(chromedpErrorfFilter))
+		session := &webDataSourceBrowserSession{
+			taskCtx:     taskCtx,
+			cancelTask:  cancelTask,
+			cancelAlloc: cancelAlloc,
+			timeoutSec:  effectiveTimeoutSec,
+		}
+		var ok bool
+		progress.SetStage(mode + ": install page hook")
+		if err := chromedp.Run(taskCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+			_, err := page.AddScriptToEvaluateOnNewDocument(webDataSourceHookJS).Do(ctx)
+			return err
+		})); err != nil {
+			session.close()
+			return nil, fmt.Errorf("%s init failed: %w", mode, err)
+		}
+		progress.SetStage(mode + ": navigate to coinglass")
+		if err := chromedp.Run(taskCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+			_, _, errorText, err := page.Navigate(coinglassLiquidationMapURL).Do(ctx)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(errorText) != "" {
+				return errors.New(errorText)
+			}
+			return nil
+		})); err != nil {
+			session.close()
+			return nil, fmt.Errorf("%s init failed: %w", mode, err)
+		}
+		progress.SetStage(mode + ": wait page warmup")
+		if err := chromedp.Run(taskCtx, chromedp.Sleep(defaultWebDataSourcePageWarmupSec*time.Second)); err != nil {
+			session.close()
+			return nil, fmt.Errorf("%s init failed: %w", mode, err)
+		}
+		progress.SetStage(mode + ": inject runtime hook")
+		if err := chromedp.Run(taskCtx, chromedp.Evaluate(webDataSourceHookJS, nil)); err != nil {
+			session.close()
+			return nil, fmt.Errorf("%s init failed: %w", mode, err)
+		}
+		progress.SetStage(mode + ": resolve coinglass controls")
+		if err := chromedp.Run(taskCtx, chromedp.Evaluate(`(() => {
+			const norm = s => String(s || '').replace(/\s+/g, '').toLowerCase();
+			const isVisible = el => {
+				if (!el || el.offsetParent === null) return false;
+				const rect = el.getBoundingClientRect();
+				return rect.width > 0 && rect.height > 0;
+			};
+			const titleEl = Array.from(document.querySelectorAll('h1.MuiTypography-root.MuiTypography-h1')).find(el => {
+				if (!isVisible(el)) return false;
+				const text = String(el.textContent || '').replace(/\s+/g, '');
+				return text === '姣旂壒甯佷氦鏄撴墍娓呯畻鍦板浘' || text === 'BitcoinExchangeLiquidationMap';
+			});
+			if (!titleEl) {
+				window._liqLog.push('section title not found: 姣旂壒甯佷氦鏄撴墍娓呯畻鍦板浘 / Bitcoin Exchange Liquidation Map');
+				return false;
+			}
+			let section = titleEl;
+			for (let i = 0; i < 16; i++) {
+				if (!section) break;
+				const wrappers = Array.from(section.querySelectorAll('.MuiAutocomplete-wrapper.cg-style-1gurlra, .MuiAutocomplete-wrapper')).filter(isVisible);
+				const symbolWrapper = wrappers.find(w => w.querySelector('input.MuiAutocomplete-input, input[role="combobox"], input'));
+				const selectButtons = Array.from(section.querySelectorAll('.MuiSelect-root button[role="combobox"], button.MuiSelect-button[role="combobox"], .MuiSelect-button[role="combobox"], .MuiSelect-root select, select')).filter(isVisible);
+				const actionButtons = Array.from(section.querySelectorAll('button,[role="button"]')).filter(isVisible);
+				if (symbolWrapper && selectButtons.length > 0 && actionButtons.length > 0) {
+					const symbolInput = symbolWrapper.querySelector('input.MuiAutocomplete-input, input[role="combobox"], input');
+					const symbolPopup = (symbolWrapper.parentElement ? symbolWrapper.parentElement.querySelector('.MuiAutocomplete-popupIndicator, button[aria-label="Open"], button[title="Open"]') : null) || symbolWrapper.querySelector('.MuiAutocomplete-popupIndicator, button[aria-label="Open"], button[title="Open"]');
+					if (!symbolInput || !symbolPopup) {
+						section = section.parentElement;
+						continue;
+					}
+					const dayBtn = selectButtons.find(btn => {
+						const txt = norm(btn.textContent || '');
+						return /^(1day|7day|30day|1d|7d|30d)$/.test(txt);
+					}) || selectButtons[0];
+					const refreshBtn = actionButtons.find(btn => {
+						if (btn === symbolPopup || btn === dayBtn) return false;
+						const txt = norm(btn.textContent || '');
+						if (txt.includes('refresh')) return true;
+						const svg = btn.querySelector('svg');
+						return !!svg && !txt;
+					}) || actionButtons[actionButtons.length - 1];
+					if (!dayBtn || !refreshBtn) {
+						section = section.parentElement;
+						continue;
+					}
+					window._cgSection = {
+						symbolInputIdx: Array.from(document.querySelectorAll('.MuiAutocomplete-wrapper.cg-style-1gurlra input, .MuiAutocomplete-wrapper input, input')).indexOf(symbolInput),
+						symbolPopupIdx: Array.from(document.querySelectorAll('.MuiAutocomplete-popupIndicator, button[aria-label="Open"], button[title="Open"]')).indexOf(symbolPopup),
+						dayBtnIdx: Array.from(document.querySelectorAll('.MuiSelect-root button[role="combobox"], button.MuiSelect-button[role="combobox"], .MuiSelect-button[role="combobox"], .MuiSelect-root select, select')).indexOf(dayBtn),
+						refreshIdx: Array.from(document.querySelectorAll('button,[role="button"]')).indexOf(refreshBtn),
+						sectionText: (titleEl.textContent || '').trim()
+					};
+					window._liqLog.push('section resolved: ' + window._cgSection.sectionText + ' | wrappers=' + wrappers.length + ' | selects=' + selectButtons.length);
+					return true;
+				}
+				section = section.parentElement;
+			}
+			window._liqLog.push('section controls not found near title');
+			return false;
+		})()`, &ok)); err != nil {
+			session.close()
+			return nil, fmt.Errorf("%s init failed: %w", mode, err)
+		}
+		if !ok {
+			session.close()
+			return nil, fmt.Errorf("%s init failed: %w", mode, errors.New("coinglass section not found"))
+		}
+		progress.SetStage(mode + ": read control indexes")
+		if err := chromedp.Run(taskCtx,
+			chromedp.Evaluate(`window._cgSection.symbolInputIdx`, &session.symbolInputIdx),
+			chromedp.Evaluate(`window._cgSection.symbolPopupIdx`, &session.symbolPopupIdx),
+			chromedp.Evaluate(`window._cgSection.dayBtnIdx`, &session.dayBtnIdx),
+			chromedp.Evaluate(`window._cgSection.refreshIdx`, &session.refreshIdx),
+		); err != nil {
+			session.close()
+			return nil, fmt.Errorf("%s init failed: %w", mode, err)
+		}
+		var currentLabel string
+		if err := chromedp.Run(taskCtx, chromedp.Evaluate(fmt.Sprintf(`(() => {
+			const btn = document.querySelectorAll('.MuiSelect-root button[role="combobox"], button.MuiSelect-button[role="combobox"], .MuiSelect-button[role="combobox"], .MuiSelect-root select, select')[%d];
+			return btn ? String(btn.tagName === 'SELECT' ? ((btn.selectedOptions && btn.selectedOptions[0] && btn.selectedOptions[0].textContent) || btn.value || '') : (btn.textContent || btn.value || '')) : '';
+		})()`, session.dayBtnIdx), &currentLabel)); err == nil {
+			txt := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(currentLabel), " ", ""))
+			switch txt {
+			case "1day", "1d":
+				session.currentDays = 1
+			case "7day", "7d":
+				session.currentDays = 7
+			case "30day", "30d":
+				session.currentDays = 30
+			}
+		}
+		if session.currentDays == 0 {
+			session.currentDays = 1
+		}
+		js := fmt.Sprintf(`(() => {
+		const btns = document.querySelectorAll('.MuiAutocomplete-popupIndicator, button[aria-label="Open"], button[title="Open"]');
+		const btn = btns[%d];
+		if (!btn) return false;
+		for (const type of ['pointerdown','mousedown','mouseup','click']) {
+			btn.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
+		}
+		return true;
+	})()`, session.symbolPopupIdx)
+		progress.SetStage(mode + ": open symbol selector")
+		if err := chromedp.Run(taskCtx, chromedp.Evaluate(js, &ok), chromedp.Sleep(600*time.Millisecond)); err != nil || !ok {
+			session.close()
+			return nil, errors.New("coinglass symbol popup not found")
+		}
+		js = `(() => {
+		const all = Array.from(document.querySelectorAll('[role="option"], .MuiOption-root, li[class*="Option"], li[class*="option"]'));
+		const visible = all.filter(el => {
+			if (!el || el.offsetParent === null) return false;
+			const rect = el.getBoundingClientRect();
+			return rect.height > 0 && rect.top >= 0;
+		});
+		const topVisible = visible.slice(0, 2);
+		if (topVisible.length >= 2) {
+			topVisible[1].click();
+			return true;
+		}
+		return false;
+	})()`
+		progress.SetStage(mode + ": select ETH symbol")
+		if err := chromedp.Run(taskCtx, chromedp.Evaluate(js, &ok), chromedp.Sleep(1200*time.Millisecond)); err != nil || !ok {
+			session.close()
+			return nil, fmt.Errorf("%s init failed: %w", mode, errors.New("coinglass symbol second option not found"))
+		}
+		progress.SetStage(mode + ": browser session ready")
+		return session, nil
+	}
+
+	if wsURL := readWebDataSourceDevToolsWS(profileDir); wsURL != "" {
+		progress.SetStage("try reuse existing chrome session")
+		log.Printf("webdatasource attempting to reuse existing chrome session: profile_dir=%q ws=%q", profileDir, wsURL)
+		remoteCtx, cancelRemoteCtx := context.WithTimeout(parent, time.Duration(effectiveTimeoutSec)*time.Second)
+		allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(remoteCtx, wsURL)
+		if session, err := initSession(allocCtx, cancelAlloc, "remote"); err == nil {
+			session.cancelCtx = cancelRemoteCtx
+			return session, nil
+		} else {
+			cancelRemoteCtx()
+			log.Printf("webdatasource existing chrome session reuse failed: %v", err)
+			if shouldClearWebDataSourceDevToolsPort(err) {
+				clearWebDataSourceDevToolsPort(profileDir)
+			}
+		}
+	}
+
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath(chromePath),
+		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"),
+		chromedp.UserDataDir(profileDir),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-background-networking", true),
+		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("headless", false),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("no-default-browser-check", true),
+		chromedp.WindowSize(1440, 900),
+	)
+	progress.SetStage("launch fresh chrome process")
+	execCtx, cancelExecCtx := context.WithTimeout(parent, time.Duration(effectiveTimeoutSec)*time.Second)
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(execCtx, opts...)
+	session, err := initSession(allocCtx, cancelAlloc, "exec")
+	if err != nil {
+		cancelExecCtx()
+		log.Printf("webdatasource fresh chrome launch failed: profile_dir=%q error=%v", profileDir, err)
+		return nil, err
+	}
+	session.cancelCtx = cancelExecCtx
+	return session, nil
 }
 
 func (m *WebDataSourceManager) captureWindow(ctx context.Context, chromePath, profileDir string, days int, cfg WebDataSourceSettings) (map[string]any, capturedPayloadMeta, error) {
@@ -498,7 +1049,17 @@ func (m *WebDataSourceManager) captureWindow(ctx context.Context, chromePath, pr
 	}
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		payload, meta, err := m.captureWindowAttempt(ctx, chromePath, profileDir, days, timeoutSec, attempt)
+		session, err := newWebDataSourceBrowserSession(ctx, chromePath, profileDir, timeoutSec, attempt)
+		if err != nil {
+			lastErr = err
+			log.Printf("webdatasource attempt %d/%d failed for %dd: %v", attempt, attempts, days, err)
+			if ctx.Err() != nil {
+				return nil, capturedPayloadMeta{}, ctx.Err()
+			}
+			continue
+		}
+		payload, meta, err := captureWindowWithOpenSession(session, days, attempt)
+		session.close()
 		if err == nil {
 			meta.Attempt = attempt
 			return payload, meta, nil
@@ -551,7 +1112,16 @@ func (m *WebDataSourceManager) captureWindowAttempt(parent context.Context, chro
 			_, err := page.AddScriptToEvaluateOnNewDocument(webDataSourceHookJS).Do(ctx)
 			return err
 		}),
-		chromedp.Navigate(coinglassLiquidationMapURL),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_, _, errorText, err := page.Navigate(coinglassLiquidationMapURL).Do(ctx)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(errorText) != "" {
+				return errors.New(errorText)
+			}
+			return nil
+		}),
 		chromedp.Sleep(defaultWebDataSourcePageWarmupSec*time.Second),
 		chromedp.Evaluate(webDataSourceHookJS, nil),
 		chromedp.Evaluate(`(() => {
@@ -575,7 +1145,7 @@ func (m *WebDataSourceManager) captureWindowAttempt(parent context.Context, chro
 				if (!section) break;
 				const wrappers = Array.from(section.querySelectorAll('.MuiAutocomplete-wrapper.cg-style-1gurlra, .MuiAutocomplete-wrapper')).filter(isVisible);
 				const symbolWrapper = wrappers.find(w => w.querySelector('input.MuiAutocomplete-input, input[role="combobox"], input'));
-				const selectButtons = Array.from(section.querySelectorAll('.MuiSelect-root button[role="combobox"], button.MuiSelect-button[role="combobox"], .MuiSelect-button[role="combobox"]')).filter(isVisible);
+				const selectButtons = Array.from(section.querySelectorAll('.MuiSelect-root button[role="combobox"], button.MuiSelect-button[role="combobox"], .MuiSelect-button[role="combobox"], .MuiSelect-root select, select')).filter(isVisible);
 				const actionButtons = Array.from(section.querySelectorAll('button,[role="button"]')).filter(isVisible);
 				if (symbolWrapper && selectButtons.length > 0 && actionButtons.length > 0) {
 					const symbolInput = symbolWrapper.querySelector('input.MuiAutocomplete-input, input[role="combobox"], input');
@@ -602,7 +1172,7 @@ func (m *WebDataSourceManager) captureWindowAttempt(parent context.Context, chro
 					window._cgSection = {
 						symbolInputIdx: Array.from(document.querySelectorAll('.MuiAutocomplete-wrapper.cg-style-1gurlra input, .MuiAutocomplete-wrapper input, input')).indexOf(symbolInput),
 						symbolPopupIdx: Array.from(document.querySelectorAll('.MuiAutocomplete-popupIndicator, button[aria-label="Open"], button[title="Open"]')).indexOf(symbolPopup),
-						dayBtnIdx: Array.from(document.querySelectorAll('.MuiSelect-root button[role="combobox"], button.MuiSelect-button[role="combobox"], .MuiSelect-button[role="combobox"]')).indexOf(dayBtn),
+						dayBtnIdx: Array.from(document.querySelectorAll('.MuiSelect-root button[role="combobox"], button.MuiSelect-button[role="combobox"], .MuiSelect-button[role="combobox"], .MuiSelect-root select, select')).indexOf(dayBtn),
 						refreshIdx: Array.from(document.querySelectorAll('button,[role="button"]')).indexOf(refreshBtn),
 						sectionText: (titleEl.textContent || '').trim()
 					};
@@ -663,8 +1233,12 @@ func (m *WebDataSourceManager) captureWindowAttempt(parent context.Context, chro
 	}
 
 	js = fmt.Sprintf(`(() => {
-		const btn = document.querySelectorAll('.MuiSelect-root button[role="combobox"], button.MuiSelect-button[role="combobox"], .MuiSelect-button[role="combobox"]')[%d];
+		const btn = document.querySelectorAll('.MuiSelect-root button[role="combobox"], button.MuiSelect-button[role="combobox"], .MuiSelect-button[role="combobox"], .MuiSelect-root select, select')[%d];
 		if (!btn) return false;
+		if (btn.tagName === 'SELECT') {
+			btn.focus();
+			return true;
+		}
 		for (const type of ['pointerdown','mousedown','mouseup','click']) btn.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
 		return true;
 	})()`, dayBtnIdx)
@@ -672,34 +1246,15 @@ func (m *WebDataSourceManager) captureWindowAttempt(parent context.Context, chro
 		return nil, capturedPayloadMeta{}, errors.New("coinglass window selector not found")
 	}
 
-	windowIdx := map[int]int{1: 0, 7: 1, 30: 2}[days]
 	if days != 1 {
-		js = fmt.Sprintf(`(() => {
-			const norm = s => String(s || '').replace(/\s+/g, '').toLowerCase();
-			const optionSel = '[role="option"], [role="menuitem"], .MuiOption-root, .MuiMenuItem-root, li[class*="Option"], li[class*="option"], li[class*="MenuItem"], [data-value]';
-			const all = Array.from(document.querySelectorAll(optionSel)).filter(el => {
-				if (!el || el.offsetParent === null) return false;
-				const rect = el.getBoundingClientRect();
-				return rect.height > 0 && rect.top >= 0;
-			});
-			const wants = ['%dday','%dd','%d'];
-			const hit = all.find(el => {
-				const txt = norm(el.textContent || '');
-				const val = norm(el.getAttribute('data-value') || el.getAttribute('value') || '');
-				return wants.some(w => txt === w || txt.includes(w) || val === w || val.includes(w));
-			});
-			if (hit) {
-				hit.click();
-				return true;
-			}
-			const topVisible = all.slice(0, 3);
-			if (topVisible.length > %d) {
-				topVisible[%d].click();
-				return true;
-			}
-			return false;
-		})()`, days, days, days, days, windowIdx, windowIdx)
-		if err := chromedp.Run(taskCtx, chromedp.Evaluate(js, &ok), chromedp.Sleep(2*time.Second)); err != nil || !ok {
+		var selectionResult string
+		js = webDataSourceSelectWindowJS(dayBtnIdx, days, 1)
+		if err := chromedp.Run(taskCtx, chromedp.Evaluate(js, &selectionResult), chromedp.Sleep(2*time.Second)); err != nil || selectionResult == "" || selectionResult == "not_found" || selectionResult == "missing_button" || selectionResult == "no_options" {
+			return nil, capturedPayloadMeta{}, errors.New("coinglass target window option not found")
+		}
+		log.Printf("webdatasource window selection result: window=%dd attempt=%d mode=%q", days, attempt, selectionResult)
+		matched, err := waitForWebDataSourceWindowSelection(taskCtx, dayBtnIdx, days, 2*time.Second)
+		if err != nil || !matched {
 			return nil, capturedPayloadMeta{}, errors.New("coinglass target window option not found")
 		}
 	}
@@ -833,6 +1388,230 @@ func (m *WebDataSourceManager) captureWindowAttempt(parent context.Context, chro
 	return nil, capturedPayloadMeta{}, fmt.Errorf("timed out waiting for coinglass payload on attempt %d", attempt)
 }
 
+func captureWindowWithOpenSession(session *webDataSourceBrowserSession, days, attempt int) (map[string]any, capturedPayloadMeta, error) {
+	if session == nil {
+		return nil, capturedPayloadMeta{}, errors.New("webdatasource browser session is nil")
+	}
+	var ok bool
+	log.Printf("webdatasource capture switching window in shared browser: window=%dd attempt=%d wait=%s", days, attempt, webDataSourceWindowSwitchDelay)
+	progress := newWebDataSourceProgressLogger(session.taskCtx, "capture_window", days, attempt, "check current selected window")
+	defer progress.Stop()
+	var alreadySelected bool
+	js := webDataSourceWindowSelectionMatchesJS(session.dayBtnIdx, days)
+	if err := chromedp.Run(session.taskCtx, chromedp.Evaluate(js, &alreadySelected)); err != nil {
+		return nil, capturedPayloadMeta{}, err
+	}
+	if !alreadySelected {
+		progress.SetStage("reset page capture buffers")
+		if err := chromedp.Run(session.taskCtx, chromedp.Evaluate(`(() => {
+			window._liqData = null;
+			window._liqPayload = null;
+			window._liqCandidate = null;
+			window._liqChartOption = null;
+			window._liqDetectedBy = '';
+			window._liqLog = [];
+			return true;
+		})()`, &ok)); err != nil {
+			return nil, capturedPayloadMeta{}, err
+		}
+		js = fmt.Sprintf(`(() => {
+			const btn = document.querySelectorAll('.MuiSelect-root button[role="combobox"], button.MuiSelect-button[role="combobox"], .MuiSelect-button[role="combobox"], .MuiSelect-root select, select')[%d];
+			if (!btn) return false;
+			if (btn.tagName === 'SELECT') {
+				btn.focus();
+				return true;
+			}
+			for (const type of ['pointerdown','mousedown','mouseup','click']) btn.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
+			return true;
+		})()`, session.dayBtnIdx)
+		progress.SetStage("open window selector")
+		if err := chromedp.Run(session.taskCtx, chromedp.Evaluate(js, &ok), chromedp.Sleep(1200*time.Millisecond)); err != nil || !ok {
+			return nil, capturedPayloadMeta{}, errors.New("coinglass window selector not found")
+		}
+		windowIdx := map[int]int{1: 0, 7: 1, 30: 2}[days]
+		var selectionResult string
+		js = webDataSourceSelectWindowJS(session.dayBtnIdx, days, session.currentDays)
+		progress.SetStage(fmt.Sprintf("select %dd window", days))
+		if err := chromedp.Run(session.taskCtx, chromedp.Evaluate(js, &selectionResult), chromedp.Sleep(webDataSourceWindowSwitchDelay)); err != nil {
+			return nil, capturedPayloadMeta{}, err
+		}
+		log.Printf("webdatasource window selection result: window=%dd attempt=%d mode=%q current_days=%d", days, attempt, selectionResult, session.currentDays)
+		selectedByOption := selectionResult == "selected_exact" || selectionResult == "selected_relative" || selectionResult == "selected_fallback" || selectionResult == "selected_native" || selectionResult == "selected_keyboard"
+		if selectedByOption {
+			matched, err := waitForWebDataSourceWindowSelection(session.taskCtx, session.dayBtnIdx, days, 2*time.Second)
+			if err != nil || !matched {
+				selectedByOption = false
+			}
+		}
+		if !selectedByOption {
+			currentIdx := map[int]int{1: 0, 7: 1, 30: 2}[session.currentDays]
+			delta := windowIdx - currentIdx
+			if delta != 0 {
+				keyName := "ArrowDown"
+				steps := delta
+				if steps < 0 {
+					keyName = "ArrowUp"
+					steps = -steps
+				}
+				js = fmt.Sprintf(`(() => {
+					const btn = document.querySelectorAll('.MuiSelect-root button[role="combobox"], button.MuiSelect-button[role="combobox"], .MuiSelect-button[role="combobox"], .MuiSelect-root select, select')[%d];
+					if (!btn) return false;
+					btn.focus();
+					const key = %q;
+					const steps = %d;
+					const fire = (target, type, keyName) => target.dispatchEvent(new KeyboardEvent(type, {key:keyName, code:keyName, bubbles:true, cancelable:true}));
+					for (let i = 0; i < steps; i++) {
+						fire(btn, 'keydown', key);
+						fire(btn, 'keyup', key);
+					}
+					fire(btn, 'keydown', 'Enter');
+					fire(btn, 'keyup', 'Enter');
+					return true;
+				})()`, session.dayBtnIdx, keyName, steps)
+				progress.SetStage(fmt.Sprintf("fallback keyboard select %dd window", days))
+				if err := chromedp.Run(session.taskCtx, chromedp.Evaluate(js, &ok), chromedp.Sleep(webDataSourceWindowSwitchDelay)); err != nil || !ok {
+					return nil, capturedPayloadMeta{}, errors.New("coinglass target window option not found")
+				}
+			}
+		}
+		session.currentDays = days
+		js = fmt.Sprintf(`(() => {
+			const btns = document.querySelectorAll('button,[role="button"]');
+			const btn = btns[%d];
+			if (!btn) return false;
+			for (const type of ['pointerdown','mousedown','mouseup','click']) btn.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
+			return true;
+		})()`, session.refreshIdx)
+		progress.SetStage("click refresh")
+		if err := chromedp.Run(session.taskCtx, chromedp.Evaluate(js, &ok), chromedp.Sleep(webDataSourceWindowSwitchDelay)); err != nil || !ok {
+			return nil, capturedPayloadMeta{}, errors.New("coinglass refresh button not found")
+		}
+	} else {
+		session.currentDays = days
+		progress.SetStage("target window already selected, wait for chart")
+		if err := chromedp.Run(session.taskCtx, chromedp.Sleep(webDataSourceWindowSwitchDelay)); err != nil {
+			return nil, capturedPayloadMeta{}, err
+		}
+	}
+	progress.SetStage("wait chart area ready")
+	if err := chromedp.Run(session.taskCtx, chromedp.Evaluate(`(() => {
+		const chartRoot = document.querySelector('.MuiBox-root.cg-style-1dzgi4w');
+		if (!chartRoot || chartRoot.offsetParent === null) return false;
+		const chart = chartRoot.querySelector('.echarts-for-react canvas');
+		return !!chart && chart.offsetParent !== null;
+	})()`, &ok), chromedp.Sleep(1500*time.Millisecond)); err != nil || !ok {
+		return nil, capturedPayloadMeta{}, errors.New("coinglass chart area not ready")
+	}
+	deadline := time.Now().Add(time.Duration(session.timeoutSec-defaultWebDataSourcePageWarmupSec) * time.Second)
+	if session.timeoutSec <= defaultWebDataSourcePageWarmupSec+5 {
+		deadline = time.Now().Add(20 * time.Second)
+	}
+	var latestChartOptionRaw string
+	var latestChartDetectedBy string
+	progress.SetStage("wait liquidation payload")
+	for time.Now().Before(deadline) {
+		var data map[string]any
+		var detectedBy string
+		if err := chromedp.Run(session.taskCtx,
+			chromedp.Evaluate(`window._liqData || window._liqPayload || window._liqCandidate || null`, &data),
+			chromedp.Evaluate(`window._liqDetectedBy || ''`, &detectedBy),
+		); err == nil && len(data) > 0 {
+			if strings.EqualFold(detectedBy, "echarts.option") || strings.EqualFold(fmt.Sprint(data["source"]), "echarts.option") {
+				_ = chromedp.Run(session.taskCtx, chromedp.Evaluate(`window._liqChartOption ? JSON.stringify(window._liqChartOption) : ''`, &latestChartOptionRaw))
+				latestChartDetectedBy = detectedBy
+				if webDataSourcePayloadPointCount(data) == 0 {
+					select {
+					case <-session.taskCtx.Done():
+						return nil, capturedPayloadMeta{}, session.taskCtx.Err()
+					case <-time.After(1200 * time.Millisecond):
+					}
+					continue
+				}
+			}
+			meta := capturedPayloadMeta{
+				RangeLow:   toFloatFromAny(data["rangeLow"]),
+				RangeHigh:  toFloatFromAny(data["rangeHigh"]),
+				DetectedBy: detectedBy,
+			}
+			var logs []any
+			_ = chromedp.Run(session.taskCtx, chromedp.Evaluate(`window._liqLog || []`, &logs))
+			meta.HookHits = len(logs)
+			if strings.EqualFold(detectedBy, "echarts.option") || strings.EqualFold(fmt.Sprint(data["source"]), "echarts.option") {
+				var rawOption string
+				if err := chromedp.Run(session.taskCtx, chromedp.Evaluate(`window._liqChartOption ? JSON.stringify(window._liqChartOption) : ''`, &rawOption)); err == nil {
+					if path, err := writeWebDataSourceChartOption(days, attempt, detectedBy, rawOption); err == nil {
+						meta.ChartOptionPath = path
+					} else {
+						log.Printf("webdatasource chart option export failed: window=%dd attempt=%d error=%v", days, attempt, err)
+					}
+				}
+			}
+			return data, meta, nil
+		}
+		if err := chromedp.Run(session.taskCtx,
+			chromedp.Evaluate(webDataSourceChartExtractJS, &data),
+			chromedp.Evaluate(`window._liqDetectedBy || ''`, &detectedBy),
+		); err == nil && len(data) > 0 {
+			if strings.EqualFold(detectedBy, "echarts.option") || strings.EqualFold(fmt.Sprint(data["source"]), "echarts.option") {
+				_ = chromedp.Run(session.taskCtx, chromedp.Evaluate(`window._liqChartOption ? JSON.stringify(window._liqChartOption) : ''`, &latestChartOptionRaw))
+				latestChartDetectedBy = detectedBy
+				if webDataSourcePayloadPointCount(data) == 0 {
+					select {
+					case <-session.taskCtx.Done():
+						return nil, capturedPayloadMeta{}, session.taskCtx.Err()
+					case <-time.After(1200 * time.Millisecond):
+					}
+					continue
+				}
+			}
+			meta := capturedPayloadMeta{
+				RangeLow:   toFloatFromAny(data["rangeLow"]),
+				RangeHigh:  toFloatFromAny(data["rangeHigh"]),
+				DetectedBy: detectedBy,
+			}
+			var logs []any
+			_ = chromedp.Run(session.taskCtx, chromedp.Evaluate(`window._liqLog || []`, &logs))
+			meta.HookHits = len(logs)
+			if strings.EqualFold(detectedBy, "echarts.option") || strings.EqualFold(fmt.Sprint(data["source"]), "echarts.option") {
+				var rawOption string
+				if err := chromedp.Run(session.taskCtx, chromedp.Evaluate(`window._liqChartOption ? JSON.stringify(window._liqChartOption) : ''`, &rawOption)); err == nil {
+					if path, err := writeWebDataSourceChartOption(days, attempt, detectedBy, rawOption); err == nil {
+						meta.ChartOptionPath = path
+					} else {
+						log.Printf("webdatasource chart option export failed: window=%dd attempt=%d error=%v", days, attempt, err)
+					}
+				}
+			}
+			return data, meta, nil
+		}
+		select {
+		case <-session.taskCtx.Done():
+			return nil, capturedPayloadMeta{}, session.taskCtx.Err()
+		case <-time.After(1200 * time.Millisecond):
+		}
+	}
+	var logs []string
+	_ = chromedp.Run(session.taskCtx, chromedp.Evaluate(`(window._liqLog || []).slice(-8)`, &logs))
+	var chartOptionPath string
+	if latestChartOptionRaw != "" {
+		if path, err := writeWebDataSourceChartOption(days, attempt, latestChartDetectedBy, latestChartOptionRaw); err == nil {
+			chartOptionPath = path
+		} else {
+			log.Printf("webdatasource chart option export failed on timeout: window=%dd attempt=%d error=%v", days, attempt, err)
+		}
+	}
+	if len(logs) > 0 {
+		if chartOptionPath != "" {
+			return nil, capturedPayloadMeta{ChartOptionPath: chartOptionPath, DetectedBy: latestChartDetectedBy}, fmt.Errorf("timed out waiting for coinglass payload on attempt %d: %s (chart_option_path=%s)", attempt, strings.Join(logs, " | "), chartOptionPath)
+		}
+		return nil, capturedPayloadMeta{}, fmt.Errorf("timed out waiting for coinglass payload on attempt %d: %s", attempt, strings.Join(logs, " | "))
+	}
+	if chartOptionPath != "" {
+		return nil, capturedPayloadMeta{ChartOptionPath: chartOptionPath, DetectedBy: latestChartDetectedBy}, fmt.Errorf("timed out waiting for coinglass payload on attempt %d (chart_option_path=%s)", attempt, chartOptionPath)
+	}
+	return nil, capturedPayloadMeta{}, fmt.Errorf("timed out waiting for coinglass payload on attempt %d", attempt)
+}
+
 func sanitizeWebDataSourceFileSlug(raw string) string {
 	raw = strings.TrimSpace(strings.ToLower(raw))
 	if raw == "" {
@@ -890,6 +1669,35 @@ func writeWebDataSourceChartOption(days, attempt int, detectedBy, raw string) (s
 	return path, nil
 }
 
+func writeWebDataSourcePayloadDump(days, attempt int, detectedBy string, payload map[string]any) (string, error) {
+	if len(payload) == 0 {
+		return "", nil
+	}
+	wd, err := os.Getwd()
+	if err != nil || wd == "" {
+		wd = "."
+	}
+	dir := filepath.Join(wd, "webdatasource_exports")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	name := fmt.Sprintf("%s_%dd_attempt%d_%s_payload.json",
+		time.Now().Format("20060102_150405"),
+		days,
+		attempt,
+		sanitizeWebDataSourceFileSlug(detectedBy),
+	)
+	path := filepath.Join(dir, name)
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 func webDataSourcePayloadPointCount(payload map[string]any) int {
 	if payload == nil {
 		return 0
@@ -920,8 +1728,52 @@ func toFloatFromAny(v any) float64 {
 		f, _ := x.Float64()
 		return f
 	case string:
-		f, _ := strconv.ParseFloat(strings.TrimSpace(x), 64)
-		return f
+		s := strings.TrimSpace(strings.ReplaceAll(x, ",", ""))
+		s = strings.Trim(s, `"'`)
+		if s == "" {
+			return 0
+		}
+		multiplier := 1.0
+		last := s[len(s)-1]
+		switch last {
+		case 'k', 'K':
+			multiplier = 1e3
+			s = strings.TrimSpace(s[:len(s)-1])
+		case 'm', 'M':
+			multiplier = 1e6
+			s = strings.TrimSpace(s[:len(s)-1])
+		case 'b', 'B':
+			multiplier = 1e9
+			s = strings.TrimSpace(s[:len(s)-1])
+		case 't', 'T':
+			multiplier = 1e12
+			s = strings.TrimSpace(s[:len(s)-1])
+		}
+		f, err := strconv.ParseFloat(s, 64)
+		if err == nil {
+			return f * multiplier
+		}
+		start := -1
+		for i, r := range s {
+			if (r >= '0' && r <= '9') || r == '-' || r == '+' || r == '.' {
+				start = i
+				break
+			}
+		}
+		if start < 0 {
+			return 0
+		}
+		end := start
+		for end < len(s) {
+			ch := s[end]
+			if (ch >= '0' && ch <= '9') || ch == '-' || ch == '+' || ch == '.' {
+				end++
+				continue
+			}
+			break
+		}
+		f, _ = strconv.ParseFloat(s[start:end], 64)
+		return f * multiplier
 	default:
 		return 0
 	}
@@ -963,6 +1815,49 @@ func parsePointArray(node any, exchange, side string) []WebDataSourcePoint {
 			if price > 0 && value > 0 {
 				out = append(out, WebDataSourcePoint{Exchange: strings.ToUpper(ex), Side: side, Price: price, LiqValue: value})
 			}
+		}
+	}
+	return out
+}
+
+func parseLiqMapV2(node any, exchange string, lastPrice float64) []WebDataSourcePoint {
+	raw, ok := node.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make([]WebDataSourcePoint, 0, len(raw))
+	for _, bucket := range raw {
+		rows, ok := bucket.([]any)
+		if !ok {
+			continue
+		}
+		for _, row := range rows {
+			arr, ok := row.([]any)
+			if !ok || len(arr) < 2 {
+				continue
+			}
+			price := toFloatFromAny(arr[0])
+			value := toFloatFromAny(arr[1])
+			if !(price > 0 && value > 0) {
+				continue
+			}
+			side := ""
+			if lastPrice > 0 {
+				if price < lastPrice {
+					side = "long"
+				} else if price > lastPrice {
+					side = "short"
+				}
+			}
+			if side == "" {
+				continue
+			}
+			out = append(out, WebDataSourcePoint{
+				Exchange: strings.ToUpper(exchange),
+				Side:     side,
+				Price:    price,
+				LiqValue: value,
+			})
 		}
 	}
 	return out
@@ -1013,6 +1908,23 @@ func normalizeWebDataSourcePayload(payload map[string]any) ([]WebDataSourcePoint
 	points := make([]WebDataSourcePoint, 0, 512)
 	rangeLow := toFloatFromAny(payload["rangeLow"])
 	rangeHigh := toFloatFromAny(payload["rangeHigh"])
+	lastPrice := toFloatFromAny(payload["lastPrice"])
+	if dataRows, ok := payload["data"].([]any); ok {
+		for _, item := range dataRows {
+			row, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			exchange := ""
+			if instrument, ok := row["instrument"].(map[string]any); ok {
+				exchange = strings.TrimSpace(fmt.Sprint(instrument["exName"]))
+			}
+			if exchange == "" {
+				exchange = strings.TrimSpace(fmt.Sprint(row["exchange"]))
+			}
+			points = append(points, parseLiqMapV2(row["liqMapV2"], exchange, lastPrice)...)
+		}
+	}
 	var walk func(any, string)
 	walk = func(node any, exchange string) {
 		switch v := node.(type) {
@@ -1087,20 +1999,20 @@ func (m *WebDataSourceManager) loadStatus() WebDataSourceStatus {
 		lastRun = &runs[0]
 	}
 	return WebDataSourceStatus{
-		Enabled:            cfg.Enabled,
-		Running:            running,
-		LoginInitRunning:   loginInitRunning,
-		LoginInitUntilTS:   loginInitUntilTS,
-		IntervalMin:        cfg.IntervalMin,
-		ChromePath:         cfg.ChromePath,
-		ProfileDir:         cfg.ProfileDir,
-		CaptureTimeoutSec:  cfg.CaptureTimeoutSec,
-		LoginHoldSec:       cfg.LoginHoldSec,
-		MaxRetries:         cfg.MaxRetries,
-		LastError:          cfg.LastError,
-		LastSuccessTS:      cfg.LastSuccessTS,
-		LastRun:            lastRun,
-		RecentRuns:         runs,
+		Enabled:           cfg.Enabled,
+		Running:           running,
+		LoginInitRunning:  loginInitRunning,
+		LoginInitUntilTS:  loginInitUntilTS,
+		IntervalMin:       cfg.IntervalMin,
+		ChromePath:        cfg.ChromePath,
+		ProfileDir:        cfg.ProfileDir,
+		CaptureTimeoutSec: cfg.CaptureTimeoutSec,
+		LoginHoldSec:      cfg.LoginHoldSec,
+		MaxRetries:        cfg.MaxRetries,
+		LastError:         cfg.LastError,
+		LastSuccessTS:     cfg.LastSuccessTS,
+		LastRun:           lastRun,
+		RecentRuns:        runs,
 	}
 }
 
@@ -1376,7 +2288,16 @@ func (m *WebDataSourceManager) startInteractiveLogin(runID int64, chromePath, pr
 		taskCtx, cancelTask := chromedp.NewContext(allocCtx, chromedp.WithErrorf(chromedpErrorfFilter))
 		defer cancelTask()
 		if err := chromedp.Run(taskCtx,
-			chromedp.Navigate(coinglassLiquidationMapURL),
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				_, _, errorText, err := page.Navigate(coinglassLiquidationMapURL).Do(ctx)
+				if err != nil {
+					return err
+				}
+				if strings.TrimSpace(errorText) != "" {
+					return errors.New(errorText)
+				}
+				return nil
+			}),
 			chromedp.Sleep(holdDuration),
 		); err != nil {
 			msg := err.Error()
@@ -1534,6 +2455,34 @@ const webDataSourceChartExtractJS = `(() => {
 		if (txt.includes('hyperliquid')) return 'HYPERLIQUID';
 		return 'OTHER';
 	};
+	const pushPoint = (points, exchange, side, price, value) => {
+		price = toNum(price);
+		value = Math.abs(toNum(value));
+		side = String(side || '').toLowerCase();
+		if (!(price > 0 && value > 0)) return false;
+		if (!(side === 'long' || side === 'short')) return false;
+		points.push({exchange: exchange || 'OTHER', side, price, value});
+		return true;
+	};
+	const extractTooltipPoints = () => {
+		const boxes = Array.from(document.querySelectorAll('.cg-toolti-box, .cg-tooltip-box')).filter(isVisible);
+		if (!boxes.length) return null;
+		const box = boxes[0];
+		const title = box.querySelector('.cg-toolti-title, .cg-tooltip-title');
+		const price = toNum(title && title.textContent);
+		if (!(price > 0)) return null;
+		const points = [];
+		const items = Array.from(box.querySelectorAll('.cg-tooltip-item'));
+		(items || []).forEach(item => {
+			const label = String((item.querySelector('.cg-tooltip-item-title') || item).textContent || '');
+			const val = String((item.querySelector('.pl20') || item).textContent || '');
+			const exchange = inferExchange(label);
+			let side = inferSide(label);
+			if (!(side === 'long' || side === 'short')) side = label.toLowerCase().includes('short') ? 'short' : 'long';
+			pushPoint(points, exchange, side, price, val);
+		});
+		return points.length ? { source: 'tooltip.dom', rangeLow: price, rangeHigh: price, points } : null;
+	};
 	const titleEl = Array.from(document.querySelectorAll('h1.MuiTypography-root.MuiTypography-h1')).find(el => {
 		if (!isVisible(el)) return false;
 		const text = String(el.textContent || '').replace(/\s+/g, '');
@@ -1572,15 +2521,19 @@ const webDataSourceChartExtractJS = `(() => {
 	if (!instance) return null;
 	let option = null;
 	try { option = instance.getOption(); } catch (_) {}
-	if (!option || typeof option !== 'object') return null;
-	window._liqChartOption = option;
-	const xAxis = Array.isArray(option.xAxis) ? (option.xAxis[0] || {}) : (option.xAxis || {});
-	const xData = Array.isArray(xAxis.data) ? xAxis.data : [];
-	const seriesList = Array.isArray(option.series) ? option.series : [];
 	const points = [];
 	const seriesDebug = [];
 	let rangeLow = 0;
 	let rangeHigh = 0;
+	const updateRange = price => {
+		price = toNum(price);
+		if (!(price > 0)) return;
+		if (rangeLow === 0 || price < rangeLow) rangeLow = price;
+		if (rangeHigh === 0 || price > rangeHigh) rangeHigh = price;
+	};
+	const xAxis = Array.isArray(option && option.xAxis) ? (option.xAxis[0] || {}) : ((option && option.xAxis) || {});
+	const xData = Array.isArray(xAxis.data) ? xAxis.data : [];
+	const seriesList = Array.isArray(option && option.series) ? option.series : [];
 	for (let sIdx = 0; sIdx < seriesList.length; sIdx++) {
 		const series = seriesList[sIdx];
 		const seriesName = String(series && (series.name || series.id || series.stack || '') || '');
@@ -1624,12 +2577,56 @@ const webDataSourceChartExtractJS = `(() => {
 			if (!(side === 'long' || side === 'short')) {
 				side = value < 0 ? 'short' : 'long';
 			}
-			value = Math.abs(value);
-			if (!(price > 0 && value > 0)) continue;
-			if (!(side === 'long' || side === 'short')) continue;
-			points.push({exchange, side, price, value});
-			if (rangeLow === 0 || price < rangeLow) rangeLow = price;
-			if (rangeHigh === 0 || price > rangeHigh) rangeHigh = price;
+			if (!pushPoint(points, exchange, side, price, value)) continue;
+			updateRange(price);
+		}
+	}
+	if (!points.length) {
+		try {
+			const model = instance.getModel && instance.getModel();
+			const rawSeries = model && typeof model.getSeries === 'function' ? model.getSeries() : [];
+			for (let sIdx = 0; sIdx < rawSeries.length; sIdx++) {
+				const sm = rawSeries[sIdx];
+				const name = String((sm && sm.name) || (sm && sm.id) || (sm && sm.option && sm.option.name) || '');
+				const side = inferSide(name, sm && sm.option && sm.option.stack, sm && sm.option && sm.option.id);
+				const exchange = inferExchange(name, sm && sm.option && sm.option.stack, sm && sm.option && sm.option.id);
+				const data = sm && typeof sm.getData === 'function' ? sm.getData() : null;
+				const count = data && typeof data.count === 'function' ? data.count() : 0;
+				seriesDebug.push({ index: sIdx, name, raw_count: count, source: 'seriesModel.getData' });
+				for (let i = 0; i < count; i++) {
+					let vals = [];
+					try { vals = data.getValues ? data.getValues(null, i) : []; } catch (_) {}
+					let price = Array.isArray(vals) ? toNum(vals[0]) : 0;
+					let value = Array.isArray(vals) ? toNum(vals[1]) : 0;
+					if (!(price > 0)) {
+						try { price = toNum(data.get('price', i)); } catch (_) {}
+					}
+					if (!(price > 0)) {
+						try { price = toNum(data.get('x', i)); } catch (_) {}
+					}
+					if (!(value > 0)) {
+						try { value = toNum(data.get('value', i)); } catch (_) {}
+					}
+					if (!(value > 0)) {
+						try { value = toNum(data.get('y', i)); } catch (_) {}
+					}
+					if (!pushPoint(points, exchange, side || (value < 0 ? 'short' : 'long'), price, value)) continue;
+					updateRange(price);
+				}
+			}
+		} catch (_) {}
+	}
+	if (!points.length) {
+		const tooltipPayload = extractTooltipPoints();
+		if (tooltipPayload && tooltipPayload.points && tooltipPayload.points.length) {
+			try {
+				window._liqData = tooltipPayload;
+				window._liqPayload = tooltipPayload;
+				window._liqCandidate = tooltipPayload;
+				window._liqDetectedBy = 'tooltip.dom';
+				window._liqLog.push('payload via tooltip.dom, points=' + tooltipPayload.points.length);
+			} catch (_) {}
+			return tooltipPayload;
 		}
 	}
 	const payload = {
@@ -1642,6 +2639,7 @@ const webDataSourceChartExtractJS = `(() => {
 		series_debug: seriesDebug
 	};
 	try {
+		if (option && typeof option === 'object') window._liqChartOption = option;
 		window._liqData = payload;
 		window._liqPayload = payload;
 		window._liqCandidate = payload;

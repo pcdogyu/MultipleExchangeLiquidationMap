@@ -12,12 +12,14 @@ import (
 	"log"
 	"math"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,6 +50,12 @@ const (
 )
 
 var bandSizes = []int{10, 20, 30, 40, 50, 60, 80, 100, 125, 150, 175, 200, 250, 300, 350, 400}
+
+const (
+	wsRetryBaseDelay = 2 * time.Second
+	wsRetryMaxDelay  = 30 * time.Second
+	wsLogInterval    = 30 * time.Second
+)
 
 type MarketState struct {
 	Exchange       string   `json:"exchange"`
@@ -237,6 +245,113 @@ type OrderBookHub struct {
 
 var errResnapshot = errors.New("periodic resnapshot")
 
+type wsRetryState struct {
+	attempt     int
+	firstFailAt time.Time
+	lastLogAt   time.Time
+	lastMsg     string
+	target      string
+	suppressed  int
+}
+
+func nextWSRetryDelay(attempt int) time.Duration {
+	if attempt <= 0 {
+		return wsRetryBaseDelay
+	}
+	d := wsRetryBaseDelay
+	for i := 1; i < attempt; i++ {
+		if d >= wsRetryMaxDelay/2 {
+			return wsRetryMaxDelay
+		}
+		d *= 2
+	}
+	if d > wsRetryMaxDelay {
+		return wsRetryMaxDelay
+	}
+	return d
+}
+
+func (a *App) logWSRetry(name string, st *wsRetryState, err error, delay time.Duration) {
+	if !a.debug || err == nil {
+		return
+	}
+	now := time.Now()
+	if st.firstFailAt.IsZero() {
+		st.firstFailAt = now
+	}
+	msg := err.Error()
+	target := st.target
+	if target == "" {
+		target = "target=unknown"
+	}
+	if st.lastLogAt.IsZero() || now.Sub(st.lastLogAt) >= wsLogInterval || msg != st.lastMsg {
+		if st.suppressed > 0 && st.lastMsg != "" && msg == st.lastMsg {
+			log.Printf("%s reconnect still failing: %s err=%v suppressed=%d next_retry=%s", name, target, err, st.suppressed, delay)
+		} else {
+			log.Printf("%s reconnect failed: %s err=%v attempt=%d next_retry=%s", name, target, err, st.attempt, delay)
+		}
+		st.lastLogAt = now
+		st.lastMsg = msg
+		st.suppressed = 0
+		return
+	}
+	st.suppressed++
+}
+
+func (a *App) logWSRecovered(name string, st *wsRetryState) {
+	if !a.debug || st.attempt == 0 {
+		st.attempt = 0
+		st.firstFailAt = time.Time{}
+		st.suppressed = 0
+		return
+	}
+	target := st.target
+	if target == "" {
+		target = "target=unknown"
+	}
+	downtime := time.Since(st.firstFailAt).Round(time.Second)
+	if st.suppressed > 0 {
+		log.Printf("%s reconnected: %s failed_attempts=%d downtime=%s suppressed=%d", name, target, st.attempt, downtime, st.suppressed)
+	} else {
+		log.Printf("%s reconnected: %s failed_attempts=%d downtime=%s", name, target, st.attempt, downtime)
+	}
+	st.attempt = 0
+	st.firstFailAt = time.Time{}
+	st.lastLogAt = time.Time{}
+	st.lastMsg = ""
+	st.suppressed = 0
+}
+
+func wsTargetLabel(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "url=" + rawURL
+	}
+	host := u.Hostname()
+	port := u.Port()
+	if port == "" {
+		switch u.Scheme {
+		case "wss", "https":
+			port = "443"
+		case "ws", "http":
+			port = "80"
+		}
+	}
+	label := fmt.Sprintf("url=%s host=%s port=%s", rawURL, host, port)
+	if host == "" {
+		return label
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return label
+	}
+	parts := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		parts = append(parts, ip.String())
+	}
+	return label + " ips=" + strings.Join(parts, ",")
+}
+
 type Snapshot struct {
 	Exchange       string
 	Symbol         string
@@ -253,6 +368,12 @@ type ChannelSettings struct {
 	TelegramChannel   string `json:"telegram_channel"`
 	NotifyIntervalMin int    `json:"notify_interval_min"`
 	NotifyEnabled     bool   `json:"notify_enabled"`
+	NotifyRegexRules  string `json:"notify_regex_rules"`
+}
+
+type telegramContentBlock struct {
+	HTML   string
+	Labels []string
 }
 
 type ManagedUser struct {
@@ -379,7 +500,7 @@ func initDB(db *sql.DB) error {
 			payload_json TEXT NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_webdatasource_snapshots_key_ts ON webdatasource_snapshots(symbol, window_days, captured_at);`,
-			`CREATE TABLE IF NOT EXISTS webdatasource_points (
+		`CREATE TABLE IF NOT EXISTS webdatasource_points (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				snapshot_id INTEGER NOT NULL,
 				symbol TEXT NOT NULL,
@@ -390,12 +511,12 @@ func initDB(db *sql.DB) error {
 				liq_value REAL NOT NULL,
 				captured_at INTEGER NOT NULL
 			);`,
-			`CREATE INDEX IF NOT EXISTS idx_webdatasource_points_snapshot_id ON webdatasource_points(snapshot_id);`,
-			`CREATE TABLE IF NOT EXISTS users (
+		`CREATE INDEX IF NOT EXISTS idx_webdatasource_points_snapshot_id ON webdatasource_points(snapshot_id);`,
+		`CREATE TABLE IF NOT EXISTS users (
 				email TEXT PRIMARY KEY,
 				is_admin INTEGER NOT NULL DEFAULT 0
 			);`,
-		}
+	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
 			return err
@@ -945,6 +1066,7 @@ func (a *App) loadSettings() ChannelSettings {
 		TelegramChannel:   a.getSetting("telegram_channel"),
 		NotifyIntervalMin: interval,
 		NotifyEnabled:     parseBoolSetting(a.getSetting("notify_enabled"), false),
+		NotifyRegexRules:  a.getSetting("notify_regex_rules"),
 	}
 }
 
@@ -1629,6 +1751,10 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if err := a.setSetting("notify_regex_rules", req.NotifyRegexRules); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1667,7 +1793,7 @@ func (a *App) handleUpgradePull(w http.ResponseWriter, r *http.Request) {
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-		go func() {
+	go func() {
 		// Use systemd-run --scope so the upgrade process survives `systemctl restart liqmap.service`
 		// without creating a liqmap-upgrade.service unit.
 		upgradeCmd := exec.Command("bash", "-lc", "rm -f /tmp/liqmap-upgrade.exit /tmp/liqmap-upgrade.pid /tmp/liqmap-upgrade.unit; : >/tmp/liqmap-upgrade.log; unit=liqmap-upgrade.scope; echo \"$unit\" > /tmp/liqmap-upgrade.unit; systemd-run --scope --collect --no-block --unit=liqmap-upgrade /bin/bash -lc 'cd /opt/MultipleExchangeLiquidationMap && echo [git fetch] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git fetch --all --prune\" && git fetch --all --prune && echo [git reset] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git reset --hard origin/golang\" && git reset --hard origin/golang && echo [go build] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# go build -o multipleexchangeliquidationmap.exe .\" && go build -o multipleexchangeliquidationmap.exe . && echo [restart service] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl restart liqmap.service\" && systemctl restart liqmap.service && echo [service status] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl status liqmap.service --no-pager\" && systemctl status liqmap.service --no-pager; ec=$?; echo $ec >/tmp/liqmap-upgrade.exit' >>/tmp/liqmap-upgrade.log 2>&1")
@@ -1874,10 +2000,18 @@ func (a *App) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) sendTelegramTestMessage() error {
-	return a.sendTelegramText("ETH Liquidation Map test message")
+	return a.sendTelegramReportBundle()
 }
 
 func (a *App) sendTelegramText(text string) error {
+	return a.sendTelegramMessage(text, "")
+}
+
+func (a *App) sendTelegramHTML(html string) error {
+	return a.sendTelegramMessage(html, "HTML")
+}
+
+func (a *App) sendTelegramMessage(text, parseMode string) error {
 	token := strings.TrimSpace(a.getSetting("telegram_bot_token"))
 	channel := strings.TrimSpace(a.getSetting("telegram_channel"))
 	if token == "" || channel == "" {
@@ -1885,9 +2019,13 @@ func (a *App) sendTelegramText(text string) error {
 	}
 
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
-	payload := map[string]string{
-		"chat_id": channel,
-		"text":    text,
+	payload := map[string]any{
+		"chat_id":                  channel,
+		"text":                     text,
+		"disable_web_page_preview": true,
+	}
+	if parseMode != "" {
+		payload["parse_mode"] = parseMode
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -1912,6 +2050,111 @@ func (a *App) sendTelegramText(text string) error {
 			return fmt.Errorf("telegram api returned %s", resp.Status)
 		}
 		return fmt.Errorf("telegram api returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
+func (a *App) sendTelegramReportBundle() error {
+	monitorReport, err := a.buildModelHeatReportData()
+	if err != nil {
+		return err
+	}
+	if len(monitorReport.Bands) == 0 {
+		return errors.New("monitor heat report is empty")
+	}
+	webMap := a.webds.loadLatestMap("30d")
+	if !webMap.HasData {
+		return fmt.Errorf("webdatasource 30d has no data: %s", strings.TrimSpace(webMap.LastError))
+	}
+	blocks := []telegramContentBlock{
+		{
+			HTML: a.buildTelegramMonitorHTML(monitorReport),
+			Labels: []string{
+				"monitor",
+				"/monitor",
+				"清算热区速报",
+				"heat-report",
+			},
+		},
+		{
+			HTML: a.buildTelegramWebDataSourceHTML(webMap),
+			Labels: []string{
+				"webdatasource",
+				"/webdatasource",
+				"30d",
+				"页面数据源",
+			},
+		},
+	}
+	return a.sendTelegramFilteredBlocks(blocks)
+}
+
+func splitNotifyRegexRules(raw string) []string {
+	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+	out := make([]string, 0, 3)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		out = append(out, line)
+		if len(out) >= 3 {
+			break
+		}
+	}
+	return out
+}
+
+func compileNotifyRegexRules(raw string) ([]*regexp.Regexp, error) {
+	lines := splitNotifyRegexRules(raw)
+	out := make([]*regexp.Regexp, 0, len(lines))
+	for _, line := range lines {
+		re, err := regexp.Compile(line)
+		if err != nil {
+			return nil, fmt.Errorf("invalid notify regex %q: %w", line, err)
+		}
+		out = append(out, re)
+	}
+	return out, nil
+}
+
+func (a *App) sendTelegramFilteredBlocks(blocks []telegramContentBlock) error {
+	rules, err := compileNotifyRegexRules(a.getSetting("notify_regex_rules"))
+	if err != nil {
+		return err
+	}
+	sent := 0
+	for _, block := range blocks {
+		if strings.TrimSpace(block.HTML) == "" {
+			continue
+		}
+		if len(rules) > 0 {
+			matched := false
+			for _, re := range rules {
+				for _, label := range block.Labels {
+					if re.MatchString(label) {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		if err := a.sendTelegramHTML(block.HTML); err != nil {
+			return err
+		}
+		sent++
+	}
+	if sent == 0 {
+		if len(rules) > 0 {
+			return errors.New("notify regex rules did not match any sendable content")
+		}
+		return errors.New("no telegram content to send")
 	}
 	return nil
 }
@@ -1984,19 +2227,7 @@ func (a *App) startTelegramNotifier(ctx context.Context) {
 				if now-a.lastNotify < int64(interval)*60*1000 {
 					continue
 				}
-				report, err := a.buildModelHeatReportData()
-				if err != nil || len(report.Bands) == 0 {
-					continue
-				}
-				caption := a.buildHeatReportCaption(report)
-				image, err := a.renderHeatReportPNG(report)
-				if err != nil {
-					if a.debug {
-						log.Printf("telegram heat report image failed: %v", err)
-					}
-					continue
-				}
-				if err := a.sendTelegramPhoto(caption, image); err != nil {
+				if err := a.sendTelegramReportBundle(); err != nil {
 					if a.debug {
 						log.Printf("telegram auto send failed: %v", err)
 					}
@@ -2006,6 +2237,125 @@ func (a *App) startTelegramNotifier(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+func fixedWidthCell(v string, width int, alignRight bool) string {
+	r := []rune(v)
+	if len(r) > width {
+		return string(r[:width])
+	}
+	pad := strings.Repeat(" ", width-len(r))
+	if alignRight {
+		return pad + v
+	}
+	return v + pad
+}
+
+func tgCodeBlock(lines []string) string {
+	return "<pre>" + template.HTMLEscapeString(strings.Join(lines, "\n")) + "</pre>"
+}
+
+func tgFmtYi(v float64) string {
+	return fmt.Sprintf("%.2f", v/1e8)
+}
+
+func tgFmtPrice(v float64) string {
+	return fmt.Sprintf("%.1f", v)
+}
+
+func tgFmtTime(ts int64) string {
+	if ts <= 0 {
+		return "-"
+	}
+	return time.UnixMilli(ts).Format("2006-01-02 15:04:05")
+}
+
+func (a *App) buildTelegramMonitorHTML(r HeatReportData) string {
+	rows := []string{
+		fixedWidthCell("Band", 6, false) + " " +
+			fixedWidthCell("UpPx", 9, true) + " " +
+			fixedWidthCell("UpYi", 8, true) + " " +
+			fixedWidthCell("DownPx", 9, true) + " " +
+			fixedWidthCell("DownYi", 8, true),
+	}
+	for _, band := range []int{20, 50, 80, 100} {
+		b := heatReportBandBySize(r, band)
+		rows = append(rows,
+			fixedWidthCell(strconv.Itoa(b.Band), 6, false)+" "+
+				fixedWidthCell(tgFmtPrice(b.UpPrice), 9, true)+" "+
+				fixedWidthCell(tgFmtYi(b.UpNotionalUSD), 8, true)+" "+
+				fixedWidthCell(tgFmtPrice(b.DownPrice), 9, true)+" "+
+				fixedWidthCell(tgFmtYi(b.DownNotionalUSD), 8, true),
+		)
+	}
+	peakRows := []string{
+		fixedWidthCell("Side", 6, false) + " " +
+			fixedWidthCell("PeakPx", 9, true) + " " +
+			fixedWidthCell("SingleYi", 10, true) + " " +
+			fixedWidthCell("CumYi", 10, true),
+		fixedWidthCell("Long", 6, false) + " " +
+			fixedWidthCell(tgFmtPrice(r.LongPeak.Price), 9, true) + " " +
+			fixedWidthCell(tgFmtYi(r.LongPeak.SingleUSD), 10, true) + " " +
+			fixedWidthCell(tgFmtYi(r.LongPeak.CumulativeUSD), 10, true),
+		fixedWidthCell("Short", 6, false) + " " +
+			fixedWidthCell(tgFmtPrice(r.ShortPeak.Price), 9, true) + " " +
+			fixedWidthCell(tgFmtYi(r.ShortPeak.SingleUSD), 10, true) + " " +
+			fixedWidthCell(tgFmtYi(r.ShortPeak.CumulativeUSD), 10, true),
+	}
+	parts := []string{
+		"<b>http://127.0.0.1:8888/monitor</b>",
+		fmt.Sprintf("清算热区速报 | 现价 <b>$%s</b> | 多单 %.2f亿 | 空单 %.2f亿", tgFmtPrice(r.CurrentPrice), r.LongTotalUSD/1e8, r.ShortTotalUSD/1e8),
+		tgCodeBlock(rows),
+		tgCodeBlock(peakRows),
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (a *App) buildTelegramWebDataSourceHTML(d WebDataSourceMapResponse) string {
+	pointRows := []string{
+		fixedWidthCell("Rank", 6, false) + " " +
+			fixedWidthCell("Side", 7, false) + " " +
+			fixedWidthCell("Price", 10, true) + " " +
+			fixedWidthCell("Yi", 8, true),
+	}
+	for i, pt := range d.TopLongs {
+		pointRows = append(pointRows,
+			fixedWidthCell("L"+strconv.Itoa(i+1), 6, false)+" "+
+				fixedWidthCell("Long", 7, false)+" "+
+				fixedWidthCell(tgFmtPrice(pt.Price), 10, true)+" "+
+				fixedWidthCell(tgFmtYi(pt.LiqValue), 8, true),
+		)
+	}
+	for i, pt := range d.TopShorts {
+		pointRows = append(pointRows,
+			fixedWidthCell("S"+strconv.Itoa(i+1), 6, false)+" "+
+				fixedWidthCell("Short", 7, false)+" "+
+				fixedWidthCell(tgFmtPrice(pt.Price), 10, true)+" "+
+				fixedWidthCell(tgFmtYi(pt.LiqValue), 8, true),
+		)
+	}
+
+	exRows := []string{
+		fixedWidthCell("Ex", 10, false) + " " +
+			fixedWidthCell("Share%", 8, true) + " " +
+			fixedWidthCell("Yi", 8, true),
+	}
+	for _, ex := range d.ByExchange {
+		exRows = append(exRows,
+			fixedWidthCell(strings.ToUpper(ex.Exchange), 10, false)+" "+
+				fixedWidthCell(fmt.Sprintf("%.0f", ex.Share*100), 8, true)+" "+
+				fixedWidthCell(tgFmtYi(ex.NotionalUSD), 8, true),
+		)
+	}
+
+	parts := []string{
+		"<b>http://127.0.0.1:8888/webdatasource</b>",
+		fmt.Sprintf("页面数据源 30D | 区间 <b>%s - %s</b> | 多单 %.2f亿 | 空单 %.2f亿 | 抓取 %s",
+			tgFmtPrice(d.RangeLow), tgFmtPrice(d.RangeHigh), d.LongTotal/1e8, d.ShortTotal/1e8, tgFmtTime(d.GeneratedAt)),
+		tgCodeBlock(pointRows),
+		tgCodeBlock(exRows),
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (a *App) buildHeatReportMessage(d Dashboard) string {
@@ -4702,19 +5052,21 @@ func (a *App) backfillOKXLiquidations(ctx context.Context, instID string, ctVal 
 
 func (a *App) syncBinanceLiquidations(ctx context.Context, symbol string) {
 	wsURL := "wss://fstream.binance.com/ws/" + strings.ToLower(symbol) + "@forceOrder"
+	retry := wsRetryState{target: wsTargetLabel(wsURL)}
 	for {
 		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 		if err != nil {
-			if a.debug {
-				log.Printf("binance liquidation ws dial err: %v", err)
-			}
+			retry.attempt++
+			delay := nextWSRetryDelay(retry.attempt)
+			a.logWSRetry("binance liquidation ws", &retry, err, delay)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(2 * time.Second):
+			case <-time.After(delay):
 				continue
 			}
 		}
+		a.logWSRecovered("binance liquidation ws", &retry)
 		for {
 			select {
 			case <-ctx.Done():
@@ -4743,35 +5095,44 @@ func (a *App) syncBinanceLiquidations(ctx context.Context, symbol string) {
 			a.insertLiquidationEvent("binance", symbol, side, side, price, qty, 0, ts)
 		}
 		_ = conn.Close()
+		retry.attempt++
+		delay := nextWSRetryDelay(retry.attempt)
+		a.logWSRetry("binance liquidation ws", &retry, errors.New("connection closed; reconnecting"), delay)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(2 * time.Second):
+		case <-time.After(delay):
 		}
 	}
 }
 
 func (a *App) syncBybitLiquidations(ctx context.Context, symbol string) {
+	wsURL := "wss://stream.bybit.com/v5/public/linear"
+	retry := wsRetryState{target: wsTargetLabel(wsURL)}
 	for {
-		conn, _, err := websocket.DefaultDialer.Dial("wss://stream.bybit.com/v5/public/linear", nil)
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 		if err != nil {
-			if a.debug {
-				log.Printf("bybit liquidation ws dial err: %v", err)
-			}
+			retry.attempt++
+			delay := nextWSRetryDelay(retry.attempt)
+			a.logWSRetry("bybit liquidation ws", &retry, err, delay)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(2 * time.Second):
+			case <-time.After(delay):
 				continue
 			}
 		}
+		a.logWSRecovered("bybit liquidation ws", &retry)
 		sub := map[string]any{"op": "subscribe", "args": []string{"allLiquidation." + symbol}}
 		if err := conn.WriteJSON(sub); err != nil {
 			_ = conn.Close()
+			retry.attempt++
+			delay := nextWSRetryDelay(retry.attempt)
+			a.logWSRetry("bybit liquidation ws", &retry, err, delay)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(2 * time.Second):
+			case <-time.After(delay):
 				continue
 			}
 		}
@@ -4806,35 +5167,44 @@ func (a *App) syncBybitLiquidations(ctx context.Context, symbol string) {
 			}
 		}
 		_ = conn.Close()
+		retry.attempt++
+		delay := nextWSRetryDelay(retry.attempt)
+		a.logWSRetry("bybit liquidation ws", &retry, errors.New("connection closed; reconnecting"), delay)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(2 * time.Second):
+		case <-time.After(delay):
 		}
 	}
 }
 
 func (a *App) syncOKXLiquidations(ctx context.Context, instID string, ctVal float64) {
+	wsURL := "wss://ws.okx.com:8443/ws/v5/public"
+	retry := wsRetryState{target: wsTargetLabel(wsURL)}
 	for {
-		conn, _, err := websocket.DefaultDialer.Dial("wss://ws.okx.com:8443/ws/v5/public", nil)
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 		if err != nil {
-			if a.debug {
-				log.Printf("okx liquidation ws dial err: %v", err)
-			}
+			retry.attempt++
+			delay := nextWSRetryDelay(retry.attempt)
+			a.logWSRetry("okx liquidation ws", &retry, err, delay)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(2 * time.Second):
+			case <-time.After(delay):
 				continue
 			}
 		}
+		a.logWSRecovered("okx liquidation ws", &retry)
 		sub := map[string]any{"op": "subscribe", "args": []map[string]string{{"channel": "liquidation-orders", "instType": "SWAP", "instId": instID}}}
 		if err := conn.WriteJSON(sub); err != nil {
 			_ = conn.Close()
+			retry.attempt++
+			delay := nextWSRetryDelay(retry.attempt)
+			a.logWSRetry("okx liquidation ws", &retry, err, delay)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(2 * time.Second):
+			case <-time.After(delay):
 				continue
 			}
 		}
@@ -4873,10 +5243,13 @@ func (a *App) syncOKXLiquidations(ctx context.Context, instID string, ctVal floa
 			}
 		}
 		_ = conn.Close()
+		retry.attempt++
+		delay := nextWSRetryDelay(retry.attempt)
+		a.logWSRetry("okx liquidation ws", &retry, errors.New("connection closed; reconnecting"), delay)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(2 * time.Second):
+		case <-time.After(delay):
 		}
 	}
 }
@@ -4886,25 +5259,37 @@ func (a *App) syncBinanceOrderBook(ctx context.Context, symbol string) {
 	if book == nil {
 		return
 	}
+	ws := url.URL{Scheme: "wss", Host: "stream.binance.com:9443", Path: "/ws/" + strings.ToLower(symbol) + "@depth@100ms"}
+	wsURL := ws.String()
+	retry := wsRetryState{target: wsTargetLabel(wsURL)}
 	for {
 		if err := a.loadBinanceSnapshot(symbol); err != nil {
-			if a.debug {
-				log.Printf("binance snapshot err: %v", err)
-			}
+			retry.attempt++
+			delay := nextWSRetryDelay(retry.attempt)
+			a.logWSRetry("binance orderbook snapshot", &retry, err, delay)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(2 * time.Second):
+			case <-time.After(delay):
 			}
 			continue
 		}
-		if err := a.runBinanceWS(ctx, symbol); err != nil && a.debug {
-			log.Printf("binance ws err: %v", err)
+		a.logWSRecovered("binance orderbook", &retry)
+		if err := a.runBinanceWSConn(ctx, wsURL, false); err != nil {
+			retry.attempt++
+			delay := nextWSRetryDelay(retry.attempt)
+			a.logWSRetry("binance orderbook ws", &retry, err, delay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			continue
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(2 * time.Second):
+		case <-time.After(wsRetryBaseDelay):
 		}
 		_ = book
 	}
@@ -5011,25 +5396,36 @@ func (a *App) runBinanceWSConn(ctx context.Context, wsURL string, checkPU bool) 
 }
 
 func (a *App) syncBybitOrderBook(ctx context.Context, symbol string) {
+	wsURL := "wss://stream.bybit.com/v5/public/linear"
+	retry := wsRetryState{target: wsTargetLabel(wsURL)}
 	for {
 		if err := a.loadBybitSnapshot(symbol); err != nil {
-			if a.debug {
-				log.Printf("bybit snapshot err: %v", err)
-			}
+			retry.attempt++
+			delay := nextWSRetryDelay(retry.attempt)
+			a.logWSRetry("bybit orderbook snapshot", &retry, err, delay)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(2 * time.Second):
+			case <-time.After(delay):
 			}
 			continue
 		}
-		if err := a.runBybitWS(ctx, symbol); err != nil && a.debug {
-			log.Printf("bybit ws err: %v", err)
+		a.logWSRecovered("bybit orderbook", &retry)
+		if err := a.runBybitWS(ctx, symbol); err != nil {
+			retry.attempt++
+			delay := nextWSRetryDelay(retry.attempt)
+			a.logWSRetry("bybit orderbook ws", &retry, err, delay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			continue
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(2 * time.Second):
+		case <-time.After(wsRetryBaseDelay):
 		}
 	}
 }
@@ -5121,8 +5517,10 @@ func (a *App) runBybitWS(ctx context.Context, symbol string) error {
 		if uVal <= lastU {
 			continue
 		}
-		if seqVal > 0 && lastSeq > 0 && seqVal != lastSeq+1 {
-			return fmt.Errorf("bybit sequence broken: seq=%d last=%d", seqVal, lastSeq)
+		// Bybit `seq` is monotonic but not guaranteed to be contiguous by 1.
+		// Treat only non-increasing values as suspect; gaps are expected.
+		if seqVal > 0 && lastSeq > 0 && seqVal <= lastSeq {
+			return fmt.Errorf("bybit sequence non-increasing: seq=%d last=%d", seqVal, lastSeq)
 		}
 		book.applyDelta(bids, asks, uVal)
 		if seqVal > 0 {
@@ -5134,25 +5532,36 @@ func (a *App) runBybitWS(ctx context.Context, symbol string) error {
 }
 
 func (a *App) syncOKXOrderBook(ctx context.Context, instID string) {
+	wsURL := "wss://ws.okx.com:8443/ws/v5/public"
+	retry := wsRetryState{target: wsTargetLabel(wsURL)}
 	for {
 		if err := a.loadOKXSnapshot(instID); err != nil {
-			if a.debug {
-				log.Printf("okx snapshot err: %v", err)
-			}
+			retry.attempt++
+			delay := nextWSRetryDelay(retry.attempt)
+			a.logWSRetry("okx orderbook snapshot", &retry, err, delay)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(2 * time.Second):
+			case <-time.After(delay):
 			}
 			continue
 		}
-		if err := a.runOKXWS(ctx, instID); err != nil && a.debug {
-			log.Printf("okx ws err: %v", err)
+		a.logWSRecovered("okx orderbook", &retry)
+		if err := a.runOKXWS(ctx, instID); err != nil {
+			retry.attempt++
+			delay := nextWSRetryDelay(retry.attempt)
+			a.logWSRetry("okx orderbook ws", &retry, err, delay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			continue
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(2 * time.Second):
+		case <-time.After(wsRetryBaseDelay):
 		}
 	}
 }
@@ -5990,16 +6399,16 @@ const channelHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>&#28040;&#24687;&#36890;&#36947;</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{max-width:900px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.small{font-size:12px;color:#6b7280}button.primary{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.switch-row{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:14px;padding:12px;border:1px solid #dce3ec;border-radius:8px}.switch-row input{width:auto;margin:0;transform:scale(1.2)}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}[data-theme="dark"] body{background:#000;color:#e5e7eb}[data-theme="dark"] .nav{background:#000;border-bottom-color:#111827}[data-theme="dark"] .panel{background:#000;border-color:#1f2937}[data-theme="dark"] .small{color:#94a3b8}[data-theme="dark"] input,[data-theme="dark"] button.secondary{background:#000;color:#e5e7eb;border-color:#334155}[data-theme="dark"] .switch-row{border-color:#1f2937}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
 <body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel" class="active">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><h2 style="margin-top:0">Telegram 消息通道</h2><div class="small">配置 Telegram 机器人与频道，系统将按设定间隔发送通知。</div><label class="switch-row"><span><strong>启用自动推送</strong><div class="small">默认关闭；开启后按通知间隔推送清算热区速报。</div></span><input id="notify-enabled" type="checkbox"></label><div style="margin-top:14px"><label>Telegram Bot Token</label><input id="token" autocomplete="off" placeholder="123456:ABC..."></div><div style="margin-top:14px"><label>Telegram Channel / Chat ID</label><input id="channel" autocomplete="off" placeholder="@mychannel 或 -100123456789"></div><div style="margin-top:14px"><label>通知间隔（分钟）</label><input id="notify-interval" type="number" min="1" step="1" placeholder="15"></div><div style="margin-top:16px" class="row"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="testTelegram()">测试发送</button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
+<div class="wrap"><div class="panel"><h2 style="margin-top:0">Telegram 消息通道</h2><div class="small">配置 Telegram 机器人与频道，系统将按设定间隔发送通知。</div><label class="switch-row"><span><strong>启用自动推送</strong><div class="small">默认关闭；开启后按通知间隔推送清算热区速报。</div></span><input id="notify-enabled" type="checkbox"></label><div style="margin-top:14px"><label>Telegram Bot Token</label><input id="token" autocomplete="off" placeholder="123456:ABC..."></div><div style="margin-top:14px"><label>Telegram Channel / Chat ID</label><input id="channel" autocomplete="off" placeholder="@mychannel 或 -100123456789"></div><div style="margin-top:14px"><label>通知间隔（分钟）</label><input id="notify-interval" type="number" min="1" step="1" placeholder="15"></div><div style="margin-top:14px"><label>发送内容正则（最多三行）</label><textarea id="notify-regex" rows="3" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" placeholder="monitor&#10;webdatasource&#10;30d"></textarea><div class="small" style="margin-top:6px">留空时默认发送全部内容；填写后，只有标签命中正则的内容块才会发送。可匹配：monitor、/monitor、清算热区速报、webdatasource、/webdatasource、30d。</div></div><div style="margin-top:16px" class="row"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="testTelegram()">测试发送</button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
 <script>
-let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawEnabled={{.NotifyEnabled}},tokenDirty=false,channelDirty=false;
+let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawEnabled={{.NotifyEnabled}},rawRegex={{printf "%q" .NotifyRegexRules}},tokenDirty=false,channelDirty=false,regexDirty=false;
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
-function maskInput(v){v=String(v||'');if(!v)return '';if(v.length<=8)return '*'.repeat(v.length);return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}function syncInputs(){const t=document.getElementById('token'),c=document.getElementById('channel'),n=document.getElementById('notify-interval'),e=document.getElementById('notify-enabled');if(!tokenDirty)t.value=maskInput(rawToken);if(!channelDirty)c.value=maskInput(rawChannel);n.value=rawInterval||15;e.checked=!!rawEnabled;}function currentValue(i,raw,dirty){return dirty?(i?String(i.value||''):''):raw;}document.getElementById('token').addEventListener('input',()=>{tokenDirty=true});document.getElementById('channel').addEventListener('input',()=>{channelDirty=true});syncInputs();initTheme();
+function maskInput(v){v=String(v||'');if(!v)return '';if(v.length<=8)return '*'.repeat(v.length);return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}function syncInputs(){const t=document.getElementById('token'),c=document.getElementById('channel'),n=document.getElementById('notify-interval'),e=document.getElementById('notify-enabled'),rx=document.getElementById('notify-regex');if(!tokenDirty)t.value=maskInput(rawToken);if(!channelDirty)c.value=maskInput(rawChannel);n.value=rawInterval||15;e.checked=!!rawEnabled;if(!regexDirty&&rx)rx.value=String(rawRegex||'');}function currentValue(i,raw,dirty){return dirty?(i?String(i.value||''):''):raw;}document.getElementById('token').addEventListener('input',()=>{tokenDirty=true});document.getElementById('channel').addEventListener('input',()=>{channelDirty=true});document.getElementById('notify-regex').addEventListener('input',()=>{regexDirty=true});syncInputs();initTheme();
 async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
-async function save(){const n=document.getElementById('notify-interval');const iv=Math.max(1,Number((n&&n.value)||rawInterval||15)|0);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken,tokenDirty),telegram_channel:currentValue(document.getElementById('channel'),rawChannel,channelDirty),notify_interval_min:iv,notify_enabled:document.getElementById('notify-enabled').checked};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=iv;rawEnabled=body.notify_enabled;tokenDirty=false;channelDirty=false;syncInputs();document.getElementById('msg').textContent='保存成功';}else{document.getElementById('msg').textContent='保存失败';}}
+async function save(){const n=document.getElementById('notify-interval');const iv=Math.max(1,Number((n&&n.value)||rawInterval||15)|0);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken,tokenDirty),telegram_channel:currentValue(document.getElementById('channel'),rawChannel,channelDirty),notify_interval_min:iv,notify_enabled:document.getElementById('notify-enabled').checked,notify_regex_rules:regexDirty?String((document.getElementById('notify-regex')||{}).value||''):rawRegex};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=iv;rawEnabled=body.notify_enabled;rawRegex=body.notify_regex_rules||'';tokenDirty=false;channelDirty=false;regexDirty=false;syncInputs();document.getElementById('msg').textContent='保存成功';}else{document.getElementById('msg').textContent='保存失败';}}
 async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='正在发送测试消息...';const r=await fetch('/api/channel/test',{method:'POST'});msg.textContent=r.ok?'测试发送成功':('测试发送失败: '+await r.text());}
 </script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
