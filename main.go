@@ -1924,7 +1924,7 @@ func (a *App) handleChannelSchedule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	hours := 12
+	hours := 24
 	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 72 {
 			hours = n
@@ -2390,7 +2390,7 @@ func (a *App) nextTelegramAutoNotifyAfter(settings ChannelSettings, baseTS int64
 
 func (a *App) listChannelPlannedPushes(hours int) []ChannelPlannedPushRow {
 	if hours <= 0 {
-		hours = 12
+		hours = 24
 	}
 	settings := a.loadSettings()
 	previewOnly := !settings.NotifyEnabled
@@ -6806,7 +6806,9 @@ body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe
 .hint{margin-top:8px;padding:10px 12px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .status{min-height:20px}
-.history-table{width:100%;border-collapse:collapse;margin-top:10px;table-layout:fixed}
+.table-scroll{width:100%;overflow-x:auto;margin-top:10px}
+.history-table{width:100%;border-collapse:collapse;table-layout:fixed}
+.history-table-wide{width:115%;min-width:115%}
 .history-table th,.history-table td{padding:8px 10px;border-top:1px solid #e5e7eb;text-align:left;font-size:12px;vertical-align:top;word-break:break-word}
 .history-table thead th{border-top:0;color:#64748b}
 .ok{color:#15803d;font-weight:700}
@@ -6909,12 +6911,21 @@ button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:
         </div>
         <button class="secondary" onclick="loadHistory()">刷新</button>
       </div>
-      <table class="history-table">
-        <thead>
-          <tr><th>时间</th><th>类型</th><th>组别</th><th>结果</th><th>详情</th></tr>
-        </thead>
-        <tbody id="historyBody"><tr><td colspan="5" class="small">加载中...</td></tr></tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="history-table history-table-wide">
+          <colgroup>
+            <col style="width:18%">
+            <col style="width:12%">
+            <col style="width:24%">
+            <col style="width:12%">
+            <col style="width:34%">
+          </colgroup>
+          <thead>
+            <tr><th>时间</th><th>类型</th><th>组别</th><th>结果</th><th>详情</th></tr>
+          </thead>
+          <tbody id="historyBody"><tr><td colspan="5" class="small">加载中...</td></tr></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="panel">
@@ -6925,28 +6936,32 @@ button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:
         </div>
         <button class="secondary" onclick="loadTimeline()">刷新</button>
       </div>
-      <table class="history-table">
-        <thead>
-          <tr><th>时间</th><th>来源</th><th>类型</th><th>窗口/目标</th><th>状态</th><th>详情</th></tr>
-        </thead>
-        <tbody id="timelineBody"><tr><td colspan="6" class="small">加载中...</td></tr></tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="history-table">
+          <thead>
+            <tr><th>时间</th><th>来源</th><th>类型</th><th>窗口/目标</th><th>状态</th><th>详情</th></tr>
+          </thead>
+          <tbody id="timelineBody"><tr><td colspan="6" class="small">加载中...</td></tr></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="panel">
       <div class="row" style="justify-content:space-between">
         <div>
-          <h3 style="margin:0">12小时的预计推送时间表</h3>
-          <div class="small">列出未来 12 小时内的抓取与推送计划。</div>
+          <h3 style="margin:0">24小时的预计推送时间表</h3>
+          <div class="small">列出未来 24 小时内的抓取与推送计划，方便查看更长的未来安排。</div>
         </div>
         <button class="secondary" onclick="loadSchedule()">刷新</button>
       </div>
-      <table class="history-table">
-        <thead>
-          <tr><th>预计推送时间</th><th>预计抓取时间</th><th>时段</th><th>频率</th><th>说明</th></tr>
-        </thead>
-        <tbody id="scheduleBody"><tr><td colspan="5" class="small">加载中...</td></tr></tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="history-table">
+          <thead>
+            <tr><th>预计推送时间</th><th>预计抓取时间</th><th>时段</th><th>频率</th><th>说明</th></tr>
+          </thead>
+          <tbody id="scheduleBody"><tr><td colspan="5" class="small">加载中...</td></tr></tbody>
+        </table>
+      </div>
     </div>
   </div>
 </div>
@@ -6978,7 +6993,7 @@ async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal
 
 async function loadHistory(){const body=document.getElementById('historyBody');if(!body)return;const rows=await fetch('/api/channel/history?limit=12').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="5" class="small">暂无最近历史发送记录</td></tr>';return;}body.innerHTML=rows.map(it=>'<tr><td>'+fmtHistoryTime(it.sent_at)+'</td><td>'+sendModeLabel(it.send_mode)+'</td><td>第'+Number(it.group_index||0)+'组 / '+esc(it.group_name||'-')+'</td><td class="'+(String(it.status||'').toLowerCase()==='success'?'ok':'fail')+'">'+(String(it.status||'').toLowerCase()==='success'?'成功':'失败')+'</td><td>'+esc(it.error_text||'-')+'</td></tr>').join('');}
 async function loadTimeline(){const body=document.getElementById('timelineBody');if(!body)return;const rows=await fetch('/api/channel/timeline?hours=24&limit=12').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="6" class="small">近 24 小时暂无抓取或推送记录</td></tr>';return;}body.innerHTML=rows.map(it=>{const status=String(it.status||'').toLowerCase();const statusCls=status==='success'?'ok':(status==='failed'?'fail':'');const target=it.target||it.window||'-';const detail=[it.records?('记录数 '+Number(it.records)):'',it.detail||''].filter(Boolean).join(' | ');return '<tr><td>'+fmtHistoryTime(it.ts)+'</td><td>'+esc(sourceLabel(it.source||'-'))+'</td><td>'+esc(typeLabel(it.type||'-'))+'</td><td>'+esc(target)+'</td><td class="'+statusCls+'">'+esc(it.status||'-')+'</td><td>'+esc(detail||'-')+'</td></tr>';}).join('');}
-async function loadSchedule(){const body=document.getElementById('scheduleBody');if(!body)return;const rows=await fetch('/api/channel/schedule?hours=12').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="5" class="small">'+(rawEnabled?'未来 12 小时暂无预计推送项目':'自动通知未开启，暂无未来推送计划')+'</td></tr>';return;}body.innerHTML=rows.map(it=>'<tr><td>'+fmtHistoryTime(it.push_ts)+'</td><td>'+fmtHistoryTime(it.capture_ts)+'</td><td>'+esc(periodLabel(it.period||'-'))+'</td><td>'+(Number(it.interval_min||0)>0?(Number(it.interval_min)+' 分钟'):'-')+'</td><td>'+esc(it.detail||'-')+'</td></tr>').join('');}
+async function loadSchedule(){const body=document.getElementById('scheduleBody');if(!body)return;const rows=await fetch('/api/channel/schedule?hours=24').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="5" class="small">'+(rawEnabled?'未来 24 小时暂无预计推送项目':'自动通知未开启，暂无未来推送计划')+'</td></tr>';return;}body.innerHTML=rows.map(it=>'<tr><td>'+fmtHistoryTime(it.push_ts)+'</td><td>'+fmtHistoryTime(it.capture_ts)+'</td><td>'+esc(periodLabel(it.period||'-'))+'</td><td>'+(Number(it.interval_min||0)>0?(Number(it.interval_min)+' 分钟'):'-')+'</td><td>'+esc(it.detail||'-')+'</td></tr>').join('');}
 async function save(){const msg=document.getElementById('msg');msg.textContent='正在保存...';const workInterval=intValue('notify-work-interval',rawWorkInterval||rawInterval||15);const offInterval=intValue('notify-off-interval',rawOffInterval||workInterval);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken),telegram_channel:currentValue(document.getElementById('channel'),rawChannel),notify_interval_min:workInterval,notify_work_interval_min:workInterval,notify_off_interval_min:offInterval,work_time_expr:String((document.getElementById('work-time-expr').value||'').trim()),notify_enabled:document.getElementById('notify-enabled').checked};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;tokenDirty=false;channelDirty=false;syncInputs();await loadSchedule();msg.textContent='保存成功';return;}msg.textContent='保存失败: '+await r.text();}
 async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='正在发送测试消息...';const r=await fetch('/api/channel/test',{method:'POST'});msg.textContent=r.ok?'测试发送成功':'测试发送失败: '+await r.text();await loadHistory();}
 
