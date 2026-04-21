@@ -3856,7 +3856,7 @@ function escHTML(v){return String(v||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<'
 let currentMap=null;
 let okxLatestClose=0;
 function exKey(v){v=String(v||'').toLowerCase();if(v.includes('binance'))return 'binance';if(v.includes('okx'))return 'okx';if(v.includes('bybit'))return 'bybit';return 'other';}
-const exStyle={binance:{fill:'rgba(249,115,22,0.58)',stroke:'rgba(234,88,12,0.92)',bg:'rgba(255,237,213,0.94)',text:'rgba(194,65,12,0.98)'},okx:{fill:'rgba(234,179,8,0.62)',stroke:'rgba(202,138,4,0.96)',bg:'rgba(254,249,195,0.94)',text:'rgba(133,77,14,0.98)'},bybit:{fill:'rgba(59,130,246,0.55)',stroke:'rgba(37,99,235,0.95)',bg:'rgba(219,234,254,0.94)',text:'rgba(29,78,216,0.98)'},other:{fill:'rgba(148,163,184,0.48)',stroke:'rgba(100,116,139,0.88)',bg:'rgba(241,245,249,0.94)',text:'rgba(71,85,105,0.98)'}};
+const exStyle={binance:{fill:'rgba(255,131,0,0.58)',stroke:'rgba(255,131,0,0.96)',bg:'rgba(255,243,227,0.94)',text:'rgba(166,85,0,0.98)'},okx:{fill:'rgba(255,196,0,0.62)',stroke:'rgba(255,196,0,0.96)',bg:'rgba(255,248,214,0.94)',text:'rgba(153,118,0,0.98)'},bybit:{fill:'rgba(139,214,217,0.62)',stroke:'rgba(139,214,217,0.96)',bg:'rgba(234,249,249,0.94)',text:'rgba(48,119,123,0.98)'},other:{fill:'rgba(148,163,184,0.48)',stroke:'rgba(100,116,139,0.88)',bg:'rgba(241,245,249,0.94)',text:'rgba(71,85,105,0.98)'}};
 const stackOrder=['binance','okx','bybit','other'];
 function buildStackGroups(points){
 const groups=new Map();
