@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"image"
+	"image/jpeg"
 	"io"
 	"log"
 	"math"
@@ -18,12 +20,15 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	_ "image/png"
 
 	"github.com/chromedp/chromedp"
 	"github.com/gorilla/websocket"
@@ -208,6 +213,8 @@ type App struct {
 	ob         *OrderBookHub
 	webds      *WebDataSourceManager
 	mu         sync.RWMutex
+	errLogMu   sync.Mutex
+	errLogNext map[string]time.Time
 	windowDays int
 	debug      bool
 	lastNotify int64
@@ -249,10 +256,23 @@ type Snapshot struct {
 }
 
 type ChannelSettings struct {
-	TelegramBotToken  string `json:"telegram_bot_token"`
-	TelegramChannel   string `json:"telegram_channel"`
-	NotifyIntervalMin int    `json:"notify_interval_min"`
-	NotifyEnabled     bool   `json:"notify_enabled"`
+	TelegramBotToken      string `json:"telegram_bot_token"`
+	TelegramChannel       string `json:"telegram_channel"`
+	NotifyIntervalMin     int    `json:"notify_interval_min"`
+	NotifyWorkIntervalMin int    `json:"notify_work_interval_min"`
+	NotifyOffIntervalMin  int    `json:"notify_off_interval_min"`
+	WorkTimeExpr          string `json:"work_time_expr"`
+	NotifyEnabled         bool   `json:"notify_enabled"`
+}
+
+type TelegramSendHistoryRow struct {
+	ID         int64  `json:"id"`
+	SentAt     int64  `json:"sent_at"`
+	SendMode   string `json:"send_mode"`
+	GroupIndex int    `json:"group_index"`
+	GroupName  string `json:"group_name"`
+	Status     string `json:"status"`
+	ErrorText  string `json:"error_text,omitempty"`
 }
 
 func getenv(key, fallback string) string {
@@ -260,6 +280,49 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func setupLogging(debug bool) (func(), error) {
+	if !debug {
+		return func() {}, nil
+	}
+	logPath := getenv("DEBUG_LOG", "server.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open debug log %s: %w", logPath, err)
+	}
+	log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+	log.Printf("debug log enabled: %s", logPath)
+	return func() {
+		_ = logFile.Close()
+	}, nil
+}
+
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "sqlite_busy")
+}
+
+func execWithBusyRetry(db *sql.DB, stmt string, args ...any) error {
+	var err error
+	for attempt := 0; attempt < 6; attempt++ {
+		_, err = db.Exec(stmt, args...)
+		if !isSQLiteBusy(err) {
+			return err
+		}
+		time.Sleep(time.Duration(150*(attempt+1)) * time.Millisecond)
+	}
+	return err
+}
+
+func configureDB(db *sql.DB) error {
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	return execWithBusyRetry(db, `PRAGMA busy_timeout=5000;`)
 }
 
 func initDB(db *sql.DB) error {
@@ -385,9 +448,19 @@ func initDB(db *sql.DB) error {
 			captured_at INTEGER NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_webdatasource_points_snapshot_id ON webdatasource_points(snapshot_id);`,
+		`CREATE TABLE IF NOT EXISTS telegram_send_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			sent_at INTEGER NOT NULL,
+			send_mode TEXT NOT NULL,
+			group_index INTEGER NOT NULL,
+			group_name TEXT NOT NULL,
+			status TEXT NOT NULL,
+			error_text TEXT NOT NULL DEFAULT ''
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_telegram_send_history_sent_at ON telegram_send_history(sent_at DESC);`,
 	}
 	for _, stmt := range stmts {
-		if _, err := db.Exec(stmt); err != nil {
+		if err := execWithBusyRetry(db, stmt); err != nil {
 			return err
 		}
 	}
@@ -434,6 +507,11 @@ func (a *App) setWindow(days int) {
 
 func main() {
 	debug := getenv("DEBUG", "") == "1" || strings.EqualFold(getenv("DEBUG", ""), "true")
+	closeLog, err := setupLogging(debug)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer closeLog()
 	dbPath := getenv("DB_PATH", defaultDBPath)
 	if !filepath.IsAbs(dbPath) {
 		// Prefer working directory (systemd WorkingDirectory / local run dir).
@@ -453,6 +531,9 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
+	if err := configureDB(db); err != nil {
+		log.Fatal(err)
+	}
 	if err := initDB(db); err != nil {
 		log.Fatal(err)
 	}
@@ -496,11 +577,13 @@ func main() {
 	mux.HandleFunc("/api/window", app.handleWindow)
 	mux.HandleFunc("/api/settings", app.handleSettings)
 	mux.HandleFunc("/api/channel/test", app.handleChannelTest)
+	mux.HandleFunc("/api/channel/history", app.handleChannelHistory)
 	mux.HandleFunc("/api/upgrade/pull", app.handleUpgradePull)
 	mux.HandleFunc("/api/upgrade/progress", app.handleUpgradeProgress)
 	mux.HandleFunc("/api/version", app.handleVersion)
 	mux.HandleFunc("/api/price-events", app.handlePriceEvents)
 	mux.HandleFunc("/api/webdatasource/status", app.handleWebDataSourceStatus)
+	mux.HandleFunc("/api/webdatasource/init", app.handleWebDataSourceInit)
 	mux.HandleFunc("/api/webdatasource/run", app.handleWebDataSourceRun)
 	mux.HandleFunc("/api/webdatasource/map", app.handleWebDataSourceMap)
 	mux.HandleFunc("/api/webdatasource/runs", app.handleWebDataSourceRuns)
@@ -575,7 +658,7 @@ func (a *App) handleChannel(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
 	}
-	tpl := template.Must(template.New("channel").Parse(channelHTML))
+	tpl := template.Must(template.New("channel").Parse(channelHTMLV2))
 	_ = tpl.Execute(w, a.loadSettings())
 }
 
@@ -808,18 +891,211 @@ func (a *App) saveModelMapSnapshot(symbol string, windowDays int, configRev int6
 		WHERE symbol=? AND window_days=? AND config_rev=? AND generated_at<?`, symbol, windowDays, configRev, cutoff)
 }
 
-func (a *App) loadSettings() ChannelSettings {
-	interval := 15
-	if raw := strings.TrimSpace(a.getSetting("notify_interval_min")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			interval = n
+func parsePositiveIntSetting(raw string, fallback int) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && n > 0 {
+		return n
+	}
+	return fallback
+}
+
+func parseClockMinutes(raw string) (int, bool) {
+	parts := strings.Split(strings.TrimSpace(raw), ":")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	hour, errHour := strconv.Atoi(strings.TrimSpace(parts[0]))
+	minute, errMinute := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if errHour != nil || errMinute != nil {
+		return 0, false
+	}
+	if hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		return 0, false
+	}
+	return hour*60 + minute, true
+}
+
+func splitTimeExpr(raw string) []string {
+	return strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n'
+	})
+}
+
+func matchSimpleTimeExpr(now time.Time, expr string) (bool, bool) {
+	expr = strings.TrimSpace(expr)
+	if expr == "" {
+		return true, true
+	}
+	if strings.HasPrefix(strings.ToLower(expr), "regex:") {
+		return false, false
+	}
+	nowMin := now.Hour()*60 + now.Minute()
+	parts := splitTimeExpr(expr)
+	if len(parts) == 0 {
+		return false, false
+	}
+	parsedAny := false
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		bounds := strings.SplitN(part, "-", 2)
+		if len(bounds) != 2 {
+			return false, false
+		}
+		startMin, okStart := parseClockMinutes(bounds[0])
+		endMin, okEnd := parseClockMinutes(bounds[1])
+		if !okStart || !okEnd {
+			return false, false
+		}
+		parsedAny = true
+		if startMin <= endMin {
+			if nowMin >= startMin && nowMin <= endMin {
+				return true, true
+			}
+			continue
+		}
+		if nowMin >= startMin || nowMin <= endMin {
+			return true, true
 		}
 	}
+	return false, parsedAny
+}
+
+func compileTimeExprRegex(expr string) (*regexp.Regexp, error) {
+	pattern := strings.TrimSpace(expr)
+	if strings.HasPrefix(strings.ToLower(pattern), "regex:") {
+		pattern = strings.TrimSpace(pattern[len("regex:"):])
+	}
+	if pattern == "" {
+		return nil, nil
+	}
+	return regexp.Compile(pattern)
+}
+
+func validateWorkTimeExpr(expr string) error {
+	expr = strings.TrimSpace(expr)
+	if expr == "" {
+		return nil
+	}
+	if _, ok := matchSimpleTimeExpr(time.Now(), expr); ok {
+		return nil
+	}
+	if _, err := compileTimeExprRegex(expr); err != nil {
+		return fmt.Errorf("work time range must be HH:MM-HH:MM[,...] or regex / regex:<pattern>: %w", err)
+	}
+	return nil
+}
+
+func isWorkTime(now time.Time, expr string) bool {
+	expr = strings.TrimSpace(expr)
+	if expr == "" {
+		return true
+	}
+	if match, ok := matchSimpleTimeExpr(now, expr); ok {
+		return match
+	}
+	re, err := compileTimeExprRegex(expr)
+	if err != nil || re == nil {
+		return true
+	}
+	candidates := []string{
+		now.Format("15:04"),
+		now.Format("Mon 15:04"),
+		now.Format("Monday 15:04"),
+		now.Format("2006-01-02 15:04"),
+		now.Format("2006-01-02 Mon 15:04"),
+	}
+	for _, candidate := range candidates {
+		if re.MatchString(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func effectiveNotifyInterval(settings ChannelSettings, now time.Time) int {
+	workInterval := settings.NotifyWorkIntervalMin
+	if workInterval <= 0 {
+		workInterval = settings.NotifyIntervalMin
+	}
+	if workInterval <= 0 {
+		workInterval = 15
+	}
+	offInterval := settings.NotifyOffIntervalMin
+	if offInterval <= 0 {
+		offInterval = workInterval
+	}
+	if isWorkTime(now, settings.WorkTimeExpr) {
+		return workInterval
+	}
+	return offInterval
+}
+
+func (a *App) getLastNotifyTS() int64 {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.lastNotify
+}
+
+func (a *App) setLastNotifyTS(ts int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.lastNotify = ts
+}
+
+func (a *App) latestSuccessfulAutoNotifyTS() int64 {
+	var sentAt int64
+	err := a.db.QueryRow(`SELECT sent_at
+		FROM telegram_send_history
+		WHERE send_mode='auto' AND group_name='monitor-30d-text' AND status='success'
+		ORDER BY sent_at DESC
+		LIMIT 1`).Scan(&sentAt)
+	if err != nil {
+		return 0
+	}
+	return sentAt
+}
+
+func (a *App) nextTelegramAutoNotifyTS(now time.Time) (int64, bool) {
+	settings := a.loadSettings()
+	if !settings.NotifyEnabled {
+		return 0, false
+	}
+	intervalMin := effectiveNotifyInterval(settings, now)
+	if intervalMin <= 0 {
+		intervalMin = 15
+	}
+	baseTS := a.getLastNotifyTS()
+	if historyTS := a.latestSuccessfulAutoNotifyTS(); historyTS > baseTS {
+		baseTS = historyTS
+	}
+	if baseTS <= 0 {
+		return now.UnixMilli(), true
+	}
+	return baseTS + int64(intervalMin)*60*1000, true
+}
+
+func (a *App) nextWebDataSourceCaptureTS(now time.Time) (int64, bool) {
+	nextNotifyTS, ok := a.nextTelegramAutoNotifyTS(now)
+	if !ok {
+		return 0, false
+	}
+	return nextNotifyTS - 5*60*1000, true
+}
+
+func (a *App) loadSettings() ChannelSettings {
+	legacyInterval := parsePositiveIntSetting(a.getSetting("notify_interval_min"), 15)
+	workInterval := parsePositiveIntSetting(a.getSetting("notify_work_interval_min"), legacyInterval)
+	offInterval := parsePositiveIntSetting(a.getSetting("notify_off_interval_min"), legacyInterval)
 	return ChannelSettings{
-		TelegramBotToken:  a.getSetting("telegram_bot_token"),
-		TelegramChannel:   a.getSetting("telegram_channel"),
-		NotifyIntervalMin: interval,
-		NotifyEnabled:     parseBoolSetting(a.getSetting("notify_enabled"), false),
+		TelegramBotToken:      normalizeQuotedInput(a.getSetting("telegram_bot_token")),
+		TelegramChannel:       normalizeQuotedInput(a.getSetting("telegram_channel")),
+		NotifyIntervalMin:     workInterval,
+		NotifyWorkIntervalMin: workInterval,
+		NotifyOffIntervalMin:  offInterval,
+		WorkTimeExpr:          strings.TrimSpace(a.getSetting("notify_work_time_expr")),
+		NotifyEnabled:         parseBoolSetting(a.getSetting("notify_enabled"), false),
 	}
 }
 
@@ -853,12 +1129,12 @@ type ModelConfig struct {
 	NeighborShare         float64
 }
 
-func normalizeCSVInput(raw string) string {
+func normalizeQuotedInput(raw string) string {
 	s := strings.TrimSpace(raw)
 	if s == "" {
 		return ""
 	}
-	// Try to undo accidental quoting/escaping like "\"10,25,50,100\"".
+	// Try to undo accidental quoting/escaping like "\"value\"".
 	for i := 0; i < 2; i++ {
 		if unq, err := strconv.Unquote(s); err == nil {
 			s = strings.TrimSpace(unq)
@@ -876,6 +1152,10 @@ func normalizeCSVInput(raw string) string {
 	// Common case: backslashes were persisted literally.
 	s = strings.ReplaceAll(s, "\\\"", "\"")
 	return strings.TrimSpace(s)
+}
+
+func normalizeCSVInput(raw string) string {
+	return normalizeQuotedInput(raw)
 }
 
 func (a *App) loadModelConfig() ModelConfig {
@@ -1484,19 +1764,49 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		if err := a.setSetting("telegram_bot_token", req.TelegramBotToken); err != nil {
+		token := normalizeQuotedInput(req.TelegramBotToken)
+		channel := normalizeQuotedInput(req.TelegramChannel)
+		if err := a.setSetting("telegram_bot_token", token); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := a.setSetting("telegram_channel", req.TelegramChannel); err != nil {
+		if err := a.setSetting("telegram_channel", channel); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		interval := req.NotifyIntervalMin
-		if interval <= 0 {
-			interval = 15
+		workInterval := req.NotifyWorkIntervalMin
+		if workInterval <= 0 {
+			workInterval = req.NotifyIntervalMin
 		}
-		if err := a.setSetting("notify_interval_min", strconv.Itoa(interval)); err != nil {
+		if workInterval <= 0 {
+			workInterval = 15
+		}
+		offInterval := req.NotifyOffIntervalMin
+		if offInterval <= 0 {
+			if req.NotifyIntervalMin > 0 {
+				offInterval = req.NotifyIntervalMin
+			} else {
+				offInterval = workInterval
+			}
+		}
+		workTimeExpr := strings.TrimSpace(req.WorkTimeExpr)
+		if err := validateWorkTimeExpr(workTimeExpr); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := a.setSetting("notify_interval_min", strconv.Itoa(workInterval)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("notify_work_interval_min", strconv.Itoa(workInterval)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("notify_off_interval_min", strconv.Itoa(offInterval)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.setSetting("notify_work_time_expr", workTimeExpr); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -1523,6 +1833,23 @@ func (a *App) handleChannelTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *App) handleChannelHistory(w http.ResponseWriter, r *http.Request) {
+	if a.debug {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rows, err := a.listTelegramSendHistory(60)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(rows)
 }
 
 func (a *App) handleUpgradePull(w http.ResponseWriter, r *http.Request) {
@@ -1729,20 +2056,21 @@ func (a *App) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) sendTelegramTestMessage() error {
-	return a.sendTelegramText("ETH Liquidation Map test message")
+	return a.sendTelegramThirtyDayBundle(true)
 }
 
 func (a *App) sendTelegramText(text string) error {
-	token := strings.TrimSpace(a.getSetting("telegram_bot_token"))
-	channel := strings.TrimSpace(a.getSetting("telegram_channel"))
+	token := normalizeQuotedInput(a.getSetting("telegram_bot_token"))
+	channel := normalizeQuotedInput(a.getSetting("telegram_channel"))
 	if token == "" || channel == "" {
 		return fmt.Errorf("telegram bot token or channel is empty")
 	}
 
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
 	payload := map[string]string{
-		"chat_id": channel,
-		"text":    text,
+		"chat_id":    channel,
+		"text":       text,
+		"parse_mode": "HTML",
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -1772,8 +2100,8 @@ func (a *App) sendTelegramText(text string) error {
 }
 
 func (a *App) sendTelegramPhoto(caption string, image []byte) error {
-	token := strings.TrimSpace(a.getSetting("telegram_bot_token"))
-	channel := strings.TrimSpace(a.getSetting("telegram_channel"))
+	token := normalizeQuotedInput(a.getSetting("telegram_bot_token"))
+	channel := normalizeQuotedInput(a.getSetting("telegram_channel"))
 	if token == "" || channel == "" {
 		return fmt.Errorf("telegram bot token or channel is empty")
 	}
@@ -1784,8 +2112,10 @@ func (a *App) sendTelegramPhoto(caption string, image []byte) error {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	_ = mw.WriteField("chat_id", channel)
-	_ = mw.WriteField("caption", caption)
-	_ = mw.WriteField("parse_mode", "HTML")
+	if strings.TrimSpace(caption) != "" {
+		_ = mw.WriteField("caption", caption)
+		_ = mw.WriteField("parse_mode", "HTML")
+	}
 	fw, err := mw.CreateFormFile("photo", "heat-report.png")
 	if err != nil {
 		return err
@@ -1818,6 +2148,119 @@ func (a *App) sendTelegramPhoto(caption string, image []byte) error {
 	return nil
 }
 
+func (a *App) recordTelegramSendHistory(sendMode string, groupIndex int, groupName, status, errorText string) {
+	sendMode = strings.TrimSpace(sendMode)
+	if sendMode == "" {
+		sendMode = "manual"
+	}
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = "unknown"
+	}
+	_, err := a.db.Exec(`INSERT INTO telegram_send_history(sent_at, send_mode, group_index, group_name, status, error_text)
+		VALUES(?, ?, ?, ?, ?, ?)`,
+		time.Now().UnixMilli(),
+		sendMode,
+		groupIndex,
+		strings.TrimSpace(groupName),
+		status,
+		strings.TrimSpace(errorText),
+	)
+	if err != nil && a.debug {
+		log.Printf("record telegram send history failed: %v", err)
+	}
+}
+
+func (a *App) listTelegramSendHistory(limit int) ([]TelegramSendHistoryRow, error) {
+	if limit <= 0 {
+		limit = 60
+	}
+	rows, err := a.db.Query(`SELECT id, sent_at, send_mode, group_index, group_name, status, error_text
+		FROM telegram_send_history
+		ORDER BY sent_at DESC, id DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]TelegramSendHistoryRow, 0, limit)
+	for rows.Next() {
+		var item TelegramSendHistoryRow
+		if err := rows.Scan(&item.ID, &item.SentAt, &item.SendMode, &item.GroupIndex, &item.GroupName, &item.Status, &item.ErrorText); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (a *App) sendTelegramThirtyDayBundle(isTest bool) error {
+	const windowDays = 30
+	sendMode := "auto"
+	if isTest {
+		sendMode = "test"
+	}
+
+	monitorReport, err := a.buildModelHeatReportDataForWindow(windowDays)
+	if err != nil {
+		return fmt.Errorf("build 30-day monitor report: %w", err)
+	}
+
+	webMap := a.webds.loadLatestMap("30d")
+
+	var errs []string
+
+	monitorImage, err := a.captureMonitorScreenshotJPEG(windowDays)
+	if err != nil {
+		msg := fmt.Sprintf("第1组截图失败: %v", err)
+		a.recordTelegramSendHistory(sendMode, 1, "monitor-30d-image", "failed", msg)
+		errs = append(errs, msg)
+	} else if err := a.sendTelegramPhoto("", monitorImage); err != nil {
+		msg := fmt.Sprintf("第1组发送失败: %v", err)
+		a.recordTelegramSendHistory(sendMode, 1, "monitor-30d-image", "failed", msg)
+		errs = append(errs, msg)
+	} else {
+		a.recordTelegramSendHistory(sendMode, 1, "monitor-30d-image", "success", "")
+	}
+
+	if !webMap.HasData || len(webMap.Points) == 0 {
+		errText := strings.TrimSpace(webMap.LastError)
+		if errText == "" {
+			errText = "no 30-day webdatasource snapshot available"
+		}
+		msg := fmt.Sprintf("第2组数据缺失: %s", errText)
+		a.recordTelegramSendHistory(sendMode, 2, "webdatasource-30d-image", "failed", msg)
+		errs = append(errs, msg)
+	} else {
+		webImage, err := a.captureWebDataSourceScreenshotJPEG("30d")
+		if err != nil {
+			msg := fmt.Sprintf("第2组截图失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 2, "webdatasource-30d-image", "failed", msg)
+			errs = append(errs, msg)
+		} else if err := a.sendTelegramPhoto("", webImage); err != nil {
+			msg := fmt.Sprintf("第2组发送失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 2, "webdatasource-30d-image", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 2, "webdatasource-30d-image", "success", "")
+		}
+	}
+
+	text := a.buildTelegramThirtyDayTextV2(monitorReport)
+	if err := a.sendTelegramText(text); err != nil {
+		msg := fmt.Sprintf("第3组发送失败: %v", err)
+		a.recordTelegramSendHistory(sendMode, 3, "monitor-30d-text", "failed", msg)
+		errs = append(errs, msg)
+	} else {
+		a.recordTelegramSendHistory(sendMode, 3, "monitor-30d-text", "success", "")
+	}
+
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, " | "))
+	}
+	return nil
+}
+
 func (a *App) startTelegramNotifier(ctx context.Context) {
 	go func() {
 		tk := time.NewTicker(30 * time.Second)
@@ -1827,37 +2270,22 @@ func (a *App) startTelegramNotifier(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-tk.C:
-				settings := a.loadSettings()
-				interval := settings.NotifyIntervalMin
-				if !settings.NotifyEnabled {
+				nowTime := time.Now()
+				nextTS, ok := a.nextTelegramAutoNotifyTS(nowTime)
+				if !ok {
 					continue
 				}
-				if interval <= 0 {
-					interval = 15
-				}
-				now := time.Now().UnixMilli()
-				if now-a.lastNotify < int64(interval)*60*1000 {
+				now := nowTime.UnixMilli()
+				if nextTS > now {
 					continue
 				}
-				report, err := a.buildModelHeatReportData()
-				if err != nil || len(report.Bands) == 0 {
-					continue
-				}
-				caption := a.buildHeatReportCaption(report)
-				image, err := a.renderHeatReportPNG(report)
-				if err != nil {
+				if err := a.sendTelegramThirtyDayBundle(false); err != nil {
 					if a.debug {
-						log.Printf("telegram heat report image failed: %v", err)
+						log.Printf("telegram auto bundle send failed: %v", err)
 					}
 					continue
 				}
-				if err := a.sendTelegramPhoto(caption, image); err != nil {
-					if a.debug {
-						log.Printf("telegram auto send failed: %v", err)
-					}
-					continue
-				}
-				a.lastNotify = now
+				a.setLastNotifyTS(now)
 			}
 		}
 	}()
@@ -1882,6 +2310,16 @@ func (a *App) buildHeatReportMessage(d Dashboard) string {
 func (a *App) buildModelHeatReportData() (HeatReportData, error) {
 	cfg := a.loadModelConfig()
 	model, err := a.buildModelLiquidationMap(defaultSymbol, cfg.LookbackMin, cfg.BucketMin, cfg.PriceStep, cfg.PriceRange, cfg)
+	if err != nil {
+		return HeatReportData{}, err
+	}
+	return buildHeatReportDataFromModel(model), nil
+}
+
+func (a *App) buildModelHeatReportDataForWindow(windowDays int) (HeatReportData, error) {
+	cfg := a.loadModelConfig()
+	lookbackMin := lookbackMinForWindow(time.Now(), windowDays)
+	model, err := a.buildModelLiquidationMap(defaultSymbol, lookbackMin, cfg.BucketMin, cfg.PriceStep, cfg.PriceRange, cfg)
 	if err != nil {
 		return HeatReportData{}, err
 	}
@@ -2040,11 +2478,23 @@ func (a *App) renderHeatReportPNG(r HeatReportData) ([]byte, error) {
 		if b.Highlight {
 			cls += " hot"
 		}
-		rows.WriteString(fmt.Sprintf(`<tr class="%s"><td>%d点内</td><td>%.1f</td><td>%.1f</td><td>%.1f</td><td>%.1f</td><td>%.1f</td></tr>`,
-			cls, b.Band, b.UpPrice, b.UpNotionalUSD/1e8, b.DownPrice, b.DownNotionalUSD/1e8, b.DiffUSD/1e8))
+		diffClass := "diff-flat"
+		if b.DownNotionalUSD > b.UpNotionalUSD {
+			diffClass = "diff-long"
+		} else if b.UpNotionalUSD > b.DownNotionalUSD {
+			diffClass = "diff-short"
+		}
+		rows.WriteString(fmt.Sprintf(`<tr class="%s"><td>%d点内</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
+			cls, b.Band, b.UpPrice, b.UpNotionalUSD/1e8, b.DownPrice, b.DownNotionalUSD/1e8, diffClass, b.DiffUSD/1e8))
 	}
-	rows.WriteString(fmt.Sprintf(`<tr class="longest"><td>最长柱</td><td>%.1f</td><td>%.1f</td><td>%.1f</td><td>%.1f</td><td>%.1f</td></tr>`,
-		r.ShortPeak.Price, r.ShortPeak.SingleUSD/1e8, r.LongPeak.Price, r.LongPeak.SingleUSD/1e8, math.Abs(r.LongPeak.SingleUSD-r.ShortPeak.SingleUSD)/1e8))
+	longestDiffClass := "diff-flat"
+	if r.LongPeak.SingleUSD > r.ShortPeak.SingleUSD {
+		longestDiffClass = "diff-short"
+	} else if r.ShortPeak.SingleUSD > r.LongPeak.SingleUSD {
+		longestDiffClass = "diff-long"
+	}
+	rows.WriteString(fmt.Sprintf(`<tr class="longest"><td>最长柱</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
+		r.ShortPeak.Price, r.ShortPeak.SingleUSD/1e8, r.LongPeak.Price, r.LongPeak.SingleUSD/1e8, longestDiffClass, math.Abs(r.LongPeak.SingleUSD-r.ShortPeak.SingleUSD)/1e8))
 	html := `<!doctype html><html><head><meta charset="utf-8"><style>
 body{margin:0;background:#fff;font-family:Arial,"Microsoft YaHei",sans-serif;color:#34445a}
 .shot{width:974px;background:#fff}
@@ -2058,7 +2508,10 @@ th,td{border:1px solid #f4f6f8;text-align:center;padding:8px 6px;height:24px}
 .sub th{background:#d8dde5}.sub .down{background:#f5edc8;color:#c96f34}
 tbody tr{background:#eeeeee}tbody tr.alt{background:#e0e0e0}tbody tr.hot{background:#d4d4d4}
 tbody tr.longest{background:#e6e6e6}
-td:nth-child(4),td:nth-child(5),td:nth-child(6){color:#cf7436}
+td:nth-child(4),td:nth-child(5){color:#cf7436}
+.diff-cell.diff-long{color:#cf7436}
+.diff-cell.diff-short{color:#34445a}
+.diff-cell.diff-flat{color:#34445a}
 </style></head><body><div class="shot"><table>
 <thead><tr class="title"><th colspan="6">ETH清算雷区速报（` + time.UnixMilli(r.GeneratedAt).Format("2006.1.2") + `）</th></tr>
 <tr class="spot"><th colspan="1">ETH现价</th><th colspan="5" class="price">` + fmt.Sprintf("%.1f", r.CurrentPrice) + `</th></tr>
@@ -2082,6 +2535,231 @@ td:nth-child(4),td:nth-child(5),td:nth-child(6){color:#cf7436}
 		chromedp.FullScreenshot(&png, 100),
 	)
 	return png, err
+}
+
+func pngToJPEG(pngBytes []byte, quality int) ([]byte, error) {
+	if len(pngBytes) == 0 {
+		return nil, errors.New("empty png image")
+	}
+	img, _, err := image.Decode(bytes.NewReader(pngBytes))
+	if err != nil {
+		return nil, err
+	}
+	if quality <= 0 || quality > 100 {
+		quality = 95
+	}
+	var out bytes.Buffer
+	if err := jpeg.Encode(&out, img, &jpeg.Options{Quality: quality}); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func captureElementJPEG(pageURL, selector string, width, height int, prepareScript, waitScript string) ([]byte, error) {
+	chromePath := detectChromePath()
+	if chromePath == "" {
+		return nil, errors.New("chrome/chromium executable not found")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath(chromePath),
+		chromedp.Flag("headless", true),
+		chromedp.WindowSize(width, height),
+	)
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
+	defer cancelAlloc()
+	taskCtx, cancelTask := chromedp.NewContext(allocCtx)
+	defer cancelTask()
+
+	var pngBytes []byte
+	actions := []chromedp.Action{
+		chromedp.Navigate(pageURL),
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.Sleep(600 * time.Millisecond),
+	}
+	if strings.TrimSpace(prepareScript) != "" {
+		actions = append(actions, chromedp.EvaluateAsDevTools(prepareScript, nil))
+	}
+	if strings.TrimSpace(waitScript) != "" {
+		actions = append(actions,
+			chromedp.Poll(waitScript, nil, chromedp.WithPollingInterval(250*time.Millisecond), chromedp.WithPollingTimeout(22*time.Second)),
+		)
+	}
+	actions = append(actions,
+		chromedp.Sleep(800*time.Millisecond),
+		chromedp.Screenshot(selector, &pngBytes, chromedp.NodeVisible, chromedp.ByQuery),
+	)
+	if err := chromedp.Run(taskCtx, actions...); err != nil {
+		return nil, err
+	}
+	return pngToJPEG(pngBytes, 95)
+}
+
+func (a *App) captureMonitorScreenshotJPEG(windowDays int) ([]byte, error) {
+	pageURL := fmt.Sprintf("http://127.0.0.1%s/monitor", defaultServerAddr)
+	prepare := fmt.Sprintf(`(async()=>{ if (typeof setTheme==='function') setTheme('light'); if (typeof setWindow==='function') { await setWindow(%d); } return true; })()`, windowDays)
+	wait := `(function(){ const btn=document.querySelector('.btns button[data-days="30"]'); const table=document.querySelector('#heatReport table'); return !!(btn && btn.classList.contains('active') && table); })()`
+	return captureElementJPEG(pageURL, "#heatReport", 1440, 1200, prepare, wait)
+}
+
+func (a *App) captureWebDataSourceScreenshotJPEG(window string) ([]byte, error) {
+	pageURL := fmt.Sprintf("http://127.0.0.1%s/webdatasource", defaultServerAddr)
+	prepare := fmt.Sprintf(`(async()=>{ if (typeof setTheme==='function') setTheme('light'); const sel=document.getElementById('windowSel'); if (sel) sel.value=%q; if (typeof loadMap==='function') { await loadMap(); } return true; })()`, window)
+	wait := fmt.Sprintf(`(function(){ const sel=document.getElementById('windowSel'); const cv=document.getElementById('cv'); const mapReady=(typeof currentMap!=='undefined' && currentMap && currentMap.has_data && Array.isArray(currentMap.points) && currentMap.points.length>0); return !!(sel && sel.value===%q && mapReady && cv && cv.width>0 && cv.height>0); })()`, window)
+	return captureElementJPEG(pageURL, "#cv", 1480, 980, prepare, wait)
+}
+
+func telegramSendLabel(isTest bool) string {
+	if isTest {
+		return "测试发送"
+	}
+	return "正式发送"
+}
+
+func topExchangeLabel(contrib []ExchangeContribution) string {
+	if len(contrib) == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%s %.0f%%", contrib[0].Exchange, contrib[0].Share*100)
+}
+
+func topPointLabel(points []WebDataSourceTopPoint) string {
+	if len(points) == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("$%.1f / %s亿", points[0].Price, formatYi2(points[0].LiqValue))
+}
+
+func (a *App) buildMonitorBundleCaption(windowDays int, dash Dashboard, report HeatReportData, isTest bool) string {
+	b20 := bandRowOrDefault(dash.Bands, dash.CurrentPrice, 20)
+	label := telegramSendLabel(isTest)
+	return strings.Join([]string{
+		fmt.Sprintf("<b>%s 1/3</b>", label),
+		"<b>/monitor 清算热区速报</b>",
+		fmt.Sprintf("<code>http://127.0.0.1:8888/monitor</code> | %d天周期数据", windowDays),
+		fmt.Sprintf("现价 $%.1f | 更新时间 %s", dash.CurrentPrice, time.UnixMilli(dash.GeneratedAt).Format("2006-01-02 15:04:05")),
+		fmt.Sprintf("20点内：上方 %s亿 / 下方 %s亿", formatYi2(b20.UpNotionalUSD), formatYi2(b20.DownNotionalUSD)),
+	}, "\n")
+}
+
+func (a *App) buildWebDataSourceBundleCaption(windowDays int, m WebDataSourceMapResponse, isTest bool) string {
+	label := telegramSendLabel(isTest)
+	return strings.Join([]string{
+		fmt.Sprintf("<b>%s 2/3</b>", label),
+		"<b>/webdatasource ETH 页面数据源清算地图</b>",
+		fmt.Sprintf("<code>http://127.0.0.1:8888/webdatasource</code> | %d天周期图表", windowDays),
+		fmt.Sprintf("页面区间 $%.1f - $%.1f | 更新时间 %s", m.RangeLow, m.RangeHigh, time.UnixMilli(m.GeneratedAt).Format("2006-01-02 15:04:05")),
+		fmt.Sprintf("页面多单 %s亿 | 页面空单 %s亿", formatYi2(m.LongTotal), formatYi2(m.ShortTotal)),
+	}, "\n")
+}
+
+func (a *App) buildHeatReportInterpretation(windowDays int, dash Dashboard, monitor HeatReportData, webMap WebDataSourceMapResponse, isTest bool) string {
+	return a.buildTelegramThirtyDayTextV2(monitor)
+}
+
+func (a *App) buildTelegramThirtyDayText(monitor HeatReportData) string {
+	b20 := heatReportBandBySize(monitor, 20)
+	b50 := heatReportBandBySize(monitor, 50)
+	b80 := heatReportBandBySize(monitor, 80)
+	b100 := heatReportBandBySize(monitor, 100)
+	bias := func(up, down float64) string {
+		switch {
+		case down > up:
+			return "下方偏多"
+		case up > down:
+			return "上方偏多"
+		default:
+			return "基本均衡"
+		}
+	}
+	percent := func(v, total float64) int {
+		if total <= 0 {
+			return 0
+		}
+		return int(math.Round(v / total * 100))
+	}
+	bandLine := func(b HeatReportBand) string {
+		total := b.UpNotionalUSD + b.DownNotionalUSD
+		return fmt.Sprintf("%d点内，上 $%s亿（%d%%）/下$%s亿(%d%%) |%s",
+			b.Band,
+			formatYi2(b.UpNotionalUSD),
+			percent(b.UpNotionalUSD, total),
+			formatYi2(b.DownNotionalUSD),
+			percent(b.DownNotionalUSD, total),
+			bias(b.UpNotionalUSD, b.DownNotionalUSD),
+		)
+	}
+	lines := []string{
+		fmt.Sprintf("ETH 清算热区速报 |现价 $%.1f ", monitor.CurrentPrice),
+		fmt.Sprintf("多单总量%s亿 |空单总量%s亿", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
+		"———————————————————",
+		"<b>【多单最长柱】</b>",
+		fmt.Sprintf("价格$%.1f | 距现价约%.0f点", monitor.LongPeak.Price, monitor.LongPeak.Distance),
+		fmt.Sprintf("单柱清算规模%s亿 | 累计清算规模%s亿", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
+		"<b>【空单最长柱】</b>",
+		fmt.Sprintf("价格$%.1f | 距现价约%.0f点", monitor.ShortPeak.Price, monitor.ShortPeak.Distance),
+		fmt.Sprintf("单柱清算规模%s亿 | 累计清算规模%s亿", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
+		"<b>【多空失衡统计】</b>",
+		bandLine(b20),
+		bandLine(b50),
+		bandLine(b80),
+		bandLine(b100),
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (a *App) buildTelegramThirtyDayTextV2(monitor HeatReportData) string {
+	b20 := heatReportBandBySize(monitor, 20)
+	b50 := heatReportBandBySize(monitor, 50)
+	b80 := heatReportBandBySize(monitor, 80)
+	b100 := heatReportBandBySize(monitor, 100)
+
+	bias := func(up, down float64) string {
+		switch {
+		case down > up:
+			return "下方偏多"
+		case up > down:
+			return "上方偏多"
+		default:
+			return "基本均衡"
+		}
+	}
+	percent := func(v, total float64) int {
+		if total <= 0 {
+			return 0
+		}
+		return int(math.Round(v / total * 100))
+	}
+	bandLine := func(b HeatReportBand) string {
+		total := b.UpNotionalUSD + b.DownNotionalUSD
+		return fmt.Sprintf("%d点内，上 $%s亿（%d%%）/下$%s亿(%d%%) |<b>【%s】</b>",
+			b.Band,
+			formatYi2(b.UpNotionalUSD),
+			percent(b.UpNotionalUSD, total),
+			formatYi2(b.DownNotionalUSD),
+			percent(b.DownNotionalUSD, total),
+			bias(b.UpNotionalUSD, b.DownNotionalUSD),
+		)
+	}
+
+	lines := []string{
+		fmt.Sprintf("<b>【ETH 清算热区速报 |现价 $%.1f 】</b>", monitor.CurrentPrice),
+		fmt.Sprintf("多单总量<b>【%s亿】</b> |空单总量<b>【%s亿】</b>", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
+		"———————————————————",
+		"<b>【多单最长柱】</b>",
+		fmt.Sprintf("价格$%.1f | 距现价约%.0f点", monitor.LongPeak.Price, monitor.LongPeak.Distance),
+		fmt.Sprintf("单柱清算规模<b>【%s亿】</b> | 累计清算规模<b>【%s亿】</b>", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
+		"<b>【空单最长柱】</b>",
+		fmt.Sprintf("价格$%.1f | 距现价约%.0f点", monitor.ShortPeak.Price, monitor.ShortPeak.Distance),
+		fmt.Sprintf("单柱清算规模<b>【%s亿】</b> | 累计清算规模<b>【%s亿】</b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
+		"<b>【多空失衡统计】</b>",
+		bandLine(b20),
+		bandLine(b50),
+		bandLine(b80),
+		bandLine(b100),
+	}
+	return strings.Join(lines, "\n")
 }
 
 func maskSensitive(s string) string {
@@ -4976,13 +5654,17 @@ func (a *App) runBybitWS(ctx context.Context, symbol string) error {
 		if uVal <= lastU {
 			continue
 		}
-		if seqVal > 0 && lastSeq > 0 && seqVal != lastSeq+1 {
-			return fmt.Errorf("bybit sequence broken: seq=%d last=%d", seqVal, lastSeq)
+		// Bybit's seq is not guaranteed to be contiguous per client stream; treat it as
+		// a monotonic ordering hint and only resnapshot on rollback/out-of-order frames.
+		if seqVal > 0 && lastSeq > 0 && seqVal < lastSeq {
+			return fmt.Errorf("bybit sequence rollback: seq=%d last=%d", seqVal, lastSeq)
 		}
 		book.applyDelta(bids, asks, uVal)
 		if seqVal > 0 {
 			book.mu.Lock()
-			book.LastSeq = seqVal
+			if seqVal > book.LastSeq {
+				book.LastSeq = seqVal
+			}
 			book.mu.Unlock()
 		}
 	}
@@ -5553,7 +6235,7 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui
 .state-list{display:grid;gap:8px;font-weight:700}.state-line{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline}.state-line .mini{font-size:16px;color:var(--text);font-weight:700}.state-line .funding-tag{font-size:14px;color:var(--muted);font-weight:700}
 .main-grid{display:grid;grid-template-columns:1.45fr .9fr;gap:10px}.stack{display:grid;gap:10px}
 table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:center}thead th{background:#5d7291;color:#fff;font-size:13px}
-.heat-report-table{table-layout:fixed;font-weight:800;color:#34445a;font-size:16px}.heat-report-table th,.heat-report-table td{border:1px solid #f4f6f8;padding:8px 6px;font-weight:800}.heat-report-table .title th{background:#394c66;color:#fff;font-size:20px;padding:12px 6px}.heat-report-table .spot th{background:#394c66;color:#fff;text-align:left;padding-left:46px;font-size:18px}.heat-report-table .spot .price{text-align:left;padding-left:36px}.heat-report-table .group th{background:#d8dde5;color:#34445a}.heat-report-table .group .down{background:#f3e9c3;color:#c96f34}.heat-report-table .sub th{background:#d8dde5;color:#34445a}.heat-report-table .sub .down{background:#f5edc8;color:#c96f34}.heat-report-table tbody tr{background:#eeeeee}.heat-report-table tbody tr.alt{background:#e0e0e0}.heat-report-table tbody tr.hot{background:#d4d4d4}.heat-report-table tbody tr.longest{background:#e6e6e6}.heat-report-table .down-cell,.heat-report-table .diff-cell{color:#cf7436}.heat-report-table .up-cell{color:#34445a}
+.heat-report-table{table-layout:fixed;font-weight:800;color:#34445a;font-size:16px}.heat-report-table th,.heat-report-table td{border:1px solid #f4f6f8;padding:8px 6px;font-weight:800}.heat-report-table .title th{background:#394c66;color:#fff;font-size:20px;padding:12px 6px}.heat-report-table .spot th{background:#394c66;color:#fff;text-align:left;padding-left:46px;font-size:18px}.heat-report-table .spot .price{text-align:left;padding-left:36px}.heat-report-table .group th{background:#d8dde5;color:#34445a}.heat-report-table .group .down{background:#f3e9c3;color:#c96f34}.heat-report-table .sub th{background:#d8dde5;color:#34445a}.heat-report-table .sub .down{background:#f5edc8;color:#c96f34}.heat-report-table tbody tr{background:#eeeeee}.heat-report-table tbody tr.alt{background:#e0e0e0}.heat-report-table tbody tr.hot{background:#d4d4d4}.heat-report-table tbody tr.longest{background:#e6e6e6}.heat-report-table .down-cell,.heat-report-table .diff-cell.diff-long{color:#cf7436}.heat-report-table .diff-cell.diff-short{color:#34445a}.heat-report-table .diff-cell.diff-flat{color:#34445a}.heat-report-table .up-cell{color:#34445a}
 .metric{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--line)}.metric:last-child{border-bottom:0}
 .bar-row{display:grid;grid-template-columns:72px 1fr 54px;gap:10px;align-items:center;margin:8px 0}.bar{height:10px;background:#e7edf5;border-radius:999px;overflow:hidden}.fill{height:100%;background:linear-gradient(90deg,#56b6d7,#3f7fb1)}
 .triple{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
@@ -5653,20 +6335,22 @@ function buildHeatBandsFromModel(model){
    let topUp={price:0,v:0},topDown={price:0,v:0};
    for(const b of bands){if(Number(b.up_notional_usd||0)>topUp.v)topUp={price:b.up_price,v:Number(b.up_notional_usd||0)};if(Number(b.down_notional_usd||0)>topDown.v)topDown={price:b.down_price,v:Number(b.down_notional_usd||0)};}
    const hot={20:true,50:true,80:true,100:true,200:true,300:true};
-   const yi=n=>(Number(n||0)/1e8).toFixed(1);
+   const yi=n=>(Number(n||0)/1e8).toFixed(2);
    let html='<table class="heat-report-table"><thead>'+
      '<tr class="title"><th colspan="6">ETH清算雷区速报（'+new Date(d.generated_at).toLocaleDateString('zh-CN').replaceAll('/','.')+'）</th></tr>'+
      '<tr class="spot"><th>ETH现价</th><th colspan="5" class="price">'+fmtPrice(d.current_price)+'</th></tr>'+
      '<tr class="group"><th rowspan="2">点数<br>阈值</th><th colspan="2">上方空单</th><th colspan="2" class="down">下方多单</th><th rowspan="2">多空差值<br>（亿）</th></tr>'+
      '<tr class="sub"><th>清算价格</th><th>清算规模(亿)</th><th class="down">清算价格</th><th class="down">清算规模(亿)</th></tr>'+
      '</thead><tbody>';
-   for(let i=0;i<bands.length;i++){
-     const b=bands[i];
-     const up=Number(b.up_notional_usd||0),down=Number(b.down_notional_usd||0);
-     const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
-     html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="up-cell">'+fmtPrice(b.up_price)+'</td><td class="up-cell">'+yi(up)+'</td><td class="down-cell">'+fmtPrice(b.down_price)+'</td><td class="down-cell">'+yi(down)+'</td><td class="diff-cell">'+yi(Math.abs(down-up))+'</td></tr>';
-   }
-   html+='<tr class="longest"><td>最长柱</td><td class="up-cell">'+fmtPrice(topUp.price)+'</td><td class="up-cell">'+yi(topUp.v)+'</td><td class="down-cell">'+fmtPrice(topDown.price)+'</td><td class="down-cell">'+yi(topDown.v)+'</td><td class="diff-cell">'+yi(Math.abs(topDown.v-topUp.v))+'</td></tr></tbody></table>';
+	for(let i=0;i<bands.length;i++){
+		const b=bands[i];
+		const up=Number(b.up_notional_usd||0),down=Number(b.down_notional_usd||0);
+		const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
+		const diffClass=down>up?'diff-long':(up>down?'diff-short':'diff-flat');
+		html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="up-cell">'+fmtPrice(b.up_price)+'</td><td class="up-cell">'+yi(up)+'</td><td class="down-cell">'+fmtPrice(b.down_price)+'</td><td class="down-cell">'+yi(down)+'</td><td class="diff-cell '+diffClass+'">'+yi(Math.abs(down-up))+'</td></tr>';
+	}
+	const longestDiffClass=topDown.v>topUp.v?'diff-long':(topUp.v>topDown.v?'diff-short':'diff-flat');
+	html+='<tr class="longest"><td>最长柱</td><td class="up-cell">'+fmtPrice(topUp.price)+'</td><td class="up-cell">'+yi(topUp.v)+'</td><td class="down-cell">'+fmtPrice(topDown.price)+'</td><td class="down-cell">'+yi(topDown.v)+'</td><td class="diff-cell '+longestDiffClass+'">'+yi(Math.abs(topDown.v-topUp.v))+'</td></tr></tbody></table>';
    document.getElementById('heatReport').innerHTML=html;
  }
 function renderImbalance(d){const rows=((d.analytics||{}).imbalance_stats)||[];document.getElementById('imbalanceStats').innerHTML=rows.length?rows.map(r=>metricRow(r.band+'点内','上'+fmtAmount(r.up_notional_usd)+' / 下'+fmtAmount(r.down_notional_usd)+' / '+(r.verdict||'-'),String(r.verdict||'').includes('上')?'warn':(String(r.verdict||'').includes('下')?'good':''))).join(''):'<div class="hint">暂无数据</div>'}
@@ -5858,6 +6542,36 @@ async function save(){const n=document.getElementById('notify-interval');const i
 async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='正在发送测试消息...';const r=await fetch('/api/channel/test',{method:'POST'});msg.textContent=r.ok?'测试发送成功':('测试发送失败: '+await r.text());}
 </script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
+const channelHTMLV2 = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>消息通道</title>
+<style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{max-width:980px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.small{font-size:12px;color:#6b7280;line-height:1.6}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.field label{display:block;font-size:12px;color:#6b7280}.field input,.field textarea{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.field textarea{min-height:110px;resize:vertical}.switch-row{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:14px;padding:12px;border:1px solid #dce3ec;border-radius:8px}.switch-row input{width:auto;margin:0;transform:scale(1.2)}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.hint{margin-top:8px;padding:10px 12px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.status{min-height:20px}.history-table{width:100%;border-collapse:collapse;margin-top:10px}.history-table th,.history-table td{padding:8px 10px;border-top:1px solid #e5e7eb;text-align:left;font-size:12px;vertical-align:top}.history-table thead th{border-top:0;color:#64748b}.ok{color:#15803d;font-weight:700}.fail{color:#dc2626;font-weight:700}@media (max-width:768px){.grid{grid-template-columns:1fr}}[data-theme="dark"] body{background:#000;color:#e5e7eb}[data-theme="dark"] .nav{background:#000;border-bottom-color:#111827}[data-theme="dark"] .panel{background:#000;border-color:#1f2937}[data-theme="dark"] .small,[data-theme="dark"] .field label,[data-theme="dark"] .history-table thead th{color:#94a3b8}[data-theme="dark"] .field input,[data-theme="dark"] .field textarea,[data-theme="dark"] button.secondary{background:#000;color:#e5e7eb;border-color:#334155}[data-theme="dark"] .switch-row,[data-theme="dark"] .hint{border-color:#1f2937;background:#020617}[data-theme="dark"] .history-table th,[data-theme="dark"] .history-table td{border-top-color:#1f2937}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}button.primary{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}</style></head>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">首页</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel" class="active">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a></div></div>
+<div class="wrap"><div class="panel"><h2 style="margin-top:0">Telegram 消息通道</h2><div class="small">配置 Telegram Bot 和频道后，系统会按照工作时间和非工作时间的不同频率发送通知。</div><label class="switch-row"><span><strong>启用自动通知</strong><div class="small">关闭时不会自动推送；开启后按照下面的时间范围和频率发送。</div></span><input id="notify-enabled" type="checkbox"></label><div class="grid" style="margin-top:14px"><div class="field" style="grid-column:1/-1"><label>Telegram Bot Token</label><input id="token" autocomplete="off" placeholder="123456:ABC..."><div class="small">留空会保留当前已保存的 Token。</div></div><div class="field" style="grid-column:1/-1"><label>Telegram Channel / Chat ID</label><input id="channel" autocomplete="off" placeholder="@mychannel 或 -100123456789"><div class="small">留空会保留当前已保存的频道或 Chat ID。</div></div><div class="field"><label>工作时间通知间隔（分钟）</label><input id="notify-work-interval" type="number" min="1" step="1" placeholder="15"></div><div class="field"><label>非工作时间通知间隔（分钟）</label><input id="notify-off-interval" type="number" min="1" step="1" placeholder="60"></div><div class="field" style="grid-column:1/-1"><label>工作时间范围 / 正则表达式</label><textarea id="work-time-expr" placeholder="09:00-12:00,13:00-18:00&#10;或 regex:^(Mon|Tue|Wed|Thu|Fri) (09|1[0-7]):[0-5][0-9]$"></textarea><div class="hint small">支持两种写法：<span class="mono">09:00-18:00</span>、<span class="mono">09:00-12:00,13:00-18:00</span>；也支持直接输入正则，推荐带上 <span class="mono">regex:</span> 前缀。留空表示全天都按“工作时间通知间隔”处理。</div></div></div><div style="margin-top:16px" class="row"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="testTelegram()">发送测试消息</button><span id="msg" class="small status" style="margin-left:10px"></span></div></div><div class="panel"><div class="row" style="justify-content:space-between"><h3 style="margin:0">历史发送记录</h3><button class="secondary" onclick="loadHistory()">刷新</button></div><table class="history-table"><thead><tr><th>时间</th><th>类型</th><th>组别</th><th>结果</th><th>详情</th></tr></thead><tbody id="historyBody"><tr><td colspan="5" class="small">加载中...</td></tr></tbody></table></div></div>
+<script>
+let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawWorkInterval={{.NotifyWorkIntervalMin}},rawOffInterval={{.NotifyOffIntervalMin}},rawWorkExpr={{printf "%q" .WorkTimeExpr}},rawEnabled={{.NotifyEnabled}},tokenDirty=false,channelDirty=false;
+function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
+function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
+function maskInput(v){v=String(v||'');if(!v)return '';if(v.length<=8)return '*'.repeat(v.length);return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}
+function syncInputs(){const t=document.getElementById('token'),c=document.getElementById('channel'),w=document.getElementById('notify-work-interval'),o=document.getElementById('notify-off-interval'),x=document.getElementById('work-time-expr'),e=document.getElementById('notify-enabled');if(!tokenDirty){t.value='';t.placeholder=rawToken?maskInput(rawToken):'123456:ABC...';}if(!channelDirty){c.value='';c.placeholder=rawChannel?maskInput(rawChannel):'@mychannel 或 -100123456789';}w.value=rawWorkInterval||rawInterval||15;o.value=rawOffInterval||rawWorkInterval||rawInterval||15;x.value=rawWorkExpr||'';e.checked=!!rawEnabled;}
+function currentValue(i,raw){const next=String((i&&i.value)||'').trim();return next!==''?next:raw;}
+function intValue(id,fallback){const el=document.getElementById(id);const raw=String((el&&el.value)||'').trim();const v=Number(raw);return Number.isFinite(v)&&v>0?Math.floor(v):fallback;}
+document.getElementById('token').addEventListener('input',()=>{tokenDirty=true;});
+document.getElementById('channel').addEventListener('input',()=>{channelDirty=true;});
+syncInputs();
+initTheme();
+async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束，但状态未知，请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
+async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
+function fmtHistoryTime(ts){if(!ts)return '-';return new Date(ts).toLocaleString('zh-CN',{hour12:false});}
+function esc(v){return String(v||'').replace(/[&<>"]/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[s]));}
+function sendModeLabel(v){if(v==='test')return '测试';if(v==='auto')return '自动';if(v==='manual')return '手动';return String(v||'-');}
+async function loadHistory(){const body=document.getElementById('historyBody');if(!body)return;const rows=await fetch('/api/channel/history').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="5" class="small">暂无发送记录</td></tr>';return;}body.innerHTML=rows.map(it=>'<tr><td>'+fmtHistoryTime(it.sent_at)+'</td><td>'+sendModeLabel(it.send_mode)+'</td><td>第'+Number(it.group_index||0)+'组 / '+esc(it.group_name||'-')+'</td><td class="'+(String(it.status||'').toLowerCase()==='success'?'ok':'fail')+'">'+(String(it.status||'').toLowerCase()==='success'?'成功':'失败')+'</td><td>'+esc(it.error_text||'-')+'</td></tr>').join('');}
+async function save(){const msg=document.getElementById('msg');msg.textContent='正在保存...';const workInterval=intValue('notify-work-interval',rawWorkInterval||rawInterval||15);const offInterval=intValue('notify-off-interval',rawOffInterval||workInterval);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken),telegram_channel:currentValue(document.getElementById('channel'),rawChannel),notify_interval_min:workInterval,notify_work_interval_min:workInterval,notify_off_interval_min:offInterval,work_time_expr:String((document.getElementById('work-time-expr').value||'').trim()),notify_enabled:document.getElementById('notify-enabled').checked};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;tokenDirty=false;channelDirty=false;syncInputs();msg.textContent='保存成功';return;}msg.textContent='保存失败: '+await r.text();}
+async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='正在发送测试消息...';const r=await fetch('/api/channel/test',{method:'POST'});msg.textContent=r.ok?'测试发送成功':'测试发送失败: '+await r.text();await loadHistory();}
+window.addEventListener('load',async()=>{await loadFooter();await loadHistory();});
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+
 const configHTMLLegacy = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>模型配置</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{max-width:900px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}label{display:block;margin-top:12px;font-size:13px;color:#334155}input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}.small{font-size:12px;color:#64748b}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
@@ -5907,7 +6621,7 @@ const bubblesHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>气泡图</title>
 <style>:root{--bg:#f5f7fb;--text:#1f2937;--muted:#64748b;--nav-bg:#0b1220;--nav-border:#243145;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#fff;--panel-border:#dce3ec;--ctl-bg:#fff;--ctl-text:#111827;--ctl-border:#cbd5e1;--chart-border:#e5e7eb}[data-theme="dark"]{--bg:#000;--text:#e5e7eb;--muted:#94a3b8;--nav-bg:#000;--nav-border:#111827;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#000;--panel-border:#1f2937;--ctl-bg:#000;--ctl-text:#e5e7eb;--ctl-border:#334155;--chart-border:#1f2937}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:var(--nav-bg);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:14px}.brand{font-size:18px;font-weight:700;color:var(--nav-text)}.menu a{color:var(--link);text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{width:100%;max-width:none;margin:0 auto;padding:14px;box-sizing:border-box}.panel{border:1px solid var(--panel-border);background:var(--panel-bg);margin:10px 0;padding:12px;border-radius:10px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.small{font-size:12px;color:var(--muted)}select,button,input{height:34px;border:1px solid var(--ctl-border);border-radius:8px;background:var(--ctl-bg);color:var(--ctl-text);padding:0 10px}input{width:96px}button{cursor:pointer}.btn-applied{background:#0f172a;color:#eef3f9;border-color:#0f172a}.chart{width:100%;height:682px;border:1px solid var(--chart-border);border-radius:8px;background:var(--panel-bg);display:block}.chart-wrap{position:relative}.legend{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:8px}.tag{display:inline-flex;align-items:center;gap:6px}.dot{width:10px;height:10px;border-radius:999px;display:inline-block}.bubble-tip{position:absolute;display:none;min-width:180px;max-width:260px;background:rgba(15,23,42,.96);color:#e2e8f0;border:1px solid rgba(148,163,184,.25);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.5;box-shadow:0 10px 28px rgba(2,6,23,.35);pointer-events:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:var(--nav-text);cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:var(--muted);text-align:center}</style></head>
 <body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles" class="active">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><div class="row"><span>周期</span><select id="iv"><option value="1m">1M</option><option value="2m">2M</option><option value="5m" selected>5M</option><option value="10m">10M</option><option value="15m">15M</option><option value="30m">30M</option><option value="1h">1H</option><option value="4h">4H</option><option value="8h">8H</option><option value="12h">12H</option><option value="1d">1D</option><option value="3d">3D</option><option value="7d">7D</option></select><button onclick="load()">刷新</button><span class="small">过滤小单 ETH 数量</span><input id="qtyFilter" type="number" min="0" step="0.1" value="50"><button id="filterBtn" onclick="applyQtyFilter()">应用过滤</button><label class="small" style="display:inline-flex;align-items:center;gap:6px;margin-left:6px"><input id="hist" type="checkbox">历史</label><button id="moreBtn" style="display:none" onclick="loadMoreHistory()">向左加载</button><span id="meta" class="small"></span></div><div class="chart-wrap"><canvas id="cv" class="chart" width="1600" height="620"></canvas><div id="bubbleTip" class="bubble-tip"></div></div><div class="legend small"><div>气泡大小代表清算金额，颜色代表多空方向。滚轮缩放（默认以最右侧K线为锚点），按住鼠标左键左右拖动。</div><div class="tag"><span class="dot" style="background:#dc2626"></span><span>红色=多单爆仓</span><span class="dot" style="margin-left:10px;background:#16a34a"></span><span>绿色=空单爆仓</span></div></div></div></div>
+<div class="wrap"><div class="panel"><div class="row"><span>周期</span><select id="iv"><option value="1m">1M</option><option value="2m">2M</option><option value="5m">5M</option><option value="10m">10M</option><option value="15m">15M</option><option value="30m">30M</option><option value="1h">1H</option><option value="4h">4H</option><option value="8h">8H</option><option value="12h">12H</option><option value="1d">1D</option><option value="3d">3D</option><option value="7d" selected>7D</option></select><button onclick="load()">刷新</button><span class="small">过滤小单 ETH 数量</span><input id="qtyFilter" type="number" min="0" step="0.1" value="50"><button id="filterBtn" onclick="applyQtyFilter()">应用过滤</button><label class="small" style="display:inline-flex;align-items:center;gap:6px;margin-left:6px"><input id="hist" type="checkbox">历史</label><button id="moreBtn" style="display:none" onclick="loadMoreHistory()">向左加载</button><span id="meta" class="small"></span></div><div class="chart-wrap"><canvas id="cv" class="chart" width="1600" height="620"></canvas><div id="bubbleTip" class="bubble-tip"></div></div><div class="legend small"><div>气泡大小代表清算金额，颜色代表多空方向。滚轮缩放（默认以最右侧K线为锚点），按住鼠标左键左右拖动。</div><div class="tag"><span class="dot" style="background:#dc2626"></span><span>红色=多单爆仓</span><span class="dot" style="margin-left:10px;background:#16a34a"></span><span>绿色=空单爆仓</span></div></div></div></div>
 <script>
 let candles=[],events=[],viewStart=0,viewCount=120,drag=false,lastX=0,intervalMs=0,latestStart=0,qtyFilter=50,filterApplied=false,bubbleHoverMeta=[],klineSource='-';
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
@@ -6257,3 +6971,4 @@ bindWeightSumLive();
 reloadCfg();
 loadFooter();
 </script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+
