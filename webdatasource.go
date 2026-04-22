@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"context"
@@ -1539,7 +1539,7 @@ func (m *WebDataSourceManager) newCaptureSession(ctx context.Context, chromePath
 		if err := chromedp.Run(session.taskCtx, chromedp.Evaluate(`(() => {
 			const title = Array.from(document.querySelectorAll('h1.MuiTypography-root, h1')).find(h => {
 				const text = (h.textContent || '').trim();
-				return text === '姣旂壒甯佷氦鏄撴墍娓呯畻鍦板浘' || (text.includes('姣旂壒甯佷氦鏄撴墍娓呯畻鍦板浘') && !text.includes('Hyperliquid'));
+				return text === '比特币交易所清算地图' || (text.includes('比特币交易所清算地图') && !text.includes('Hyperliquid'));
 			});
 			if (!title) return '';
 			let container = title.parentElement;

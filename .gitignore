@@ -5,6 +5,7 @@ multipleexchangeliquidationmap.exe
 .gocache/
 debug*
 server.log
+*.log
 *.disabled
 *test*
 
