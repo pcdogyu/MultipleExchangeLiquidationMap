@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bytes"
@@ -14,7 +14,6 @@ import (
 	"log"
 	"math"
 	"mime/multipart"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	texttemplate "text/template"
 	"time"
 
 	_ "image/png"
@@ -54,12 +54,6 @@ const (
 )
 
 var bandSizes = []int{10, 20, 30, 40, 50, 60, 80, 100, 125, 150, 175, 200, 250, 300, 350, 400}
-
-const (
-	wsRetryBaseDelay = 2 * time.Second
-	wsRetryMaxDelay  = 30 * time.Second
-	wsLogInterval    = 30 * time.Second
-)
 
 type MarketState struct {
 	Exchange       string   `json:"exchange"`
@@ -222,9 +216,46 @@ type App struct {
 	mu         sync.RWMutex
 	errLogMu   sync.Mutex
 	errLogNext map[string]time.Time
+	apiGuardMu sync.Mutex
+	apiGuards  map[string]*ExchangeAPIGuard
 	windowDays int
 	debug      bool
 	lastNotify int64
+}
+
+type HTTPStatusError struct {
+	URL        string
+	Status     string
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPStatusError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if strings.TrimSpace(e.Body) == "" {
+		return fmt.Sprintf("http %s", e.Status)
+	}
+	return fmt.Sprintf("http %s: %s", e.Status, strings.TrimSpace(e.Body))
+}
+
+type ExchangePausedError struct {
+	Exchange string
+	Until    time.Time
+}
+
+func (e *ExchangePausedError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s access paused until %s after repeated http 451 responses",
+		e.Exchange, e.Until.Local().Format("2006-01-02 15:04:05"))
+}
+
+type ExchangeAPIGuard struct {
+	Consecutive451 int
+	PausedUntil    time.Time
 }
 
 type Level struct {
@@ -251,112 +282,10 @@ type OrderBookHub struct {
 
 var errResnapshot = errors.New("periodic resnapshot")
 
-type wsRetryState struct {
-	attempt     int
-	firstFailAt time.Time
-	lastLogAt   time.Time
-	lastMsg     string
-	target      string
-	suppressed  int
-}
-
-func nextWSRetryDelay(attempt int) time.Duration {
-	if attempt <= 0 {
-		return wsRetryBaseDelay
-	}
-	d := wsRetryBaseDelay
-	for i := 1; i < attempt; i++ {
-		if d >= wsRetryMaxDelay/2 {
-			return wsRetryMaxDelay
-		}
-		d *= 2
-	}
-	if d > wsRetryMaxDelay {
-		return wsRetryMaxDelay
-	}
-	return d
-}
-
-func (a *App) logWSRetry(name string, st *wsRetryState, err error, delay time.Duration) {
-	if !a.debug || err == nil {
-		return
-	}
-	now := time.Now()
-	if st.firstFailAt.IsZero() {
-		st.firstFailAt = now
-	}
-	msg := err.Error()
-	target := st.target
-	if target == "" {
-		target = "target=unknown"
-	}
-	if st.lastLogAt.IsZero() || now.Sub(st.lastLogAt) >= wsLogInterval || msg != st.lastMsg {
-		if st.suppressed > 0 && st.lastMsg != "" && msg == st.lastMsg {
-			log.Printf("%s reconnect still failing: %s err=%v suppressed=%d next_retry=%s", name, target, err, st.suppressed, delay)
-		} else {
-			log.Printf("%s reconnect failed: %s err=%v attempt=%d next_retry=%s", name, target, err, st.attempt, delay)
-		}
-		st.lastLogAt = now
-		st.lastMsg = msg
-		st.suppressed = 0
-		return
-	}
-	st.suppressed++
-}
-
-func (a *App) logWSRecovered(name string, st *wsRetryState) {
-	if !a.debug || st.attempt == 0 {
-		st.attempt = 0
-		st.firstFailAt = time.Time{}
-		st.suppressed = 0
-		return
-	}
-	target := st.target
-	if target == "" {
-		target = "target=unknown"
-	}
-	downtime := time.Since(st.firstFailAt).Round(time.Second)
-	if st.suppressed > 0 {
-		log.Printf("%s reconnected: %s failed_attempts=%d downtime=%s suppressed=%d", name, target, st.attempt, downtime, st.suppressed)
-	} else {
-		log.Printf("%s reconnected: %s failed_attempts=%d downtime=%s", name, target, st.attempt, downtime)
-	}
-	st.attempt = 0
-	st.firstFailAt = time.Time{}
-	st.lastLogAt = time.Time{}
-	st.lastMsg = ""
-	st.suppressed = 0
-}
-
-func wsTargetLabel(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return "url=" + rawURL
-	}
-	host := u.Hostname()
-	port := u.Port()
-	if port == "" {
-		switch u.Scheme {
-		case "wss", "https":
-			port = "443"
-		case "ws", "http":
-			port = "80"
-		}
-	}
-	label := fmt.Sprintf("url=%s host=%s port=%s", rawURL, host, port)
-	if host == "" {
-		return label
-	}
-	ips, err := net.LookupIP(host)
-	if err != nil || len(ips) == 0 {
-		return label
-	}
-	parts := make([]string, 0, len(ips))
-	for _, ip := range ips {
-		parts = append(parts, ip.String())
-	}
-	return label + " ips=" + strings.Join(parts, ",")
-}
+const (
+	exchange451TripThreshold = 3
+	exchange451PauseDuration = 180 * time.Minute
+)
 
 type Snapshot struct {
 	Exchange       string
@@ -370,21 +299,42 @@ type Snapshot struct {
 }
 
 type ChannelSettings struct {
-	TelegramBotToken  string `json:"telegram_bot_token"`
-	TelegramChannel   string `json:"telegram_channel"`
-	NotifyIntervalMin int    `json:"notify_interval_min"`
-	NotifyEnabled     bool   `json:"notify_enabled"`
-	NotifyRegexRules  string `json:"notify_regex_rules"`
+	TelegramBotToken      string `json:"telegram_bot_token"`
+	TelegramChannel       string `json:"telegram_channel"`
+	NotifyIntervalMin     int    `json:"notify_interval_min"`
+	NotifyWorkIntervalMin int    `json:"notify_work_interval_min"`
+	NotifyOffIntervalMin  int    `json:"notify_off_interval_min"`
+	WorkTimeExpr          string `json:"work_time_expr"`
+	NotifyEnabled         bool   `json:"notify_enabled"`
 }
 
-type telegramContentBlock struct {
-	HTML   string
-	Labels []string
+type TelegramSendHistoryRow struct {
+	ID         int64  `json:"id"`
+	SentAt     int64  `json:"sent_at"`
+	SendMode   string `json:"send_mode"`
+	GroupIndex int    `json:"group_index"`
+	GroupName  string `json:"group_name"`
+	Status     string `json:"status"`
+	ErrorText  string `json:"error_text,omitempty"`
 }
 
-type ManagedUser struct {
-	Email   string `json:"email"`
-	IsAdmin bool   `json:"is_admin"`
+type ChannelTimelineRow struct {
+	TS      int64  `json:"ts"`
+	Source  string `json:"source"`
+	Type    string `json:"type"`
+	Window  string `json:"window,omitempty"`
+	Target  string `json:"target,omitempty"`
+	Status  string `json:"status"`
+	Detail  string `json:"detail,omitempty"`
+	Records int    `json:"records,omitempty"`
+}
+
+type ChannelPlannedPushRow struct {
+	PushTS      int64  `json:"push_ts"`
+	CaptureTS   int64  `json:"capture_ts"`
+	Period      string `json:"period"`
+	IntervalMin int    `json:"interval_min"`
+	Detail      string `json:"detail,omitempty"`
 }
 
 func getenv(key, fallback string) string {
@@ -440,7 +390,6 @@ func configureDB(db *sql.DB) error {
 func initDB(db *sql.DB) error {
 	stmts := []string{
 		`PRAGMA journal_mode=WAL;`,
-		`PRAGMA busy_timeout=5000;`,
 		`CREATE TABLE IF NOT EXISTS market_state (
 			exchange TEXT NOT NULL,
 			symbol TEXT NOT NULL,
@@ -550,21 +499,27 @@ func initDB(db *sql.DB) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_webdatasource_snapshots_key_ts ON webdatasource_snapshots(symbol, window_days, captured_at);`,
 		`CREATE TABLE IF NOT EXISTS webdatasource_points (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				snapshot_id INTEGER NOT NULL,
-				symbol TEXT NOT NULL,
-				window_days INTEGER NOT NULL,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			snapshot_id INTEGER NOT NULL,
+			symbol TEXT NOT NULL,
+			window_days INTEGER NOT NULL,
 			side TEXT NOT NULL,
 			exchange TEXT NOT NULL,
 			price REAL NOT NULL,
-				liq_value REAL NOT NULL,
-				captured_at INTEGER NOT NULL
-			);`,
+			liq_value REAL NOT NULL,
+			captured_at INTEGER NOT NULL
+		);`,
 		`CREATE INDEX IF NOT EXISTS idx_webdatasource_points_snapshot_id ON webdatasource_points(snapshot_id);`,
-		`CREATE TABLE IF NOT EXISTS users (
-				email TEXT PRIMARY KEY,
-				is_admin INTEGER NOT NULL DEFAULT 0
-			);`,
+		`CREATE TABLE IF NOT EXISTS telegram_send_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			sent_at INTEGER NOT NULL,
+			send_mode TEXT NOT NULL,
+			group_index INTEGER NOT NULL,
+			group_name TEXT NOT NULL,
+			status TEXT NOT NULL,
+			error_text TEXT NOT NULL DEFAULT ''
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_telegram_send_history_sent_at ON telegram_send_history(sent_at DESC);`,
 	}
 	for _, stmt := range stmts {
 		if err := execWithBusyRetry(db, stmt); err != nil {
@@ -574,10 +529,6 @@ func initDB(db *sql.DB) error {
 	// Backward-compatible schema upgrades for existing DBs.
 	_ = ensureColumn(db, "market_state", "long_short_ratio", "REAL")
 	_ = ensureColumn(db, "oi_snapshots", "long_short_ratio", "REAL")
-	_ = ensureColumn(db, "webdatasource_runs", "source_meta_json", "TEXT NOT NULL DEFAULT ''")
-	_ = ensureColumn(db, "webdatasource_snapshots", "range_low", "REAL NOT NULL DEFAULT 0")
-	_ = ensureColumn(db, "webdatasource_snapshots", "range_high", "REAL NOT NULL DEFAULT 0")
-	_ = ensureColumn(db, "webdatasource_points", "window_days", "INTEGER NOT NULL DEFAULT 0")
 	return nil
 }
 
@@ -642,8 +593,9 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	if err := configureDB(db); err != nil {
+		log.Fatal(err)
+	}
 	if err := initDB(db); err != nil {
 		log.Fatal(err)
 	}
@@ -654,6 +606,7 @@ func main() {
 			Timeout: 12 * time.Second,
 		},
 		ob:         newOrderBookHub(),
+		apiGuards:  map[string]*ExchangeAPIGuard{},
 		windowDays: defaultWindowDays,
 		debug:      debug,
 	}
@@ -675,7 +628,6 @@ func main() {
 	mux.HandleFunc("/bubbles", app.handleBubbles)
 	mux.HandleFunc("/webdatasource", app.handleWebDataSource)
 	mux.HandleFunc("/channel", app.handleChannel)
-	mux.HandleFunc("/users", app.handleUsersPage)
 	mux.HandleFunc("/api/dashboard", app.handleDashboard)
 	mux.HandleFunc("/api/model/liquidation-map", app.handleModelLiquidationMap)
 	mux.HandleFunc("/api/model-config", app.handleModelConfig)
@@ -687,18 +639,17 @@ func main() {
 	mux.HandleFunc("/api/coinglass/map", app.handleCoinGlassMap)
 	mux.HandleFunc("/api/window", app.handleWindow)
 	mux.HandleFunc("/api/settings", app.handleSettings)
-	mux.HandleFunc("/api/users", app.handleUsersAPI)
 	mux.HandleFunc("/api/channel/test", app.handleChannelTest)
 	mux.HandleFunc("/api/channel/history", app.handleChannelHistory)
+	mux.HandleFunc("/api/channel/timeline", app.handleChannelTimeline)
+	mux.HandleFunc("/api/channel/schedule", app.handleChannelSchedule)
 	mux.HandleFunc("/api/upgrade/pull", app.handleUpgradePull)
-	mux.HandleFunc("/api/upgrade/restart", app.handleUpgradeRestart)
 	mux.HandleFunc("/api/upgrade/progress", app.handleUpgradeProgress)
 	mux.HandleFunc("/api/version", app.handleVersion)
 	mux.HandleFunc("/api/price-events", app.handlePriceEvents)
 	mux.HandleFunc("/api/webdatasource/status", app.handleWebDataSourceStatus)
 	mux.HandleFunc("/api/webdatasource/init", app.handleWebDataSourceInit)
 	mux.HandleFunc("/api/webdatasource/run", app.handleWebDataSourceRun)
-	mux.HandleFunc("/api/webdatasource/init", app.handleWebDataSourceInit)
 	mux.HandleFunc("/api/webdatasource/map", app.handleWebDataSourceMap)
 	mux.HandleFunc("/api/webdatasource/runs", app.handleWebDataSourceRuns)
 	mux.HandleFunc("/api/webdatasource/settings", app.handleWebDataSourceSettings)
@@ -772,85 +723,11 @@ func (a *App) handleChannel(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
 	}
-	tpl := template.Must(template.New("channel").Parse(channelHTMLV2))
-	_ = tpl.Execute(w, a.loadSettings())
-}
-
-func (a *App) handleUsersPage(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	tpl := template.Must(template.New("users").Parse(usersHTML))
-	_ = tpl.Execute(w, nil)
-}
-
-func (a *App) handleUsersAPI(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	switch r.Method {
-	case http.MethodGet:
-		users, err := a.loadUsers()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"users": users})
-	case http.MethodPost:
-		var req struct {
-			Users []ManagedUser `json:"users"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-		tx, err := a.db.Begin()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer func() {
-			_ = tx.Rollback()
-		}()
-		if _, err := tx.Exec(`DELETE FROM users`); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		stmt, err := tx.Prepare(`INSERT INTO users(email, is_admin) VALUES(?, ?)`)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer stmt.Close()
-
-		for _, u := range req.Users {
-			email := strings.ToLower(strings.TrimSpace(u.Email))
-			if email == "" {
-				continue
-			}
-			isAdmin := 0
-			if u.IsAdmin {
-				isAdmin = 1
-			}
-			if _, err := stmt.Exec(email, isAdmin); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-		if err := tx.Commit(); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		users, err := a.loadUsers()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"users": users})
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	tpl := texttemplate.Must(texttemplate.New("channel").Parse(channelHTMLV2))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := tpl.Execute(w, a.loadSettings()); err != nil {
+		log.Printf("render channel page failed: %v", err)
+		http.Error(w, "render channel page failed", http.StatusInternalServerError)
 	}
 }
 
@@ -1044,33 +921,6 @@ func (a *App) getSettingFloat(key string, fallback float64) float64 {
 func (a *App) setSetting(key, value string) error {
 	_, err := a.db.Exec(`INSERT INTO app_settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
-}
-
-func (a *App) loadUsers() ([]ManagedUser, error) {
-	rows, err := a.db.Query(`SELECT email, is_admin FROM users ORDER BY email`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	users := make([]ManagedUser, 0)
-	for rows.Next() {
-		var (
-			email   string
-			isAdmin int
-		)
-		if err := rows.Scan(&email, &isAdmin); err != nil {
-			return nil, err
-		}
-		users = append(users, ManagedUser{
-			Email:   email,
-			IsAdmin: isAdmin == 1,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return users, nil
 }
 
 func (a *App) loadModelMapSnapshot(symbol string, windowDays int, configRev int64) (map[string]any, bool) {
@@ -1308,11 +1158,13 @@ func (a *App) loadSettings() ChannelSettings {
 	workInterval := parsePositiveIntSetting(a.getSetting("notify_work_interval_min"), legacyInterval)
 	offInterval := parsePositiveIntSetting(a.getSetting("notify_off_interval_min"), legacyInterval)
 	return ChannelSettings{
-		TelegramBotToken:  a.getSetting("telegram_bot_token"),
-		TelegramChannel:   a.getSetting("telegram_channel"),
-		NotifyIntervalMin: interval,
-		NotifyEnabled:     parseBoolSetting(a.getSetting("notify_enabled"), false),
-		NotifyRegexRules:  a.getSetting("notify_regex_rules"),
+		TelegramBotToken:      normalizeQuotedInput(a.getSetting("telegram_bot_token")),
+		TelegramChannel:       normalizeQuotedInput(a.getSetting("telegram_channel")),
+		NotifyIntervalMin:     workInterval,
+		NotifyWorkIntervalMin: workInterval,
+		NotifyOffIntervalMin:  offInterval,
+		WorkTimeExpr:          strings.TrimSpace(a.getSetting("notify_work_time_expr")),
+		NotifyEnabled:         parseBoolSetting(a.getSetting("notify_enabled"), false),
 	}
 }
 
@@ -2031,10 +1883,6 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := a.setSetting("notify_regex_rules", req.NotifyRegexRules); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -2064,11 +1912,68 @@ func (a *App) handleChannelHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	rows, err := a.listTelegramSendHistory(60)
+	limit := 15
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	rows, err := a.listTelegramSendHistory(limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(rows)
+}
+
+func (a *App) handleChannelTimeline(w http.ResponseWriter, r *http.Request) {
+	if a.debug {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	hours := 24
+	limit := 24
+	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 168 {
+			hours = n
+		}
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	rows, err := a.listChannelTimeline(hours)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(rows)
+}
+
+func (a *App) handleChannelSchedule(w http.ResponseWriter, r *http.Request) {
+	if a.debug {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	hours := 24
+	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 72 {
+			hours = n
+		}
+	}
+	rows := a.listChannelPlannedPushes(hours)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(rows)
 }
@@ -2095,26 +2000,6 @@ func (a *App) handleUpgradePull(w http.ResponseWriter, r *http.Request) {
 		// without creating a liqmap-upgrade.service unit.
 		upgradeCmd := exec.Command("bash", "-lc", "rm -f /tmp/liqmap-upgrade.exit /tmp/liqmap-upgrade.pid /tmp/liqmap-upgrade.unit; : >/tmp/liqmap-upgrade.log; unit=liqmap-upgrade.scope; echo \"$unit\" > /tmp/liqmap-upgrade.unit; systemd-run --scope --collect --no-block --unit=liqmap-upgrade /bin/bash -lc 'cd /opt/MultipleExchangeLiquidationMap && echo [git fetch] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git fetch --all --prune\" && git fetch --all --prune && echo [git reset] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git reset --hard origin/golang\" && git reset --hard origin/golang && echo [go build] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# go build -o multipleexchangeliquidationmap.exe .\" && go build -o multipleexchangeliquidationmap.exe . && echo [restart service] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl restart liqmap.service\" && systemctl restart liqmap.service && echo [service status] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl status liqmap.service --no-pager\" && systemctl status liqmap.service --no-pager; ec=$?; echo $ec >/tmp/liqmap-upgrade.exit' >>/tmp/liqmap-upgrade.log 2>&1")
 		_, _ = upgradeCmd.CombinedOutput()
-	}()
-}
-
-func (a *App) handleUpgradeRestart(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"output": "restart queued",
-	})
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-	go func() {
-		_ = exec.Command("bash", "-lc", "systemctl restart liqmap.service").Run()
 	}()
 }
 
@@ -2297,32 +2182,21 @@ func (a *App) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) sendTelegramTestMessage() error {
-	return a.sendTelegramReportBundle()
+	return a.sendTelegramThirtyDayBundle(true)
 }
 
 func (a *App) sendTelegramText(text string) error {
-	return a.sendTelegramMessage(text, "")
-}
-
-func (a *App) sendTelegramHTML(html string) error {
-	return a.sendTelegramMessage(html, "HTML")
-}
-
-func (a *App) sendTelegramMessage(text, parseMode string) error {
-	token := strings.TrimSpace(a.getSetting("telegram_bot_token"))
-	channel := strings.TrimSpace(a.getSetting("telegram_channel"))
+	token := normalizeQuotedInput(a.getSetting("telegram_bot_token"))
+	channel := normalizeQuotedInput(a.getSetting("telegram_channel"))
 	if token == "" || channel == "" {
 		return fmt.Errorf("telegram bot token or channel is empty")
 	}
 
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
-	payload := map[string]any{
-		"chat_id":                  channel,
-		"text":                     text,
-		"disable_web_page_preview": true,
-	}
-	if parseMode != "" {
-		payload["parse_mode"] = parseMode
+	payload := map[string]string{
+		"chat_id":    channel,
+		"text":       text,
+		"parse_mode": "HTML",
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -2347,111 +2221,6 @@ func (a *App) sendTelegramMessage(text, parseMode string) error {
 			return fmt.Errorf("telegram api returned %s", resp.Status)
 		}
 		return fmt.Errorf("telegram api returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
-	}
-	return nil
-}
-
-func (a *App) sendTelegramReportBundle() error {
-	monitorReport, err := a.buildModelHeatReportData()
-	if err != nil {
-		return err
-	}
-	if len(monitorReport.Bands) == 0 {
-		return errors.New("monitor heat report is empty")
-	}
-	webMap := a.webds.loadLatestMap("30d")
-	if !webMap.HasData {
-		return fmt.Errorf("webdatasource 30d has no data: %s", strings.TrimSpace(webMap.LastError))
-	}
-	blocks := []telegramContentBlock{
-		{
-			HTML: a.buildTelegramMonitorHTML(monitorReport),
-			Labels: []string{
-				"monitor",
-				"/monitor",
-				"清算热区速报",
-				"heat-report",
-			},
-		},
-		{
-			HTML: a.buildTelegramWebDataSourceHTML(webMap),
-			Labels: []string{
-				"webdatasource",
-				"/webdatasource",
-				"30d",
-				"页面数据源",
-			},
-		},
-	}
-	return a.sendTelegramFilteredBlocks(blocks)
-}
-
-func splitNotifyRegexRules(raw string) []string {
-	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
-	out := make([]string, 0, 3)
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		out = append(out, line)
-		if len(out) >= 3 {
-			break
-		}
-	}
-	return out
-}
-
-func compileNotifyRegexRules(raw string) ([]*regexp.Regexp, error) {
-	lines := splitNotifyRegexRules(raw)
-	out := make([]*regexp.Regexp, 0, len(lines))
-	for _, line := range lines {
-		re, err := regexp.Compile(line)
-		if err != nil {
-			return nil, fmt.Errorf("invalid notify regex %q: %w", line, err)
-		}
-		out = append(out, re)
-	}
-	return out, nil
-}
-
-func (a *App) sendTelegramFilteredBlocks(blocks []telegramContentBlock) error {
-	rules, err := compileNotifyRegexRules(a.getSetting("notify_regex_rules"))
-	if err != nil {
-		return err
-	}
-	sent := 0
-	for _, block := range blocks {
-		if strings.TrimSpace(block.HTML) == "" {
-			continue
-		}
-		if len(rules) > 0 {
-			matched := false
-			for _, re := range rules {
-				for _, label := range block.Labels {
-					if re.MatchString(label) {
-						matched = true
-						break
-					}
-				}
-				if matched {
-					break
-				}
-			}
-			if !matched {
-				continue
-			}
-		}
-		if err := a.sendTelegramHTML(block.HTML); err != nil {
-			return err
-		}
-		sent++
-	}
-	if sent == 0 {
-		if len(rules) > 0 {
-			return errors.New("notify regex rules did not match any sendable content")
-		}
-		return errors.New("no telegram content to send")
 	}
 	return nil
 }
@@ -2528,6 +2297,20 @@ func (a *App) recordTelegramSendHistory(sendMode string, groupIndex int, groupNa
 	}
 }
 
+func normalizeLegacyTelegramHistoryErrorText(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return v
+	}
+	replacer := strings.NewReplacer(
+		"绗?缁勬暟鎹己澶?", "数据缺失:",
+		"绗?缁勬埅鍥惧け璐?", "截图失败:",
+		"绗?缁勫彂閫佸け璐?", "发送失败:",
+	)
+	v = replacer.Replace(v)
+	return strings.TrimSpace(v)
+}
+
 func (a *App) listTelegramSendHistory(limit int) ([]TelegramSendHistoryRow, error) {
 	if limit <= 0 {
 		limit = 60
@@ -2546,9 +2329,124 @@ func (a *App) listTelegramSendHistory(limit int) ([]TelegramSendHistoryRow, erro
 		if err := rows.Scan(&item.ID, &item.SentAt, &item.SendMode, &item.GroupIndex, &item.GroupName, &item.Status, &item.ErrorText); err != nil {
 			return nil, err
 		}
+		item.ErrorText = normalizeLegacyTelegramHistoryErrorText(item.ErrorText)
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (a *App) listChannelTimeline(hours int) ([]ChannelTimelineRow, error) {
+	if hours <= 0 {
+		hours = 24
+	}
+	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour).UnixMilli()
+	out := make([]ChannelTimelineRow, 0, 64)
+
+	captureRows, err := a.db.Query(`SELECT started_at, finished_at, status, window_days, error_message, records_count
+		FROM webdatasource_runs
+		WHERE started_at >= ? OR finished_at >= ?
+		ORDER BY started_at DESC, id DESC`, cutoff, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer captureRows.Close()
+	for captureRows.Next() {
+		var startedAt, finishedAt int64
+		var status, errorMessage string
+		var windowDays, recordsCount int
+		if err := captureRows.Scan(&startedAt, &finishedAt, &status, &windowDays, &errorMessage, &recordsCount); err != nil {
+			return nil, err
+		}
+		ts := finishedAt
+		if ts <= 0 {
+			ts = startedAt
+		}
+		out = append(out, ChannelTimelineRow{
+			TS:      ts,
+			Source:  "webdatasource",
+			Type:    "capture",
+			Window:  fmt.Sprintf("%dd", windowDays),
+			Status:  status,
+			Detail:  strings.TrimSpace(errorMessage),
+			Records: recordsCount,
+		})
+	}
+	if err := captureRows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (a *App) nextTelegramAutoNotifyAfter(settings ChannelSettings, baseTS int64, start, limit time.Time) (time.Time, int, string, bool) {
+	if start.After(limit) {
+		return time.Time{}, 0, "", false
+	}
+	if baseTS <= 0 {
+		intervalMin := effectiveNotifyInterval(settings, start)
+		if intervalMin <= 0 {
+			intervalMin = 15
+		}
+		period := "off-hours"
+		if isWorkTime(start, settings.WorkTimeExpr) {
+			period = "work-hours"
+		}
+		return start, intervalMin, period, true
+	}
+	cursor := start
+	for !cursor.After(limit) {
+		intervalMin := effectiveNotifyInterval(settings, cursor)
+		if intervalMin <= 0 {
+			intervalMin = 15
+		}
+		dueTS := baseTS + int64(intervalMin)*60*1000
+		if cursor.UnixMilli() >= dueTS {
+			period := "off-hours"
+			if isWorkTime(cursor, settings.WorkTimeExpr) {
+				period = "work-hours"
+			}
+			return cursor, intervalMin, period, true
+		}
+		cursor = cursor.Add(time.Minute)
+	}
+	return time.Time{}, 0, "", false
+}
+
+func (a *App) listChannelPlannedPushes(hours int) []ChannelPlannedPushRow {
+	if hours <= 0 {
+		hours = 24
+	}
+	settings := a.loadSettings()
+	previewOnly := !settings.NotifyEnabled
+	settings.NotifyEnabled = true
+	now := time.Now().Truncate(time.Minute)
+	limit := now.Add(time.Duration(hours) * time.Hour)
+	baseTS := a.getLastNotifyTS()
+	if historyTS := a.latestSuccessfulAutoNotifyTS(); historyTS > baseTS {
+		baseTS = historyTS
+	}
+	out := make([]ChannelPlannedPushRow, 0, 64)
+	cursor := now
+	for !cursor.After(limit) {
+		pushAt, intervalMin, period, ok := a.nextTelegramAutoNotifyAfter(settings, baseTS, cursor, limit)
+		if !ok {
+			break
+		}
+		pushTS := pushAt.UnixMilli()
+		detail := "预计提前 5 分钟抓取数据，然后执行推送"
+		if previewOnly {
+			detail += "（当前自动通知未开启，仅供预览）"
+		}
+		out = append(out, ChannelPlannedPushRow{
+			PushTS:      pushTS,
+			CaptureTS:   pushTS - 5*60*1000,
+			Period:      period,
+			IntervalMin: intervalMin,
+			Detail:      detail,
+		})
+		baseTS = pushTS
+		cursor = pushAt.Add(time.Minute)
+	}
+	return out
 }
 
 func (a *App) sendTelegramThirtyDayBundle(isTest bool) error {
@@ -2567,45 +2465,45 @@ func (a *App) sendTelegramThirtyDayBundle(isTest bool) error {
 
 	var errs []string
 
-	monitorImage, err := a.captureMonitorScreenshotJPEG(windowDays)
-	if err != nil {
-		msg := fmt.Sprintf("第1组截图失败: %v", err)
-		a.recordTelegramSendHistory(sendMode, 1, "monitor-30d-image", "failed", msg)
-		errs = append(errs, msg)
-	} else if err := a.sendTelegramPhoto("", monitorImage); err != nil {
-		msg := fmt.Sprintf("第1组发送失败: %v", err)
-		a.recordTelegramSendHistory(sendMode, 1, "monitor-30d-image", "failed", msg)
-		errs = append(errs, msg)
-	} else {
-		a.recordTelegramSendHistory(sendMode, 1, "monitor-30d-image", "success", "")
-	}
-
 	if !webMap.HasData || len(webMap.Points) == 0 {
 		errText := strings.TrimSpace(webMap.LastError)
 		if errText == "" {
 			errText = "no 30-day webdatasource snapshot available"
 		}
-		msg := fmt.Sprintf("第2组数据缺失: %s", errText)
-		a.recordTelegramSendHistory(sendMode, 2, "webdatasource-30d-image", "failed", msg)
+		msg := fmt.Sprintf("数据缺失: %s", errText)
+		a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
 		errs = append(errs, msg)
 	} else {
 		webImage, err := a.captureWebDataSourceScreenshotJPEG("30d")
 		if err != nil {
-			msg := fmt.Sprintf("第2组截图失败: %v", err)
-			a.recordTelegramSendHistory(sendMode, 2, "webdatasource-30d-image", "failed", msg)
+			msg := fmt.Sprintf("截图失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
 			errs = append(errs, msg)
 		} else if err := a.sendTelegramPhoto("", webImage); err != nil {
-			msg := fmt.Sprintf("第2组发送失败: %v", err)
-			a.recordTelegramSendHistory(sendMode, 2, "webdatasource-30d-image", "failed", msg)
+			msg := fmt.Sprintf("发送失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
 			errs = append(errs, msg)
 		} else {
-			a.recordTelegramSendHistory(sendMode, 2, "webdatasource-30d-image", "success", "")
+			a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "success", "")
 		}
+	}
+
+	monitorImage, err := a.captureMonitorScreenshotJPEG(windowDays)
+	if err != nil {
+		msg := fmt.Sprintf("截图失败: %v", err)
+		a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "failed", msg)
+		errs = append(errs, msg)
+	} else if err := a.sendTelegramPhoto("", monitorImage); err != nil {
+		msg := fmt.Sprintf("发送失败: %v", err)
+		a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "failed", msg)
+		errs = append(errs, msg)
+	} else {
+		a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "success", "")
 	}
 
 	text := a.buildTelegramThirtyDayTextV2(monitorReport)
 	if err := a.sendTelegramText(text); err != nil {
-		msg := fmt.Sprintf("第3组发送失败: %v", err)
+		msg := fmt.Sprintf("发送失败: %v", err)
 		a.recordTelegramSendHistory(sendMode, 3, "monitor-30d-text", "failed", msg)
 		errs = append(errs, msg)
 	} else {
@@ -2636,149 +2534,30 @@ func (a *App) startTelegramNotifier(ctx context.Context) {
 				if nextTS > now {
 					continue
 				}
-				if err := a.sendTelegramReportBundle(); err != nil {
+				if err := a.sendTelegramThirtyDayBundle(false); err != nil {
 					if a.debug {
-						log.Printf("telegram auto send failed: %v", err)
+						log.Printf("telegram auto bundle send failed: %v", err)
 					}
 					continue
 				}
-				a.lastNotify = now
+				a.setLastNotifyTS(now)
 			}
 		}
 	}()
 }
 
-func fixedWidthCell(v string, width int, alignRight bool) string {
-	r := []rune(v)
-	if len(r) > width {
-		return string(r[:width])
-	}
-	pad := strings.Repeat(" ", width-len(r))
-	if alignRight {
-		return pad + v
-	}
-	return v + pad
-}
-
-func tgCodeBlock(lines []string) string {
-	return "<pre>" + template.HTMLEscapeString(strings.Join(lines, "\n")) + "</pre>"
-}
-
-func tgFmtYi(v float64) string {
-	return fmt.Sprintf("%.2f", v/1e8)
-}
-
-func tgFmtPrice(v float64) string {
-	return fmt.Sprintf("%.1f", v)
-}
-
-func tgFmtTime(ts int64) string {
-	if ts <= 0 {
-		return "-"
-	}
-	return time.UnixMilli(ts).Format("2006-01-02 15:04:05")
-}
-
-func (a *App) buildTelegramMonitorHTML(r HeatReportData) string {
-	rows := []string{
-		fixedWidthCell("Band", 6, false) + " " +
-			fixedWidthCell("UpPx", 9, true) + " " +
-			fixedWidthCell("UpYi", 8, true) + " " +
-			fixedWidthCell("DownPx", 9, true) + " " +
-			fixedWidthCell("DownYi", 8, true),
-	}
-	for _, band := range []int{20, 50, 80, 100} {
-		b := heatReportBandBySize(r, band)
-		rows = append(rows,
-			fixedWidthCell(strconv.Itoa(b.Band), 6, false)+" "+
-				fixedWidthCell(tgFmtPrice(b.UpPrice), 9, true)+" "+
-				fixedWidthCell(tgFmtYi(b.UpNotionalUSD), 8, true)+" "+
-				fixedWidthCell(tgFmtPrice(b.DownPrice), 9, true)+" "+
-				fixedWidthCell(tgFmtYi(b.DownNotionalUSD), 8, true),
-		)
-	}
-	peakRows := []string{
-		fixedWidthCell("Side", 6, false) + " " +
-			fixedWidthCell("PeakPx", 9, true) + " " +
-			fixedWidthCell("SingleYi", 10, true) + " " +
-			fixedWidthCell("CumYi", 10, true),
-		fixedWidthCell("Long", 6, false) + " " +
-			fixedWidthCell(tgFmtPrice(r.LongPeak.Price), 9, true) + " " +
-			fixedWidthCell(tgFmtYi(r.LongPeak.SingleUSD), 10, true) + " " +
-			fixedWidthCell(tgFmtYi(r.LongPeak.CumulativeUSD), 10, true),
-		fixedWidthCell("Short", 6, false) + " " +
-			fixedWidthCell(tgFmtPrice(r.ShortPeak.Price), 9, true) + " " +
-			fixedWidthCell(tgFmtYi(r.ShortPeak.SingleUSD), 10, true) + " " +
-			fixedWidthCell(tgFmtYi(r.ShortPeak.CumulativeUSD), 10, true),
-	}
-	parts := []string{
-		"<b>http://127.0.0.1:8888/monitor</b>",
-		fmt.Sprintf("清算热区速报 | 现价 <b>$%s</b> | 多单 %.2f亿 | 空单 %.2f亿", tgFmtPrice(r.CurrentPrice), r.LongTotalUSD/1e8, r.ShortTotalUSD/1e8),
-		tgCodeBlock(rows),
-		tgCodeBlock(peakRows),
-	}
-	return strings.Join(parts, "\n")
-}
-
-func (a *App) buildTelegramWebDataSourceHTML(d WebDataSourceMapResponse) string {
-	pointRows := []string{
-		fixedWidthCell("Rank", 6, false) + " " +
-			fixedWidthCell("Side", 7, false) + " " +
-			fixedWidthCell("Price", 10, true) + " " +
-			fixedWidthCell("Yi", 8, true),
-	}
-	for i, pt := range d.TopLongs {
-		pointRows = append(pointRows,
-			fixedWidthCell("L"+strconv.Itoa(i+1), 6, false)+" "+
-				fixedWidthCell("Long", 7, false)+" "+
-				fixedWidthCell(tgFmtPrice(pt.Price), 10, true)+" "+
-				fixedWidthCell(tgFmtYi(pt.LiqValue), 8, true),
-		)
-	}
-	for i, pt := range d.TopShorts {
-		pointRows = append(pointRows,
-			fixedWidthCell("S"+strconv.Itoa(i+1), 6, false)+" "+
-				fixedWidthCell("Short", 7, false)+" "+
-				fixedWidthCell(tgFmtPrice(pt.Price), 10, true)+" "+
-				fixedWidthCell(tgFmtYi(pt.LiqValue), 8, true),
-		)
-	}
-
-	exRows := []string{
-		fixedWidthCell("Ex", 10, false) + " " +
-			fixedWidthCell("Share%", 8, true) + " " +
-			fixedWidthCell("Yi", 8, true),
-	}
-	for _, ex := range d.ByExchange {
-		exRows = append(exRows,
-			fixedWidthCell(strings.ToUpper(ex.Exchange), 10, false)+" "+
-				fixedWidthCell(fmt.Sprintf("%.0f", ex.Share*100), 8, true)+" "+
-				fixedWidthCell(tgFmtYi(ex.NotionalUSD), 8, true),
-		)
-	}
-
-	parts := []string{
-		"<b>http://127.0.0.1:8888/webdatasource</b>",
-		fmt.Sprintf("页面数据源 30D | 区间 <b>%s - %s</b> | 多单 %.2f亿 | 空单 %.2f亿 | 抓取 %s",
-			tgFmtPrice(d.RangeLow), tgFmtPrice(d.RangeHigh), d.LongTotal/1e8, d.ShortTotal/1e8, tgFmtTime(d.GeneratedAt)),
-		tgCodeBlock(pointRows),
-		tgCodeBlock(exRows),
-	}
-	return strings.Join(parts, "\n")
-}
-
 func (a *App) buildHeatReportMessage(d Dashboard) string {
 	showBands := map[int]bool{10: true, 20: true, 30: true, 40: true, 50: true, 60: true, 80: true, 100: true, 150: true}
 	lines := []string{
-		"清算热区速报",
-		fmt.Sprintf("当前价: %.1f", d.CurrentPrice),
-		"周期: 1天",
+		"Heat report",
+		fmt.Sprintf("Current price %.1f", d.CurrentPrice),
+		"Window: 1d",
 	}
 	for _, b := range d.Bands {
 		if !showBands[b.Band] {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("%d点内 上方%.1f %.2f万 | 下方%.1f %.2f万", b.Band, b.UpPrice, b.UpNotionalUSD/1e4, b.DownPrice, b.DownNotionalUSD/1e4))
+		lines = append(lines, fmt.Sprintf("%dpt up %.1f %.2fwan | down %.1f %.2fwan", b.Band, b.UpPrice, b.UpNotionalUSD/1e4, b.DownPrice, b.DownNotionalUSD/1e4))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2901,29 +2680,29 @@ func formatYi2(v float64) string {
 func heatReportBias(up, down float64) string {
 	total := up + down
 	if total <= 0 {
-		return "基本均衡"
+		return "鍩烘湰鍧囪　"
 	}
 	if down > up {
-		return "下方偏多"
+		return "涓嬫柟鍋忓"
 	}
 	if up > down {
-		return "上方偏多"
+		return "涓婃柟鍋忓"
 	}
-	return "基本均衡"
+	return "鍩烘湰鍧囪　"
 }
 
 func (a *App) buildHeatReportCaption(r HeatReportData) string {
 	lines := []string{
-		fmt.Sprintf("ETH 清算热区速报 |现价 $%.1f", r.CurrentPrice),
-		fmt.Sprintf("多单总量%s亿 |空单总量%s亿", formatYi1(r.LongTotalUSD), formatYi1(r.ShortTotalUSD)),
+		fmt.Sprintf("ETH heat report | price $%.1f", r.CurrentPrice),
+		fmt.Sprintf("long total %s yi | short total %s yi", formatYi1(r.LongTotalUSD), formatYi1(r.ShortTotalUSD)),
 		"",
-		"【多单最长柱】",
-		fmt.Sprintf("价格$%.1f | 距现价约%.0f点", r.LongPeak.Price, r.LongPeak.Distance),
-		fmt.Sprintf("单柱清算规模%s亿 | 累计清算规模%s亿", formatYi1(r.LongPeak.SingleUSD), formatYi1(r.LongPeak.CumulativeUSD)),
-		"【空单最长柱】",
-		fmt.Sprintf("价格$%.1f | 距现价约%.0f点", r.ShortPeak.Price, r.ShortPeak.Distance),
-		fmt.Sprintf("单柱清算规模%s亿 | 累计清算规模%s亿", formatYi1(r.ShortPeak.SingleUSD), formatYi1(r.ShortPeak.CumulativeUSD)),
-		"【多空失衡统计】",
+		"[long peak]",
+		fmt.Sprintf("price $%.1f | distance %.0f", r.LongPeak.Price, r.LongPeak.Distance),
+		fmt.Sprintf("single %s yi | cumulative %s yi", formatYi1(r.LongPeak.SingleUSD), formatYi1(r.LongPeak.CumulativeUSD)),
+		"[short peak]",
+		fmt.Sprintf("price $%.1f | distance %.0f", r.ShortPeak.Price, r.ShortPeak.Distance),
+		fmt.Sprintf("single %s yi | cumulative %s yi", formatYi1(r.ShortPeak.SingleUSD), formatYi1(r.ShortPeak.CumulativeUSD)),
+		"[summary]",
 	}
 	for _, band := range []int{20, 50, 80, 100} {
 		b := heatReportBandBySize(r, band)
@@ -2934,7 +2713,7 @@ func (a *App) buildHeatReportCaption(r HeatReportData) string {
 			downPct = b.DownNotionalUSD / total * 100
 		}
 		bias := heatReportBias(b.UpNotionalUSD, b.DownNotionalUSD)
-		lines = append(lines, fmt.Sprintf("%d点内，上 %s亿（%.0f%%）/下 %s亿(%.0f%%) 【<b>%s</b>】",
+		lines = append(lines, fmt.Sprintf("%dpt up %s yi (%.0f%%) / down %s yi (%.0f%%) <b>%s</b>",
 			band, formatYi2(b.UpNotionalUSD), upPct, formatYi2(b.DownNotionalUSD), downPct, bias))
 	}
 	return strings.Join(lines, "\n")
@@ -2960,7 +2739,7 @@ func (a *App) renderHeatReportPNG(r HeatReportData) ([]byte, error) {
 		} else if b.UpNotionalUSD > b.DownNotionalUSD {
 			diffClass = "diff-short"
 		}
-		rows.WriteString(fmt.Sprintf(`<tr class="%s"><td>%d点内</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
+		rows.WriteString(fmt.Sprintf(`<tr class="%s"><td>%d鐐瑰唴</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
 			cls, b.Band, b.UpPrice, b.UpNotionalUSD/1e8, b.DownPrice, b.DownNotionalUSD/1e8, diffClass, b.DiffUSD/1e8))
 	}
 	longestDiffClass := "diff-flat"
@@ -2969,7 +2748,7 @@ func (a *App) renderHeatReportPNG(r HeatReportData) ([]byte, error) {
 	} else if r.ShortPeak.SingleUSD > r.LongPeak.SingleUSD {
 		longestDiffClass = "diff-long"
 	}
-	rows.WriteString(fmt.Sprintf(`<tr class="longest"><td>最长柱</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
+	rows.WriteString(fmt.Sprintf(`<tr class="longest"><td>鏈€闀挎煴</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
 		r.ShortPeak.Price, r.ShortPeak.SingleUSD/1e8, r.LongPeak.Price, r.LongPeak.SingleUSD/1e8, longestDiffClass, math.Abs(r.LongPeak.SingleUSD-r.ShortPeak.SingleUSD)/1e8))
 	html := `<!doctype html><html><head><meta charset="utf-8"><style>
 body{margin:0;background:#fff;font-family:Arial,"Microsoft YaHei",sans-serif;color:#34445a}
@@ -2989,10 +2768,10 @@ td:nth-child(4),td:nth-child(5){color:#cf7436}
 .diff-cell.diff-short{color:#34445a}
 .diff-cell.diff-flat{color:#34445a}
 </style></head><body><div class="shot"><table>
-<thead><tr class="title"><th colspan="6">ETH清算雷区速报（` + time.UnixMilli(r.GeneratedAt).Format("2006.1.2") + `）</th></tr>
-<tr class="spot"><th colspan="1">ETH现价</th><th colspan="5" class="price">` + fmt.Sprintf("%.1f", r.CurrentPrice) + `</th></tr>
-<tr class="group"><th rowspan="2">点数<br>阈值</th><th colspan="2">上方空单</th><th colspan="2" class="down">下方多单</th><th rowspan="2">多空差值<br>（亿）</th></tr>
-<tr class="sub"><th>清算价格</th><th>清算规模(亿)</th><th class="down">清算价格</th><th class="down">清算规模(亿)</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></body></html>`
+<thead><tr class="title"><th colspan="6">ETH Heat Report (` + time.UnixMilli(r.GeneratedAt).Format("2006.1.2") + `)</th></tr>
+<tr class="spot"><th colspan="1">ETH Price</th><th colspan="5" class="price">` + fmt.Sprintf("%.1f", r.CurrentPrice) + `</th></tr>
+<tr class="group"><th rowspan="2">Band</th><th colspan="2">Upper Shorts</th><th colspan="2" class="down">Lower Longs</th><th rowspan="2">Diff (yi)</th></tr>
+<tr class="sub"><th>Price</th><th>Size (yi)</th><th class="down">Price</th><th class="down">Size (yi)</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></body></html>`
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -3036,7 +2815,7 @@ func captureElementJPEG(pageURL, selector string, width, height int, prepareScri
 	if chromePath == "" {
 		return nil, errors.New("chrome/chromium executable not found")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(chromePath),
@@ -3059,7 +2838,7 @@ func captureElementJPEG(pageURL, selector string, width, height int, prepareScri
 	}
 	if strings.TrimSpace(waitScript) != "" {
 		actions = append(actions,
-			chromedp.Poll(waitScript, nil, chromedp.WithPollingInterval(250*time.Millisecond), chromedp.WithPollingTimeout(22*time.Second)),
+			chromedp.Poll(waitScript, nil, chromedp.WithPollingInterval(250*time.Millisecond), chromedp.WithPollingTimeout(40*time.Second)),
 		)
 	}
 	actions = append(actions,
@@ -3075,7 +2854,7 @@ func captureElementJPEG(pageURL, selector string, width, height int, prepareScri
 func (a *App) captureMonitorScreenshotJPEG(windowDays int) ([]byte, error) {
 	pageURL := fmt.Sprintf("http://127.0.0.1%s/monitor", defaultServerAddr)
 	prepare := fmt.Sprintf(`(async()=>{ if (typeof setTheme==='function') setTheme('light'); if (typeof setWindow==='function') { await setWindow(%d); } return true; })()`, windowDays)
-	wait := `(function(){ const btn=document.querySelector('.btns button[data-days="30"]'); const table=document.querySelector('#heatReport table'); return !!(btn && btn.classList.contains('active') && table); })()`
+	wait := fmt.Sprintf(`(function(){ const btn=document.querySelector('.btns button[data-days=%q]'); const wrap=document.getElementById('heatReport'); const state=window.__monitorLoadState||{}; if(!btn || !btn.classList.contains('active') || !wrap) return false; if(state.pending) return false; if(!state.done) return false; if(Number(state.days||-1)!==%d) return false; if(state.error) return false; const table=wrap.querySelector('table'); const hint=(wrap.textContent||'').trim(); return !!(state.heatReady || table || hint.length>0); })()`, strconv.Itoa(windowDays), windowDays)
 	return captureElementJPEG(pageURL, "#heatReport", 1440, 1200, prepare, wait)
 }
 
@@ -3088,9 +2867,9 @@ func (a *App) captureWebDataSourceScreenshotJPEG(window string) ([]byte, error) 
 
 func telegramSendLabel(isTest bool) string {
 	if isTest {
-		return "测试发送"
+		return "Test Send"
 	}
-	return "正式发送"
+	return "Auto Send"
 }
 
 func topExchangeLabel(contrib []ExchangeContribution) string {
@@ -3104,7 +2883,7 @@ func topPointLabel(points []WebDataSourceTopPoint) string {
 	if len(points) == 0 {
 		return "-"
 	}
-	return fmt.Sprintf("$%.1f / %s亿", points[0].Price, formatYi2(points[0].LiqValue))
+	return fmt.Sprintf("$%.1f / %s yi", points[0].Price, formatYi2(points[0].LiqValue))
 }
 
 func (a *App) buildMonitorBundleCaption(windowDays int, dash Dashboard, report HeatReportData, isTest bool) string {
@@ -3112,10 +2891,10 @@ func (a *App) buildMonitorBundleCaption(windowDays int, dash Dashboard, report H
 	label := telegramSendLabel(isTest)
 	return strings.Join([]string{
 		fmt.Sprintf("<b>%s 1/3</b>", label),
-		"<b>/monitor 清算热区速报</b>",
-		fmt.Sprintf("<code>http://127.0.0.1:8888/monitor</code> | %d天周期数据", windowDays),
-		fmt.Sprintf("现价 $%.1f | 更新时间 %s", dash.CurrentPrice, time.UnixMilli(dash.GeneratedAt).Format("2006-01-02 15:04:05")),
-		fmt.Sprintf("20点内：上方 %s亿 / 下方 %s亿", formatYi2(b20.UpNotionalUSD), formatYi2(b20.DownNotionalUSD)),
+		"<b>/monitor heat report</b>",
+		fmt.Sprintf("<code>http://127.0.0.1:8888/monitor</code> | %d day window", windowDays),
+		fmt.Sprintf("Price $%.1f | Updated %s", dash.CurrentPrice, time.UnixMilli(dash.GeneratedAt).Format("2006-01-02 15:04:05")),
+		fmt.Sprintf("Within 20pt: upper %s yi / lower %s yi", formatYi2(b20.UpNotionalUSD), formatYi2(b20.DownNotionalUSD)),
 	}, "\n")
 }
 
@@ -3123,10 +2902,10 @@ func (a *App) buildWebDataSourceBundleCaption(windowDays int, m WebDataSourceMap
 	label := telegramSendLabel(isTest)
 	return strings.Join([]string{
 		fmt.Sprintf("<b>%s 2/3</b>", label),
-		"<b>/webdatasource ETH 页面数据源清算地图</b>",
-		fmt.Sprintf("<code>http://127.0.0.1:8888/webdatasource</code> | %d天周期图表", windowDays),
-		fmt.Sprintf("页面区间 $%.1f - $%.1f | 更新时间 %s", m.RangeLow, m.RangeHigh, time.UnixMilli(m.GeneratedAt).Format("2006-01-02 15:04:05")),
-		fmt.Sprintf("页面多单 %s亿 | 页面空单 %s亿", formatYi2(m.LongTotal), formatYi2(m.ShortTotal)),
+		"<b>/webdatasource ETH web datasource map</b>",
+		fmt.Sprintf("<code>http://127.0.0.1:8888/webdatasource</code> | %d day window", windowDays),
+		fmt.Sprintf("Range $%.1f - $%.1f | Updated %s", m.RangeLow, m.RangeHigh, time.UnixMilli(m.GeneratedAt).Format("2006-01-02 15:04:05")),
+		fmt.Sprintf("Web longs %s yi | Web shorts %s yi", formatYi2(m.LongTotal), formatYi2(m.ShortTotal)),
 	}, "\n")
 }
 
@@ -3142,11 +2921,11 @@ func (a *App) buildTelegramThirtyDayText(monitor HeatReportData) string {
 	bias := func(up, down float64) string {
 		switch {
 		case down > up:
-			return "下方偏多"
+			return "涓嬫柟鍋忓"
 		case up > down:
-			return "上方偏多"
+			return "涓婃柟鍋忓"
 		default:
-			return "基本均衡"
+			return "鍩烘湰鍧囪　"
 		}
 	}
 	percent := func(v, total float64) int {
@@ -3157,7 +2936,7 @@ func (a *App) buildTelegramThirtyDayText(monitor HeatReportData) string {
 	}
 	bandLine := func(b HeatReportBand) string {
 		total := b.UpNotionalUSD + b.DownNotionalUSD
-		return fmt.Sprintf("%d点内，上 $%s亿（%d%%）/下$%s亿(%d%%) |%s",
+		return fmt.Sprintf("%dpt upper $%s yi (%d%%) / lower $%s yi (%d%%) | %s",
 			b.Band,
 			formatYi2(b.UpNotionalUSD),
 			percent(b.UpNotionalUSD, total),
@@ -3167,16 +2946,16 @@ func (a *App) buildTelegramThirtyDayText(monitor HeatReportData) string {
 		)
 	}
 	lines := []string{
-		fmt.Sprintf("ETH 清算热区速报 |现价 $%.1f ", monitor.CurrentPrice),
-		fmt.Sprintf("多单总量%s亿 |空单总量%s亿", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
-		"———————————————————",
-		"<b>【多单最长柱】</b>",
-		fmt.Sprintf("价格$%.1f | 距现价约%.0f点", monitor.LongPeak.Price, monitor.LongPeak.Distance),
-		fmt.Sprintf("单柱清算规模%s亿 | 累计清算规模%s亿", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
-		"<b>【空单最长柱】</b>",
-		fmt.Sprintf("价格$%.1f | 距现价约%.0f点", monitor.ShortPeak.Price, monitor.ShortPeak.Distance),
-		fmt.Sprintf("单柱清算规模%s亿 | 累计清算规模%s亿", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
-		"<b>【多空失衡统计】</b>",
+		fmt.Sprintf("ETH heat report | price $%.1f", monitor.CurrentPrice),
+		fmt.Sprintf("Long total %s yi | Short total %s yi", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
+		"--------------------",
+		"<b>[Longest Long Column]</b>",
+		fmt.Sprintf("Price $%.1f | Distance %.0f pt", monitor.LongPeak.Price, monitor.LongPeak.Distance),
+		fmt.Sprintf("Single %s yi | Cumulative %s yi", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
+		"<b>[Longest Short Column]</b>",
+		fmt.Sprintf("Price $%.1f | Distance %.0f pt", monitor.ShortPeak.Price, monitor.ShortPeak.Distance),
+		fmt.Sprintf("Single %s yi | Cumulative %s yi", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
+		"<b>[Imbalance Summary]</b>",
 		bandLine(b20),
 		bandLine(b50),
 		bandLine(b80),
@@ -3194,9 +2973,9 @@ func (a *App) buildTelegramThirtyDayTextV2(monitor HeatReportData) string {
 	bias := func(up, down float64) string {
 		switch {
 		case down > up:
-			return "下方偏多"
+			return "多单偏多"
 		case up > down:
-			return "上方偏多"
+			return "空单偏多"
 		default:
 			return "基本均衡"
 		}
@@ -3209,7 +2988,7 @@ func (a *App) buildTelegramThirtyDayTextV2(monitor HeatReportData) string {
 	}
 	bandLine := func(b HeatReportBand) string {
 		total := b.UpNotionalUSD + b.DownNotionalUSD
-		return fmt.Sprintf("%d点内，上 $%s亿（%d%%）/下$%s亿(%d%%) |<b>【%s】</b>",
+		return fmt.Sprintf("%d点内 上方 $%s 亿 (%d%%) / 下方 $%s 亿 (%d%%) | <b>%s</b>",
 			b.Band,
 			formatYi2(b.UpNotionalUSD),
 			percent(b.UpNotionalUSD, total),
@@ -3220,16 +2999,16 @@ func (a *App) buildTelegramThirtyDayTextV2(monitor HeatReportData) string {
 	}
 
 	lines := []string{
-		fmt.Sprintf("<b>【ETH 清算热区速报 |现价 $%.1f 】</b>", monitor.CurrentPrice),
-		fmt.Sprintf("多单总量<b>【%s亿】</b> |空单总量<b>【%s亿】</b>", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
-		"———————————————————",
-		"<b>【多单最长柱】</b>",
-		fmt.Sprintf("价格$%.1f | 距现价约%.0f点", monitor.LongPeak.Price, monitor.LongPeak.Distance),
-		fmt.Sprintf("单柱清算规模<b>【%s亿】</b> | 累计清算规模<b>【%s亿】</b>", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
-		"<b>【空单最长柱】</b>",
-		fmt.Sprintf("价格$%.1f | 距现价约%.0f点", monitor.ShortPeak.Price, monitor.ShortPeak.Distance),
-		fmt.Sprintf("单柱清算规模<b>【%s亿】</b> | 累计清算规模<b>【%s亿】</b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
-		"<b>【多空失衡统计】</b>",
+		fmt.Sprintf("<b>ETH 热力报告 | 当前价格 $%.1f</b>", monitor.CurrentPrice),
+		fmt.Sprintf("多单总量 <b>%s 亿</b> | 空单总量 <b>%s 亿</b>", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
+		"--------------------",
+		"<b>最长多单柱</b>",
+		fmt.Sprintf("价格 $%.1f | 距离 %.0f 点", monitor.LongPeak.Price, monitor.LongPeak.Distance),
+		fmt.Sprintf("单柱 <b>%s 亿</b> | 累计 <b>%s 亿</b>", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
+		"<b>最长空单柱</b>",
+		fmt.Sprintf("价格 $%.1f | 距离 %.0f 点", monitor.ShortPeak.Price, monitor.ShortPeak.Distance),
+		fmt.Sprintf("单柱 <b>%s 亿</b> | 累计 <b>%s 亿</b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
+		"<b>多空失衡概览</b>",
 		bandLine(b20),
 		bandLine(b50),
 		bandLine(b80),
@@ -3542,8 +3321,102 @@ func parseFloat(raw string) float64 {
 	return v
 }
 
-func (a *App) fetchJSON(url string, out any) error {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+func exchangeFromEndpoint(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	switch {
+	case strings.Contains(host, "binance."):
+		return "binance"
+	case strings.Contains(host, "bybit."):
+		return "bybit"
+	case strings.Contains(host, "okx."):
+		return "okx"
+	default:
+		return ""
+	}
+}
+
+func (a *App) exchangePauseUntil(exchange string) (time.Time, bool) {
+	exchange = strings.ToLower(strings.TrimSpace(exchange))
+	if exchange == "" {
+		return time.Time{}, false
+	}
+	a.apiGuardMu.Lock()
+	defer a.apiGuardMu.Unlock()
+	guard := a.apiGuards[exchange]
+	if guard == nil || guard.PausedUntil.IsZero() {
+		return time.Time{}, false
+	}
+	now := time.Now()
+	if !guard.PausedUntil.After(now) {
+		guard.PausedUntil = time.Time{}
+		guard.Consecutive451 = 0
+		return time.Time{}, false
+	}
+	return guard.PausedUntil, true
+}
+
+func (a *App) noteExchangeHTTPStatus(exchange string, statusCode int) {
+	exchange = strings.ToLower(strings.TrimSpace(exchange))
+	if exchange == "" {
+		return
+	}
+	a.apiGuardMu.Lock()
+	defer a.apiGuardMu.Unlock()
+	if a.apiGuards == nil {
+		a.apiGuards = map[string]*ExchangeAPIGuard{}
+	}
+	guard := a.apiGuards[exchange]
+	if guard == nil {
+		guard = &ExchangeAPIGuard{}
+		a.apiGuards[exchange] = guard
+	}
+	now := time.Now()
+	if !guard.PausedUntil.IsZero() && !guard.PausedUntil.After(now) {
+		guard.PausedUntil = time.Time{}
+		guard.Consecutive451 = 0
+	}
+	if statusCode == http.StatusUnavailableForLegalReasons {
+		guard.Consecutive451++
+		if guard.Consecutive451 >= exchange451TripThreshold {
+			guard.Consecutive451 = 0
+			guard.PausedUntil = now.Add(exchange451PauseDuration)
+			log.Printf("%s access paused for %d minutes after %d http 451 responses (until %s)",
+				exchange, int(exchange451PauseDuration/time.Minute), exchange451TripThreshold,
+				guard.PausedUntil.Local().Format("2006-01-02 15:04:05"))
+		}
+		return
+	}
+	guard.Consecutive451 = 0
+}
+
+func (a *App) waitExchangeRetry(ctx context.Context, exchange string, fallback time.Duration) bool {
+	delay := fallback
+	if until, ok := a.exchangePauseUntil(exchange); ok {
+		delay = time.Until(until)
+	}
+	if delay <= 0 {
+		return true
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (a *App) fetchJSON(rawURL string, out any) error {
+	exchange := exchangeFromEndpoint(rawURL)
+	if until, ok := a.exchangePauseUntil(exchange); ok {
+		return &ExchangePausedError{Exchange: exchange, Until: until}
+	}
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
 	}
@@ -3556,8 +3429,15 @@ func (a *App) fetchJSON(url string, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("http %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		a.noteExchangeHTTPStatus(exchange, resp.StatusCode)
+		return &HTTPStatusError{
+			URL:        rawURL,
+			Status:     resp.Status,
+			StatusCode: resp.StatusCode,
+			Body:       strings.TrimSpace(string(body)),
+		}
 	}
+	a.noteExchangeHTTPStatus(exchange, resp.StatusCode)
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
@@ -3964,35 +3844,35 @@ func toFloatAny(v any) float64 {
 
 func classifyImbalance(up, down float64) (string, float64) {
 	if up <= 0 && down <= 0 {
-		return "暂无明显失衡", 1
+		return "鏆傛棤鏄庢樉澶辫　", 1
 	}
 	if up >= down {
 		ratio := up / math.Max(down, 1e-9)
 		if ratio >= 1.25 {
-			return "上方偏强", ratio
+			return "涓婃柟鍋忓己", ratio
 		}
-		return "基本均衡", ratio
+		return "鍩烘湰鍧囪　", ratio
 	}
 	ratio := down / math.Max(up, 1e-9)
 	if ratio >= 1.25 {
-		return "下方偏强", ratio
+		return "涓嬫柟鍋忓己", ratio
 	}
-	return "基本均衡", ratio
+	return "鍩烘湰鍧囪　", ratio
 }
 
 func inferShortBias(up, down float64) string {
 	total := up + down
 	if total <= 0 {
-		return "暂无数据"
+		return "鏆傛棤鏁版嵁"
 	}
 	delta := (up - down) / total
 	if delta >= 0.18 {
-		return "偏上杀"
+		return "鍋忎笂鏉€"
 	}
 	if delta <= -0.18 {
-		return "偏下杀"
+		return "鍋忎笅鏉€"
 	}
-	return "基本均衡"
+	return "鍩烘湰鍧囪　"
 }
 
 func normalizeExchangeName(ex string) string {
@@ -4194,12 +4074,12 @@ func fundingDirectionText(v *float64) string {
 		return "-"
 	}
 	if *v > 0 {
-		return "多付空"
+		return "longs pay shorts"
 	}
 	if *v < 0 {
-		return "空付多"
+		return "shorts pay longs"
 	}
-	return "中性"
+	return "neutral"
 }
 
 func fundingVerdictFromStates(states []MarketState) string {
@@ -4218,11 +4098,11 @@ func fundingVerdictFromStates(states []MarketState) string {
 	}
 	switch {
 	case pos > neg:
-		return "空方有利"
+		return "short side favored"
 	case neg > pos:
-		return "多方有利"
+		return "long side favored"
 	default:
-		return "基本中性"
+		return "mostly neutral"
 	}
 }
 
@@ -4241,9 +4121,9 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 		{Band: 100, UpNotionalUSD: b100.UpNotionalUSD, DownNotionalUSD: b100.DownNotionalUSD, Ratio: ratio100, Verdict: verdict100},
 	}
 	density := []DensityLayer{
-		{Label: "0-20点", UpNotionalUSD: math.Max(0, b20.UpNotionalUSD), DownNotionalUSD: math.Max(0, b20.DownNotionalUSD)},
-		{Label: "20-50点", UpNotionalUSD: math.Max(0, b50.UpNotionalUSD-b20.UpNotionalUSD), DownNotionalUSD: math.Max(0, b50.DownNotionalUSD-b20.DownNotionalUSD)},
-		{Label: "50-100点", UpNotionalUSD: math.Max(0, b100.UpNotionalUSD-b50.UpNotionalUSD), DownNotionalUSD: math.Max(0, b100.DownNotionalUSD-b50.DownNotionalUSD)},
+		{Label: "0-20pt", UpNotionalUSD: math.Max(0, b20.UpNotionalUSD), DownNotionalUSD: math.Max(0, b20.DownNotionalUSD)},
+		{Label: "20-50pt", UpNotionalUSD: math.Max(0, b50.UpNotionalUSD-b20.UpNotionalUSD), DownNotionalUSD: math.Max(0, b50.DownNotionalUSD-b20.DownNotionalUSD)},
+		{Label: "50-100pt", UpNotionalUSD: math.Max(0, b100.UpNotionalUSD-b50.UpNotionalUSD), DownNotionalUSD: math.Max(0, b100.DownNotionalUSD-b50.DownNotionalUSD)},
 	}
 
 	market := MarketSummary{}
@@ -4300,11 +4180,11 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 		distDown = math.Abs(currentPrice - longPrice)
 	}
 	if distUp < distDown {
-		core.NearestSide = "上方强区"
+		core.NearestSide = "涓婃柟寮哄尯"
 		core.NearestDistance = distUp
 		core.NearestStrongPrice = shortPrice
 	} else if distDown < math.MaxFloat64 {
-		core.NearestSide = "下方强区"
+		core.NearestSide = "涓嬫柟寮哄尯"
 		core.NearestDistance = distDown
 		core.NearestStrongPrice = longPrice
 	}
@@ -4331,9 +4211,9 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 	}
 
 	alert := AlertSummary{
-		Level:       "常规监控",
+		Level:       "甯歌鐩戞帶",
 		Recent1mUSD: a.sumLiquidationNotionalSince(symbol, nowTS-60*1000),
-		Suggestion:  fmt.Sprintf("%.1f / %.1f 关注上下关键价位", b20.UpPrice, b20.DownPrice),
+		Suggestion:  fmt.Sprintf("%.1f / %.1f 鍏虫敞涓婁笅鍏抽敭浠蜂綅", b20.UpPrice, b20.DownPrice),
 	}
 	recentByEx := a.sumLiquidationNotionalByExchangeSince(symbol, nowTS-60*1000)
 	alert.Recent1mBinanceUSD = recentByEx["binance"]
@@ -4346,15 +4226,15 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 		alert.RecentPrice = e.Price
 	}
 	if core.NearestDistance > 0 && core.NearestDistance <= 35 {
-		alert.Level = "临近强区预警"
+		alert.Level = "涓磋繎寮哄尯棰勮"
 	} else if alert.Recent1mUSD >= 2_000_000 {
-		alert.Level = "波动放大预警"
+		alert.Level = "娉㈠姩鏀惧ぇ棰勮"
 	}
-	if verdict20 == "上方偏强" {
-		alert.Suggestion = fmt.Sprintf("%.1f / %.1f 警惕上下双向插针风险", b20.UpPrice, b20.DownPrice)
+	if verdict20 == "涓婃柟鍋忓己" {
+		alert.Suggestion = fmt.Sprintf("%.1f / %.1f 璀︽儠涓婁笅鍙屽悜鎻掗拡椋庨櫓", b20.UpPrice, b20.DownPrice)
 	}
-	if verdict20 == "下方偏强" {
-		alert.Suggestion = fmt.Sprintf("%.1f / %.1f 下方流动性风险更高", b20.UpPrice, b20.DownPrice)
+	if verdict20 == "涓嬫柟鍋忓己" {
+		alert.Suggestion = fmt.Sprintf("%.1f / %.1f lower-side liquidity risk is higher", b20.UpPrice, b20.DownPrice)
 	}
 
 	return HeatZoneAnalytics{
@@ -5711,21 +5591,20 @@ func (a *App) backfillOKXLiquidations(ctx context.Context, instID string, ctVal 
 
 func (a *App) syncBinanceLiquidations(ctx context.Context, symbol string) {
 	wsURL := "wss://fstream.binance.com/ws/" + strings.ToLower(symbol) + "@forceOrder"
-	retry := wsRetryState{target: wsTargetLabel(wsURL)}
 	for {
+		if !a.waitExchangeRetry(ctx, "binance", 0) {
+			return
+		}
 		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 		if err != nil {
-			retry.attempt++
-			delay := nextWSRetryDelay(retry.attempt)
-			a.logWSRetry("binance liquidation ws", &retry, err, delay)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
-				continue
+			if a.debug {
+				log.Printf("binance liquidation ws dial err: %v", err)
 			}
+			if !a.waitExchangeRetry(ctx, "binance", 2*time.Second) {
+				return
+			}
+			continue
 		}
-		a.logWSRecovered("binance liquidation ws", &retry)
 		for {
 			select {
 			case <-ctx.Done():
@@ -5754,46 +5633,34 @@ func (a *App) syncBinanceLiquidations(ctx context.Context, symbol string) {
 			a.insertLiquidationEvent("binance", symbol, side, side, price, qty, 0, ts)
 		}
 		_ = conn.Close()
-		retry.attempt++
-		delay := nextWSRetryDelay(retry.attempt)
-		a.logWSRetry("binance liquidation ws", &retry, errors.New("connection closed; reconnecting"), delay)
-		select {
-		case <-ctx.Done():
+		if !a.waitExchangeRetry(ctx, "binance", 2*time.Second) {
 			return
-		case <-time.After(delay):
 		}
 	}
 }
 
 func (a *App) syncBybitLiquidations(ctx context.Context, symbol string) {
-	wsURL := "wss://stream.bybit.com/v5/public/linear"
-	retry := wsRetryState{target: wsTargetLabel(wsURL)}
 	for {
-		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-		if err != nil {
-			retry.attempt++
-			delay := nextWSRetryDelay(retry.attempt)
-			a.logWSRetry("bybit liquidation ws", &retry, err, delay)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
-				continue
-			}
+		if !a.waitExchangeRetry(ctx, "bybit", 0) {
+			return
 		}
-		a.logWSRecovered("bybit liquidation ws", &retry)
+		conn, _, err := websocket.DefaultDialer.Dial("wss://stream.bybit.com/v5/public/linear", nil)
+		if err != nil {
+			if a.debug {
+				log.Printf("bybit liquidation ws dial err: %v", err)
+			}
+			if !a.waitExchangeRetry(ctx, "bybit", 2*time.Second) {
+				return
+			}
+			continue
+		}
 		sub := map[string]any{"op": "subscribe", "args": []string{"allLiquidation." + symbol}}
 		if err := conn.WriteJSON(sub); err != nil {
 			_ = conn.Close()
-			retry.attempt++
-			delay := nextWSRetryDelay(retry.attempt)
-			a.logWSRetry("bybit liquidation ws", &retry, err, delay)
-			select {
-			case <-ctx.Done():
+			if !a.waitExchangeRetry(ctx, "bybit", 2*time.Second) {
 				return
-			case <-time.After(delay):
-				continue
 			}
+			continue
 		}
 		for {
 			select {
@@ -5826,46 +5693,34 @@ func (a *App) syncBybitLiquidations(ctx context.Context, symbol string) {
 			}
 		}
 		_ = conn.Close()
-		retry.attempt++
-		delay := nextWSRetryDelay(retry.attempt)
-		a.logWSRetry("bybit liquidation ws", &retry, errors.New("connection closed; reconnecting"), delay)
-		select {
-		case <-ctx.Done():
+		if !a.waitExchangeRetry(ctx, "bybit", 2*time.Second) {
 			return
-		case <-time.After(delay):
 		}
 	}
 }
 
 func (a *App) syncOKXLiquidations(ctx context.Context, instID string, ctVal float64) {
-	wsURL := "wss://ws.okx.com:8443/ws/v5/public"
-	retry := wsRetryState{target: wsTargetLabel(wsURL)}
 	for {
-		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-		if err != nil {
-			retry.attempt++
-			delay := nextWSRetryDelay(retry.attempt)
-			a.logWSRetry("okx liquidation ws", &retry, err, delay)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
-				continue
-			}
+		if !a.waitExchangeRetry(ctx, "okx", 0) {
+			return
 		}
-		a.logWSRecovered("okx liquidation ws", &retry)
+		conn, _, err := websocket.DefaultDialer.Dial("wss://ws.okx.com:8443/ws/v5/public", nil)
+		if err != nil {
+			if a.debug {
+				log.Printf("okx liquidation ws dial err: %v", err)
+			}
+			if !a.waitExchangeRetry(ctx, "okx", 2*time.Second) {
+				return
+			}
+			continue
+		}
 		sub := map[string]any{"op": "subscribe", "args": []map[string]string{{"channel": "liquidation-orders", "instType": "SWAP", "instId": instID}}}
 		if err := conn.WriteJSON(sub); err != nil {
 			_ = conn.Close()
-			retry.attempt++
-			delay := nextWSRetryDelay(retry.attempt)
-			a.logWSRetry("okx liquidation ws", &retry, err, delay)
-			select {
-			case <-ctx.Done():
+			if !a.waitExchangeRetry(ctx, "okx", 2*time.Second) {
 				return
-			case <-time.After(delay):
-				continue
 			}
+			continue
 		}
 		for {
 			select {
@@ -5902,13 +5757,8 @@ func (a *App) syncOKXLiquidations(ctx context.Context, instID string, ctVal floa
 			}
 		}
 		_ = conn.Close()
-		retry.attempt++
-		delay := nextWSRetryDelay(retry.attempt)
-		a.logWSRetry("okx liquidation ws", &retry, errors.New("connection closed; reconnecting"), delay)
-		select {
-		case <-ctx.Done():
+		if !a.waitExchangeRetry(ctx, "okx", 2*time.Second) {
 			return
-		case <-time.After(delay):
 		}
 	}
 }
@@ -5918,37 +5768,27 @@ func (a *App) syncBinanceOrderBook(ctx context.Context, symbol string) {
 	if book == nil {
 		return
 	}
-	ws := url.URL{Scheme: "wss", Host: "stream.binance.com:9443", Path: "/ws/" + strings.ToLower(symbol) + "@depth@100ms"}
-	wsURL := ws.String()
-	retry := wsRetryState{target: wsTargetLabel(wsURL)}
 	for {
-		if err := a.loadBinanceSnapshot(symbol); err != nil {
-			retry.attempt++
-			delay := nextWSRetryDelay(retry.attempt)
-			a.logWSRetry("binance orderbook snapshot", &retry, err, delay)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
-			}
-			continue
-		}
-		a.logWSRecovered("binance orderbook", &retry)
-		if err := a.runBinanceWSConn(ctx, wsURL, false); err != nil {
-			retry.attempt++
-			delay := nextWSRetryDelay(retry.attempt)
-			a.logWSRetry("binance orderbook ws", &retry, err, delay)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
-			}
-			continue
-		}
-		select {
-		case <-ctx.Done():
+		if !a.waitExchangeRetry(ctx, "binance", 0) {
 			return
-		case <-time.After(wsRetryBaseDelay):
+		}
+		if err := a.loadBinanceSnapshot(symbol); err != nil {
+			if a.debug {
+				log.Printf("binance snapshot err: %v", err)
+			}
+			if !a.waitExchangeRetry(ctx, "binance", 2*time.Second) {
+				return
+			}
+			continue
+		}
+		if !a.waitExchangeRetry(ctx, "binance", 0) {
+			return
+		}
+		if err := a.runBinanceWS(ctx, symbol); err != nil && a.debug {
+			log.Printf("binance ws err: %v", err)
+		}
+		if !a.waitExchangeRetry(ctx, "binance", 2*time.Second) {
+			return
 		}
 		_ = book
 	}
@@ -6055,36 +5895,27 @@ func (a *App) runBinanceWSConn(ctx context.Context, wsURL string, checkPU bool) 
 }
 
 func (a *App) syncBybitOrderBook(ctx context.Context, symbol string) {
-	wsURL := "wss://stream.bybit.com/v5/public/linear"
-	retry := wsRetryState{target: wsTargetLabel(wsURL)}
 	for {
-		if err := a.loadBybitSnapshot(symbol); err != nil {
-			retry.attempt++
-			delay := nextWSRetryDelay(retry.attempt)
-			a.logWSRetry("bybit orderbook snapshot", &retry, err, delay)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
-			}
-			continue
-		}
-		a.logWSRecovered("bybit orderbook", &retry)
-		if err := a.runBybitWS(ctx, symbol); err != nil {
-			retry.attempt++
-			delay := nextWSRetryDelay(retry.attempt)
-			a.logWSRetry("bybit orderbook ws", &retry, err, delay)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
-			}
-			continue
-		}
-		select {
-		case <-ctx.Done():
+		if !a.waitExchangeRetry(ctx, "bybit", 0) {
 			return
-		case <-time.After(wsRetryBaseDelay):
+		}
+		if err := a.loadBybitSnapshot(symbol); err != nil {
+			if a.debug {
+				log.Printf("bybit snapshot err: %v", err)
+			}
+			if !a.waitExchangeRetry(ctx, "bybit", 2*time.Second) {
+				return
+			}
+			continue
+		}
+		if !a.waitExchangeRetry(ctx, "bybit", 0) {
+			return
+		}
+		if err := a.runBybitWS(ctx, symbol); err != nil && a.debug {
+			log.Printf("bybit ws err: %v", err)
+		}
+		if !a.waitExchangeRetry(ctx, "bybit", 2*time.Second) {
+			return
 		}
 	}
 }
@@ -6176,10 +6007,10 @@ func (a *App) runBybitWS(ctx context.Context, symbol string) error {
 		if uVal <= lastU {
 			continue
 		}
-		// Bybit `seq` is monotonic but not guaranteed to be contiguous by 1.
-		// Treat only non-increasing values as suspect; gaps are expected.
-		if seqVal > 0 && lastSeq > 0 && seqVal <= lastSeq {
-			return fmt.Errorf("bybit sequence non-increasing: seq=%d last=%d", seqVal, lastSeq)
+		// Bybit's seq is not guaranteed to be contiguous per client stream; treat it as
+		// a monotonic ordering hint and only resnapshot on rollback/out-of-order frames.
+		if seqVal > 0 && lastSeq > 0 && seqVal < lastSeq {
+			return fmt.Errorf("bybit sequence rollback: seq=%d last=%d", seqVal, lastSeq)
 		}
 		book.applyDelta(bids, asks, uVal)
 		if seqVal > 0 {
@@ -6193,36 +6024,27 @@ func (a *App) runBybitWS(ctx context.Context, symbol string) error {
 }
 
 func (a *App) syncOKXOrderBook(ctx context.Context, instID string) {
-	wsURL := "wss://ws.okx.com:8443/ws/v5/public"
-	retry := wsRetryState{target: wsTargetLabel(wsURL)}
 	for {
-		if err := a.loadOKXSnapshot(instID); err != nil {
-			retry.attempt++
-			delay := nextWSRetryDelay(retry.attempt)
-			a.logWSRetry("okx orderbook snapshot", &retry, err, delay)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
-			}
-			continue
-		}
-		a.logWSRecovered("okx orderbook", &retry)
-		if err := a.runOKXWS(ctx, instID); err != nil {
-			retry.attempt++
-			delay := nextWSRetryDelay(retry.attempt)
-			a.logWSRetry("okx orderbook ws", &retry, err, delay)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
-			}
-			continue
-		}
-		select {
-		case <-ctx.Done():
+		if !a.waitExchangeRetry(ctx, "okx", 0) {
 			return
-		case <-time.After(wsRetryBaseDelay):
+		}
+		if err := a.loadOKXSnapshot(instID); err != nil {
+			if a.debug {
+				log.Printf("okx snapshot err: %v", err)
+			}
+			if !a.waitExchangeRetry(ctx, "okx", 2*time.Second) {
+				return
+			}
+			continue
+		}
+		if !a.waitExchangeRetry(ctx, "okx", 0) {
+			return
+		}
+		if err := a.runOKXWS(ctx, instID); err != nil && a.debug {
+			log.Printf("okx ws err: %v", err)
+		}
+		if !a.waitExchangeRetry(ctx, "okx", 2*time.Second) {
+			return
 		}
 	}
 }
@@ -6349,10 +6171,10 @@ th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:center}
 .liq-dot.binance{background:rgba(249,115,22,.9)}.liq-dot.okx{background:rgba(234,179,8,.9)}.liq-dot.bybit{background:rgba(103,232,249,.9)}
 .desc{font-size:12px;color:var(--muted);line-height:1.5;margin-top:8px}
 .upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head><body>
-<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/" class="active">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/" class="active">娓呯畻鐑尯</a><a href="/config">妯″瀷閰嶇疆</a><a href="/monitor">闆峰尯鐩戞帶</a><a href="/map">鐩樺彛姹囨€?/a><a href="/liquidations">寮哄钩娓呯畻</a><a href="/bubbles">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel">娑堟伅閫氶亾</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">涓婚</button><button id="themeDark" onclick="setTheme('dark')">娣辫壊</button><button id="themeLight" onclick="setTheme('light')">娴呰壊</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel top"><div><h2 style="margin:0 0 6px 0">ETH &#28165;&#31639;&#28909;&#21306;</h2><div class="hint">&#25353; <span class="mono">0</span> / <span class="mono">1</span> / <span class="mono">7</span> / <span class="mono">3</span> &#20999;&#25442; &#26085;&#20869; / 1&#22825; / 7&#22825; / 30&#22825;</div></div><div class="btns"><button data-days="0">&#26085;&#20869;</button><button data-days="1">1&#22825;</button><button data-days="7">7&#22825;</button><button data-days="30">30&#22825;</button></div></div>
 <div class="panel"><div id="status">loading...</div></div>
-<div class="grid"><div class="panel"><h3>ETH清算地图（OI增量模型）</h3><div class="heatmap-wrap"><canvas id="liqHeatMap" width="1400" height="320"></canvas><div id="liqTip" class="liq-tip"></div><div class="hint">滚轮缩放，Shift+滚轮左右平移，按住鼠标左键左右拖动。X轴: 价格 | Y轴: 清算金额（按价格聚合）</div><div id="liqDesc" class="desc"></div></div></div></div></div>
+<div class="grid"><div class="panel"><h3>ETH娓呯畻鍦板浘锛圤I澧為噺妯″瀷锛?/h3><div class="heatmap-wrap"><canvas id="liqHeatMap" width="1400" height="320"></canvas><div id="liqTip" class="liq-tip"></div><div class="hint">婊氳疆缂╂斁锛孲hift+婊氳疆宸﹀彸骞崇Щ锛屾寜浣忛紶鏍囧乏閿乏鍙虫嫋鍔ㄣ€俋杞? 浠锋牸 | Y杞? 娓呯畻閲戦锛堟寜浠锋牸鑱氬悎锛?/div><div id="liqDesc" class="desc"></div></div></div></div></div>
 <script>
 let currentDays=1;
 let liqMapData=null;
@@ -6371,7 +6193,7 @@ function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n)
 function fmt4(n){return Number(n).toFixed(8)}
 function fitCanvas(id){const c=document.getElementById(id);if(!c)return null;const dpr=window.devicePixelRatio||1;const rect=c.getBoundingClientRect();const W=Math.max(320,Math.floor(rect.width));const H=Math.max(220,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return {c,x,W,H};}
 function hideLiqTip(){const tip=document.getElementById('liqTip');if(tip)tip.style.display='none';}
-function showLiqTip(meta,ev){const tip=document.getElementById('liqTip');if(!tip||!meta||!meta.pts||!meta.pts.length)return;const rect=meta.c.getBoundingClientRect();const mx=ev.clientX-rect.left;let best=null,bd=1e18;for(const it of meta.pts){const d=Math.abs(mx-it.px);if(d<bd){bd=d;best=it;}}const hitW=Math.max(meta.hitW||0,meta.barW||0);if(!best||bd>(hitW*0.5)){hideLiqTip();return;}const lines=[];lines.push('<div class=\"t\">价格 '+fmtPrice(best.p)+'</div>');lines.push('<div class=\"row\"><span>累计清算量</span><span>'+fmtAmount(best.total)+'</span></div>');for(const ex of exOrder){const v=Number((best.ex||{})[ex]||0);lines.push('<div class=\"row\"><span><span class=\"liq-dot '+ex+'\"></span>'+ex.toUpperCase()+'</span><span>'+fmtAmount(v)+'</span></div>');}tip.innerHTML=lines.join('');tip.style.display='block';const wrap=document.querySelector('.heatmap-wrap');const wr=wrap?wrap.getBoundingClientRect():rect;let left=(ev.clientX-wr.left)+14,top=(ev.clientY-wr.top)+14;tip.style.left='0px';tip.style.top='0px';const tw=tip.offsetWidth||220,th=tip.offsetHeight||90;if(left+tw>wr.width-10)left=Math.max(8,wr.width-10-tw);if(top+th>wr.height-10)top=Math.max(8,wr.height-10-th);tip.style.left=left+'px';tip.style.top=top+'px';}
+function showLiqTip(meta,ev){const tip=document.getElementById('liqTip');if(!tip||!meta||!meta.pts||!meta.pts.length)return;const rect=meta.c.getBoundingClientRect();const mx=ev.clientX-rect.left;let best=null,bd=1e18;for(const it of meta.pts){const d=Math.abs(mx-it.px);if(d<bd){bd=d;best=it;}}const hitW=Math.max(meta.hitW||0,meta.barW||0);if(!best||bd>(hitW*0.5)){hideLiqTip();return;}const lines=[];lines.push('<div class=\"t\">浠锋牸 '+fmtPrice(best.p)+'</div>');lines.push('<div class=\"row\"><span>绱娓呯畻閲?/span><span>'+fmtAmount(best.total)+'</span></div>');for(const ex of exOrder){const v=Number((best.ex||{})[ex]||0);lines.push('<div class=\"row\"><span><span class=\"liq-dot '+ex+'\"></span>'+ex.toUpperCase()+'</span><span>'+fmtAmount(v)+'</span></div>');}tip.innerHTML=lines.join('');tip.style.display='block';const wrap=document.querySelector('.heatmap-wrap');const wr=wrap?wrap.getBoundingClientRect():rect;let left=(ev.clientX-wr.left)+14,top=(ev.clientY-wr.top)+14;tip.style.left='0px';tip.style.top='0px';const tw=tip.offsetWidth||220,th=tip.offsetHeight||90;if(left+tw>wr.width-10)left=Math.max(8,wr.width-10-tw);if(top+th>wr.height-10)top=Math.max(8,wr.height-10-th);tip.style.left=left+'px';tip.style.top=top+'px';}
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 function bindLiqHover(){
   const c=document.getElementById('liqHeatMap');
@@ -6454,7 +6276,7 @@ function drawLiqHeat(){
   if(!d||!d.prices||!d.intensity_grid||!d.prices.length){
     hideLiqTip();liqHoverMeta=null;
     x.fillStyle='#64748b';x.font='13px sans-serif';
-    x.fillText('暂无清算地图数据',16,24);
+    x.fillText('鏆傛棤娓呯畻鍦板浘鏁版嵁',16,24);
     return;
   }
 
@@ -6463,7 +6285,7 @@ function drawLiqHeat(){
   if(rows<2||cols<1){
     hideLiqTip();liqHoverMeta=null;
     x.fillStyle='#64748b';x.font='13px sans-serif';
-    x.fillText('暂无清算地图数据',16,24);
+    x.fillText('鏆傛棤娓呯畻鍦板浘鏁版嵁',16,24);
     return;
   }
 
@@ -6489,7 +6311,7 @@ function drawLiqHeat(){
   if(!all.length){
     hideLiqTip();liqHoverMeta=null;
     x.fillStyle='#64748b';x.font='13px sans-serif';
-    x.fillText('暂无清算地图数据',16,24);
+    x.fillText('鏆傛棤娓呯畻鍦板浘鏁版嵁',16,24);
     return;
   }
 
@@ -6580,7 +6402,7 @@ function drawLiqHeat(){
   if(maxCum>0){
     const scy=v=>by-(v/maxCum)*ph;
     x.fillStyle='#475569';
-    x.fillText('累计',W-padR+8,padT-4);
+    x.fillText('绱',W-padR+8,padT-4);
     for(let i=0;i<=4;i++){
       const y=padT+ph*(i/4),val=maxCum*(1-i/4);
       x.fillStyle='#64748b';
@@ -6617,13 +6439,13 @@ function drawLiqHeat(){
     x.beginPath();x.moveTo(cpX,padT);x.lineTo(cpX,by);x.stroke();
     x.setLineDash([]);
     x.fillStyle='#111827';
-    const txt='当前价:'+fmtPrice(cp);
+    const txt='褰撳墠浠?'+fmtPrice(cp);
     const tw=x.measureText(txt).width;
     x.fillText(txt,Math.max(padL,Math.min(cpX+4,W-padR-tw)),padT+12);
   }
   x.fillStyle='#475569';
-  x.fillText('清算金额',padL,padT-4);
-  const xt='价格';
+  x.fillText('娓呯畻閲戦',padL,padT-4);
+  const xt='浠锋牸';
   const xtw=x.measureText(xt).width;
   x.fillText(xt,padL+pw/2-xtw/2,H-8);
   liqHoverMeta={c:c,pts:pts.map(it=>({p:it.p,total:it.total,ex:it.ex,px:sx(it.p)})),barW:barW,hitW:barW,pw:pw,padL:padL,baseMin:baseMin,baseMax:baseMax,fullSpan:fullSpan};
@@ -6642,23 +6464,23 @@ function renderLiqDesc(cfg,dash){
   const range=Number(cfg.price_range||cfg.PriceRange||400);
   const wd=Number((dash&&dash.window_days));
   const cutoff=Number((dash&&dash.window_cutoff));
-  let windowText='1天';
+  let windowText='1澶?;
   if(wd===0){
-    windowText='日内(08:00/美股开盘)';
+    windowText='鏃ュ唴(08:00/缇庤偂寮€鐩?';
   }else if(wd===7||wd===30||wd===1){
-    windowText=wd+'天';
+    windowText=wd+'澶?;
   }
   let minsText='';
   if(wd===0 && cutoff>0){
     const mins=Math.max(60,Math.ceil((Date.now()-cutoff)/60000));
-    minsText='（约 '+mins+' 分钟）';
+    minsText='锛堢害 '+mins+' 鍒嗛挓锛?;
   }
   const el=document.getElementById('liqDesc');
   if(el){
-    const mmText = mmCSV ? ('mm(按档位)='+mmCSV) : ('mm='+mm.toFixed(4));
-    el.textContent='数据源：Binance/Bybit/OKX 公共接口的标记价、OI、资金费率（以及可得的多空比）。模型：对 OI 增量按杠杆 '+levs+
-      ' 与权重 '+ws+' 分配；多空比例=clamp(base+funding×'+fs+',0.2,0.8)，base 优先取 longShortRatio/(1+ratio)；为贴近“存量 OI”，会把衰减后的 ΔOI 分布按当前 OI 归一化；清算价=mark×(1±1/lev∓mm)，'+mmText+'；时间衰减 exp(-'+dk.toFixed(2)+'×age)，邻近价扩散 '+ns.toFixed(2)+
-      '。参数：回看 '+windowText+minsText+'，时间桶 '+bucket+' 分钟，价格步长 '+step+'，范围 ±'+range+'。配置入口 /config。';
+    const mmText = mmCSV ? ('mm(鎸夋。浣?='+mmCSV) : ('mm='+mm.toFixed(4));
+    el.textContent='鏁版嵁婧愶細Binance/Bybit/OKX 鍏叡鎺ュ彛鐨勬爣璁颁环銆丱I銆佽祫閲戣垂鐜囷紙浠ュ強鍙緱鐨勫绌烘瘮锛夈€傛ā鍨嬶細瀵?OI 澧為噺鎸夋潬鏉?'+levs+
+      ' 涓庢潈閲?'+ws+' 鍒嗛厤锛涘绌烘瘮渚?clamp(base+funding脳'+fs+',0.2,0.8)锛宐ase 浼樺厛鍙?longShortRatio/(1+ratio)锛涗负璐磋繎鈥滃瓨閲?OI鈥濓紝浼氭妸琛板噺鍚庣殑 螖OI 鍒嗗竷鎸夊綋鍓?OI 褰掍竴鍖栵紱娓呯畻浠?mark脳(1卤1/lev鈭搈m)锛?+mmText+'锛涙椂闂磋“鍑?exp(-'+dk.toFixed(2)+'脳age)锛岄偦杩戜环鎵╂暎 '+ns.toFixed(2)+
+      '銆傚弬鏁帮細鍥炵湅 '+windowText+minsText+'锛屾椂闂存《 '+bucket+' 鍒嗛挓锛屼环鏍兼闀?'+step+'锛岃寖鍥?卤'+range+'銆傞厤缃叆鍙?/config銆?;
   }
 }
 function renderTable(rows,headers){if(!rows||!rows.length)return '<div class="hint">\u6682\u65e0\u6570\u636e</div>';let html='<table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>';for(const r of rows) html+='<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>';return html+'</tbody></table>';}
@@ -6701,7 +6523,7 @@ function renderHeatReport(d){
     '<tr><th rowspan="2" class="col-threshold">\u70b9\u6570\u9608\u503c</th><th colspan="2">\u4e0a\u65b9\u7a7a\u5355</th><th colspan="2">\u4e0b\u65b9\u591a\u5355</th></tr>' +
     '<tr><th class="col-up-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-up-size">\u6e05\u7b97\u89c4\u6a21</th><th class="col-down-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-down-size">\u6e05\u7b97\u89c4\u6a21</th></tr>' +
     '</thead><tbody>';
-  const toScale = n => {n=Number(n||0);const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'亿';if(a>=1e4)return (n/1e4).toFixed(2)+'万';return n.toFixed(2);};
+  const toScale = n => {n=Number(n||0);const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'浜?;if(a>=1e4)return (n/1e4).toFixed(2)+'涓?;return n.toFixed(2);};
   for(const b of bands){
     html += '<tr>' +
       '<td class="col-threshold">'+b.band+'\u70b9\u5185</td>' +
@@ -6737,15 +6559,15 @@ async function load(){
   }
   drawLiqHeat();
 }
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 initTheme();document.querySelectorAll('button[data-days]').forEach(b=>b.onclick=()=>setWindow(Number(b.dataset.days)));document.addEventListener('keydown',e=>{if(e.key==='0')setWindow(0);if(e.key==='1')setWindow(1);if(e.key==='7')setWindow(7);if(e.key==='3')setWindow(30);});bindLiqHover();window.addEventListener('resize',()=>drawLiqHeat());setInterval(load,5000);load();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
 const monitorHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ETH 清算雷区监控</title>
+<title>ETH 娓呯畻闆峰尯鐩戞帶</title>
 <style>
 :root{--bg:#e8edf4;--nav:#0b1220;--nav-border:#243145;--panel:#ffffff;--line:#d8e0ea;--text:#20324a;--muted:#6d7c93;--accent:#39557c;--good:#169b62;--warn:#e58a17;--danger:#dc3d3d}
 [data-theme="dark"]{--bg:#000;--nav:#000;--nav-border:#111827;--panel:#000;--line:#1f2937;--text:#e5e7eb;--muted:#94a3b8;--accent:#93c5fd;--good:#22c55e;--warn:#f59e0b;--danger:#ef4444}
@@ -6776,35 +6598,121 @@ table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--li
 .upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}
 @media (max-width:980px){.grid,.main-grid,.triple{grid-template-columns:1fr}.subgrid{grid-template-columns:1fr 1fr}.card:nth-child(2){border-right:0}.hero{align-items:flex-start;flex-direction:column}}
 </style></head><body>
-<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor" class="active">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">娓呯畻鐑尯</a><a href="/config">妯″瀷閰嶇疆</a><a href="/monitor" class="active">闆峰尯鐩戞帶</a><a href="/map">鐩樺彛姹囨€?/a><a href="/liquidations">寮哄钩娓呯畻</a><a href="/bubbles">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel">娑堟伅閫氶亾</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">涓婚</button><button id="themeDark" onclick="setTheme('dark')">娣辫壊</button><button id="themeLight" onclick="setTheme('light')">娴呰壊</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap">
-<div class="hero"><div class="hero-title">ETH 清算雷区监控（Beta）</div><div id="heroTime" class="hero-meta">--</div></div>
-<div class="panel topbar"><div class="hint">按 0 / 1 / 7 / 3 快捷切换 日内 / 1天 / 7天 / 30天</div><div class="btns"><button data-days="0">日内</button><button data-days="1">1天</button><button data-days="7">7天</button><button data-days="30">30天</button></div></div>
+<div class="hero"><div class="hero-title">ETH 娓呯畻闆峰尯鐩戞帶锛圔eta锛?/div><div id="heroTime" class="hero-meta">--</div></div>
+<div class="panel topbar"><div class="hint">鎸?0 / 1 / 7 / 3 蹇嵎鍒囨崲 鏃ュ唴 / 1澶?/ 7澶?/ 30澶?/div><div class="btns"><button data-days="0">鏃ュ唴</button><button data-days="1">1澶?/button><button data-days="7">7澶?/button><button data-days="30">30澶?/button></div></div>
 <div class="grid">
-<div class="panel"><h3>顶部结论卡</h3><div id="topCards" class="subgrid"></div></div>
-<div class="panel sidebox"><h3>市场状态</h3><div id="marketState" class="state-list"></div></div>
+<div class="panel"><h3>椤堕儴缁撹鍗?/h3><div id="topCards" class="subgrid"></div></div>
+<div class="panel sidebox"><h3>甯傚満鐘舵€?/h3><div id="marketState" class="state-list"></div></div>
 </div>
 <div class="main-grid">
-<div class="panel"><h3>清算热区速报</h3><div id="heatReport"></div></div>
-<div class="stack"><div class="panel"><h3>失衡统计</h3><div id="imbalanceStats"></div></div><div class="panel"><h3>密度分层</h3><div id="densityLayers"></div></div><div class="panel"><h3>变化跟踪（较上一时点）</h3><div id="changeTrack"></div></div></div>
+<div class="panel"><h3>娓呯畻鐑尯閫熸姤</h3><div id="heatReport"></div></div>
+<div class="stack"><div class="panel"><h3>澶辫　缁熻</h3><div id="imbalanceStats"></div></div><div class="panel"><h3>瀵嗗害鍒嗗眰</h3><div id="densityLayers"></div></div><div class="panel"><h3>鍙樺寲璺熻釜锛堣緝涓婁竴鏃剁偣锛?/h3><div id="changeTrack"></div></div></div>
 </div>
 <div class="triple">
-<div class="panel"><h3>最长柱 / 核心磁区</h3><div id="coreZone"></div></div>
-<div class="panel"><h3>交易所贡献拆分（50点内）</h3><div id="exchangeContrib"></div></div>
-<div class="panel"><h3>预警与已发生清算</h3><div id="alerts"></div></div>
+<div class="panel"><h3>鏈€闀挎煴 / 鏍稿績纾佸尯</h3><div id="coreZone"></div></div>
+<div class="panel"><h3>浜ゆ槗鎵€璐＄尞鎷嗗垎锛?0鐐瑰唴锛?/h3><div id="exchangeContrib"></div></div>
+<div class="panel"><h3>棰勮涓庡凡鍙戠敓娓呯畻</h3><div id="alerts"></div></div>
 </div>
 </div>
 <script>
 let currentDays=1;
 let monitorLiqMapData=null;
-function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
-function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
-function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1})}
-function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'亿';if(a>=1e6)return (n/1e6).toFixed(2)+'百万';return (n/1e4).toFixed(1)+'万';}
- function fmtFunding(n){const v=Number(n);if(!isFinite(v))return '-';return v.toFixed(8)}
-function renderActive(){document.querySelectorAll('button[data-days]').forEach(b=>b.classList.toggle('active',Number(b.dataset.days)===currentDays));}
-async function setWindow(days){currentDays=days;await fetch('/api/window',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days})});renderActive();load();}
-function metricRow(label,val,cls=''){return '<div class="metric"><span>'+label+'</span><strong class="'+cls+'">'+val+'</strong></div>'}
+let monitorLoadSeq=0;
+let monitorLoadState={pending:false,done:false,days:currentDays,error:'',heatReady:false,seq:0};
+
+function updateMonitorLoadState(patch){
+  monitorLoadState=Object.assign(monitorLoadState,patch||{});
+  window.__monitorLoadState=monitorLoadState;
+  return monitorLoadState;
+}
+
+window.addEventListener('error',function(event){
+  const msg=String((event&&event.message)||'page error');
+  updateMonitorLoadState({pending:false,done:true,error:msg,heatReady:false});
+});
+
+function setTheme(t){
+  const theme=(t==='dark')?'dark':'light';
+  document.documentElement.setAttribute('data-theme',theme);
+  try{localStorage.setItem('theme',theme);}catch(_){}
+  const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');
+  if(bd)bd.classList.toggle('active',theme==='dark');
+  if(bl)bl.classList.toggle('active',theme==='light');
+}
+
+function initTheme(){
+  let t='light';
+  try{t=localStorage.getItem('theme')||'light';}catch(_){}
+  setTheme(t);
+}
+
+function fmtPrice(n){
+  const v=Number(n);
+  if(!isFinite(v)) return '-';
+  return v.toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1});
+}
+
+function fmtAmount(n){
+  const v=Number(n);
+  if(!isFinite(v)) return '-';
+  const a=Math.abs(v);
+  if(a>=1e8) return (v/1e8).toFixed(2)+'亿';
+  if(a>=1e6) return (v/1e6).toFixed(2)+'百万';
+  return (v/1e4).toFixed(1)+'万';
+}
+
+function fmtFunding(n){
+  const v=Number(n);
+  if(!isFinite(v)) return '-';
+  return v.toFixed(8);
+}
+
+function amountYi(n){
+  const v=Number(n);
+  if(!isFinite(v)) return '-';
+  return (v/1e8).toFixed(2);
+}
+
+function biasClassByText(v){
+  const s=String(v||'');
+  if(s.includes('空')) return 'warn';
+  if(s.includes('多')) return 'good';
+  return '';
+}
+
+function deltaClass(v){
+  const n=Number(v);
+  if(!isFinite(n)) return '';
+  if(n>0) return 'warn';
+  if(n<0) return 'good';
+  return '';
+}
+
+function renderActive(){
+  document.querySelectorAll('button[data-days]').forEach(function(b){
+    b.classList.toggle('active',Number(b.dataset.days)===currentDays);
+  });
+}
+
+async function setWindow(days){
+  currentDays=days;
+  updateMonitorLoadState({pending:true,done:false,days:days,error:'',heatReady:false});
+  const resp=await fetch('/api/window',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days:days})});
+  if(!resp.ok){
+    const msg=String(await resp.text().catch(function(){return resp.statusText||'set window failed';})||resp.statusText||'set window failed').trim();
+    updateMonitorLoadState({pending:false,done:true,days:days,error:msg,heatReady:false});
+    throw new Error(msg);
+  }
+  renderActive();
+  await load({days:days});
+}
+
+function metricRow(label,val,cls){
+  return '<div class="metric"><span>'+label+'</span><strong class="'+(cls||'')+'">'+val+'</strong></div>';
+}
+
 function fundingDirectionLabel(v){
   const n=Number(v);
   if(!isFinite(n)) return '-';
@@ -6812,9 +6720,11 @@ function fundingDirectionLabel(v){
   if(n<0) return '空付多';
   return '中性';
 }
+
 function buildHeatBandsFromModel(model){
-  if(!model||!model.prices||!model.intensity_grid||!model.prices.length) return [];
-  const rows=model.prices.length, cols=((model.intensity_grid&&model.intensity_grid[0])?model.intensity_grid[0].length:0);
+  if(!model||!Array.isArray(model.prices)||!Array.isArray(model.intensity_grid)||!model.prices.length) return [];
+  const rows=model.prices.length;
+  const cols=((model.intensity_grid&&model.intensity_grid[0])?model.intensity_grid[0].length:0);
   if(rows<1||cols<1) return [];
   const cp=Number(model.current_price||0);
   if(!(cp>0)) return [];
@@ -6822,85 +6732,296 @@ function buildHeatBandsFromModel(model){
   for(let ri=0;ri<rows;ri++){
     const p=Number(model.prices[ri]||0);
     if(!(p>0)) continue;
-    let s=0;
-    for(let ci=0;ci<cols;ci++) s+=Math.max(0,Number((model.intensity_grid[ri]||[])[ci]||0));
-    if(s>0) pts.push({price:p,notional:s});
+    let sum=0;
+    for(let ci=0;ci<cols;ci++) sum+=Math.max(0,Number((model.intensity_grid[ri]||[])[ci]||0));
+    if(sum>0) pts.push({price:p,notional:sum});
   }
   if(!pts.length) return [];
   const desired=[10,20,30,40,50,60,70,80,90,100,150,200,250,300];
-  return desired.map(band=>{
-    let upPrice=cp+band,upNotional=0,downPrice=cp-band,downNotional=0;
+  return desired.map(function(band){
+    let upNotional=0,downNotional=0;
     for(const pt of pts){
       const dist=pt.price-cp;
       if(dist>=0&&dist<=band) upNotional+=pt.notional;
       if(dist<=0&&Math.abs(dist)<=band) downNotional+=pt.notional;
     }
-    return {band,up_price:upPrice,up_notional_usd:upNotional,down_price:downPrice,down_notional_usd:downNotional};
+    return {
+      band:band,
+      up_price:cp+band,
+      up_notional_usd:upNotional,
+      down_price:cp-band,
+      down_notional_usd:downNotional
+    };
   });
 }
- function renderTopCards(d){
-   const a=d.analytics||{},t=a.top||{},mk=a.market||{};
-   const cards=[
-     {label:'ETH现价',val:fmtPrice(d.current_price)},
-     {label:'短线偏向',val:t.short_bias||'-',cls:(String(t.short_bias||'').includes('上')?'warn':(String(t.short_bias||'').includes('下')?'good':''))},
-     {label:'20点内失衡',val:fmtAmount(Math.abs(Number(t.bias20_delta||0))),cls:Number(t.bias20_delta||0)>=0?'warn':'good'},
-     {label:'50点内失衡',val:t.bias50_label||'-',cls:(String(t.bias50_label||'').includes('上')?'warn':(String(t.bias50_label||'').includes('下')?'good':''))}
-   ];
-   document.getElementById('topCards').innerHTML=cards.map(c=>'<div class="card"><div class="label">'+c.label+'</div><div class="val '+(c.cls||'')+'">'+c.val+'</div></div>').join('');
-   const states=d.states||[];
-   const byEx={};
-   for(const s of states){const ex=String(s.exchange||'').toLowerCase();if(ex)byEx[ex]=s;}
-   const exLine=(name,key,oi)=>{
-     const st=byEx[key]||{};
-     const fr=st.funding_rate==null?'-':fmtFunding(st.funding_rate);
-     const dir=st.funding_rate==null?'-':fundingDirectionLabel(st.funding_rate);
-     return '<div class="state-line"><span>'+name+' OI</span><strong>'+fmtAmount(oi)+'</strong><span class="mini">费率 '+fr+'</span><span class="funding-tag">'+dir+'</span></div>';
-   };
-   document.getElementById('marketState').innerHTML=
-     exLine('Binance','binance',mk.binance_oi_usd)+
-     exLine('Bybit','bybit',mk.bybit_oi_usd)+
-     exLine('OKX','okx',mk.okx_oi_usd)+
-     '<div class="state-line"><span>平均费率</span><strong>'+fmtFunding(mk.avg_funding)+'</strong><span class="funding-tag">'+(mk.avg_funding_verdict||'基本中性')+'</span></div>';
- }
- function renderHeatReport(d){
-   const bands=buildHeatBandsFromModel(monitorLiqMapData);
-   if(!bands.length){document.getElementById('heatReport').innerHTML='<div class="hint">暂无数据</div>';return;}
-   let topUp={price:0,v:0},topDown={price:0,v:0};
-   for(const b of bands){if(Number(b.up_notional_usd||0)>topUp.v)topUp={price:b.up_price,v:Number(b.up_notional_usd||0)};if(Number(b.down_notional_usd||0)>topDown.v)topDown={price:b.down_price,v:Number(b.down_notional_usd||0)};}
-   const hot={20:true,50:true,80:true,100:true,200:true,300:true};
-   const yi=n=>(Number(n||0)/1e8).toFixed(2);
-   let html='<table class="heat-report-table"><thead>'+
-     '<tr class="title"><th colspan="6">ETH清算雷区速报（'+new Date(d.generated_at).toLocaleDateString('zh-CN').replaceAll('/','.')+'）</th></tr>'+
-     '<tr class="spot"><th>ETH现价</th><th colspan="5" class="price">'+fmtPrice(d.current_price)+'</th></tr>'+
-     '<tr class="group"><th rowspan="2">点数<br>阈值</th><th colspan="2">上方空单</th><th colspan="2" class="down">下方多单</th><th rowspan="2">多空差值<br>（亿）</th></tr>'+
-     '<tr class="sub"><th>清算价格</th><th>清算规模(亿)</th><th class="down">清算价格</th><th class="down">清算规模(亿)</th></tr>'+
-     '</thead><tbody>';
-	for(let i=0;i<bands.length;i++){
-		const b=bands[i];
-		const up=Number(b.up_notional_usd||0),down=Number(b.down_notional_usd||0);
-		const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
-		const diffClass=down>up?'diff-long':(up>down?'diff-short':'diff-flat');
-		html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="up-cell">'+fmtPrice(b.up_price)+'</td><td class="up-cell">'+yi(up)+'</td><td class="down-cell">'+fmtPrice(b.down_price)+'</td><td class="down-cell">'+yi(down)+'</td><td class="diff-cell '+diffClass+'">'+yi(Math.abs(down-up))+'</td></tr>';
-	}
-	const longestDiffClass=topDown.v>topUp.v?'diff-long':(topUp.v>topDown.v?'diff-short':'diff-flat');
-	html+='<tr class="longest"><td>最长柱</td><td class="up-cell">'+fmtPrice(topUp.price)+'</td><td class="up-cell">'+yi(topUp.v)+'</td><td class="down-cell">'+fmtPrice(topDown.price)+'</td><td class="down-cell">'+yi(topDown.v)+'</td><td class="diff-cell '+longestDiffClass+'">'+yi(Math.abs(topDown.v-topUp.v))+'</td></tr></tbody></table>';
-   document.getElementById('heatReport').innerHTML=html;
- }
-function renderImbalance(d){const rows=((d.analytics||{}).imbalance_stats)||[];document.getElementById('imbalanceStats').innerHTML=rows.length?rows.map(r=>metricRow(r.band+'点内','上'+fmtAmount(r.up_notional_usd)+' / 下'+fmtAmount(r.down_notional_usd)+' / '+(r.verdict||'-'),String(r.verdict||'').includes('上')?'warn':(String(r.verdict||'').includes('下')?'good':''))).join(''):'<div class="hint">暂无数据</div>'}
-function renderDensity(d){const rows=((d.analytics||{}).density_layers)||[];if(!rows.length){document.getElementById('densityLayers').innerHTML='<div class="hint">暂无数据</div>';return;}let html='<table><thead><tr><th>区间</th><th>上方空单</th><th>下方多单</th></tr></thead><tbody>';for(const r of rows){html+='<tr><td>'+r.label+'</td><td>'+fmtAmount(r.up_notional_usd)+'</td><td>'+fmtAmount(r.down_notional_usd)+'</td></tr>';}html+='</tbody></table>';document.getElementById('densityLayers').innerHTML=html}
-function renderTrack(d){const t=((d.analytics||{}).change_tracking)||{};document.getElementById('changeTrack').innerHTML=metricRow('20点内上方空单',fmtAmount(t.up20_delta_usd),Number(t.up20_delta_usd)>=0?'warn':'good')+metricRow('20点内下方多单',fmtAmount(t.down20_delta_usd),Number(t.down20_delta_usd)>=0?'warn':'good')+metricRow('最长柱规模',fmtAmount(t.longest_delta_usd),Number(t.longest_delta_usd)>=0?'warn':'good')+metricRow('Funding',fmtFunding(t.funding_delta),Number(t.funding_delta)>=0?'warn':'good')}
-function renderCore(d){const c=((d.analytics||{}).core_zone)||{};document.getElementById('coreZone').innerHTML=metricRow('上方空单最长柱',fmtPrice(c.up_price)+' / '+fmtAmount(c.up_notional_usd),'warn')+metricRow('下方多单最长柱',fmtPrice(c.down_price)+' / '+fmtAmount(c.down_notional_usd),'good')+metricRow('距离最近强区',fmtPrice(c.nearest_strong_price)+' / '+(Number(c.nearest_distance||0).toFixed(1))+'点',String(c.nearest_side||'').includes('上')?'warn':'good')+metricRow('最近强区方向',c.nearest_side||'-')}
-function renderContrib(d){const rows=((d.analytics||{}).exchange_contrib)||[];if(!rows.length){document.getElementById('exchangeContrib').innerHTML='<div class="hint">暂无数据</div>';return;}document.getElementById('exchangeContrib').innerHTML=rows.map(r=>'<div class="bar-row"><div>'+r.exchange+'</div><div class="bar"><div class="fill" style="width:'+Math.max(4,Number(r.share||0)*100)+'%"></div></div><div>'+(Number(r.share||0)*100).toFixed(0)+'%</div></div>').join('')+'<div class="mini">主贡献交易所：'+(((d.analytics||{}).dominant_exchange)||'-')+'</div>'}
-function renderAlerts(d){const a=((d.analytics||{}).alert)||{};document.getElementById('alerts').innerHTML=metricRow('当前预警',a.level||'-',String(a.level||'').includes('预警')?'danger':'')+metricRow('最近事件',[(a.recent_exchange||'-'),(a.recent_side||'-'),(a.recent_price?fmtPrice(a.recent_price):'-')].join(' / '))+metricRow('近1分钟已发生清算',fmtAmount(a.recent_1m_usd),'warn')+metricRow('Binance / Bybit / OKX',fmtAmount(a.recent_1m_binance_usd)+' / '+fmtAmount(a.recent_1m_bybit_usd)+' / '+fmtAmount(a.recent_1m_okx_usd))+metricRow('建议',a.suggestion||'-')}
-async function load(){const cfg=await fetch('/api/model-config').then(r=>r.json()).catch(()=>null);const bucket=Number(cfg&&cfg.BucketMin||cfg&&cfg.bucket_min||5);const step=Number(cfg&&cfg.PriceStep||cfg&&cfg.price_step||5);const range=Number(cfg&&cfg.PriceRange||cfg&&cfg.price_range||400);const [dashResp,mapResp]=await Promise.all([fetch('/api/dashboard'),fetch('/api/model/liquidation-map?bucket_min='+bucket+'&price_step='+step+'&price_range='+range)]);const d=await dashResp.json();monitorLiqMapData=await mapResp.json().catch(()=>null);currentDays=(d.window_days===0||d.window_days)?d.window_days:currentDays;renderActive();document.getElementById('heroTime').textContent=new Date(d.generated_at).toLocaleString('zh-CN',{hour12:false});renderTopCards(d);renderHeatReport(d);renderImbalance(d);renderDensity(d);renderTrack(d);renderCore(d);renderContrib(d);renderAlerts(d);}
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
-function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
-async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
-initTheme();document.querySelectorAll('button[data-days]').forEach(b=>b.onclick=()=>setWindow(Number(b.dataset.days)));document.addEventListener('keydown',e=>{if(e.key==='0')setWindow(0);if(e.key==='1')setWindow(1);if(e.key==='7')setWindow(7);if(e.key==='3')setWindow(30);});setInterval(load,5000);load();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();
+
+function renderTopCards(d){
+  const analytics=d.analytics||{};
+  const top=analytics.top||{};
+  const market=analytics.market||{};
+  const cards=[
+    {label:'ETH现价',val:fmtPrice(d.current_price)},
+    {label:'短线倾向',val:top.short_bias||'-',cls:biasClassByText(top.short_bias)},
+    {label:'20点内失衡',val:fmtAmount(Math.abs(Number(top.bias20_delta||0))),cls:deltaClass(top.bias20_delta)},
+    {label:'50点内判断',val:top.bias50_label||'-',cls:biasClassByText(top.bias50_label)}
+  ];
+  const topCards=document.getElementById('topCards');
+  if(topCards) topCards.innerHTML=cards.map(function(c){
+    return '<div class="card"><div class="label">'+c.label+'</div><div class="val '+(c.cls||'')+'">'+c.val+'</div></div>';
+  }).join('');
+
+  const states=Array.isArray(d.states)?d.states:[];
+  const byEx={};
+  for(const s of states){
+    const ex=String(s.exchange||'').toLowerCase();
+    if(ex) byEx[ex]=s;
+  }
+  function exLine(name,key,oi){
+    const st=byEx[key]||{};
+    const fr=st.funding_rate==null?'-':fmtFunding(st.funding_rate);
+    const dir=st.funding_rate==null?'-':fundingDirectionLabel(st.funding_rate);
+    return '<div class="state-line"><span>'+name+' OI</span><strong>'+fmtAmount(oi)+'</strong><span class="mini">费率 '+fr+'</span><span class="funding-tag">'+dir+'</span></div>';
+  }
+  const marketState=document.getElementById('marketState');
+  if(marketState) marketState.innerHTML=
+    exLine('Binance','binance',market.binance_oi_usd)+
+    exLine('Bybit','bybit',market.bybit_oi_usd)+
+    exLine('OKX','okx',market.okx_oi_usd)+
+    '<div class="state-line"><span>平均费率</span><strong>'+fmtFunding(market.avg_funding)+'</strong><span class="funding-tag">'+(market.avg_funding_verdict||'-')+'</span></div>';
+}
+
+function renderHeatReport(d){
+  const wrap=document.getElementById('heatReport');
+  if(!wrap) return;
+  const bands=buildHeatBandsFromModel(monitorLiqMapData);
+  if(!bands.length){
+    wrap.innerHTML='<div class="hint">暂无数据</div>';
+    return;
+  }
+  let topUp={price:0,v:0},topDown={price:0,v:0};
+  for(const b of bands){
+    if(Number(b.up_notional_usd||0)>topUp.v) topUp={price:b.up_price,v:Number(b.up_notional_usd||0)};
+    if(Number(b.down_notional_usd||0)>topDown.v) topDown={price:b.down_price,v:Number(b.down_notional_usd||0)};
+  }
+  const hot={20:true,50:true,80:true,100:true,200:true,300:true};
+  const dateText=new Date(d.generated_at||Date.now()).toLocaleDateString('zh-CN').split('/').join('.');
+  let html='<table class="heat-report-table"><thead>'+
+    '<tr class="title"><th colspan="6">ETH 清算雷区速报（'+dateText+'）</th></tr>'+
+    '<tr class="spot"><th>ETH现价</th><th colspan="5" class="price">'+fmtPrice(d.current_price)+'</th></tr>'+
+    '<tr class="group"><th rowspan="2">范围</th><th colspan="2">上方空单</th><th colspan="2" class="down">下方多单</th><th rowspan="2">差值（亿）</th></tr>'+
+    '<tr class="sub"><th>价格</th><th>规模（亿）</th><th class="down">价格</th><th class="down">规模（亿）</th></tr>'+
+    '</thead><tbody>';
+  for(let i=0;i<bands.length;i++){
+    const b=bands[i];
+    const up=Number(b.up_notional_usd||0);
+    const down=Number(b.down_notional_usd||0);
+    const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
+    const diffClass=down>up?'diff-long':(up>down?'diff-short':'diff-flat');
+    html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="up-cell">'+fmtPrice(b.up_price)+'</td><td class="up-cell">'+amountYi(up)+'</td><td class="down-cell">'+fmtPrice(b.down_price)+'</td><td class="down-cell">'+amountYi(down)+'</td><td class="diff-cell '+diffClass+'">'+amountYi(Math.abs(down-up))+'</td></tr>';
+  }
+  const longestDiffClass=topDown.v>topUp.v?'diff-long':(topUp.v>topDown.v?'diff-short':'diff-flat');
+  html+='<tr class="longest"><td>最长柱</td><td class="up-cell">'+fmtPrice(topUp.price)+'</td><td class="up-cell">'+amountYi(topUp.v)+'</td><td class="down-cell">'+fmtPrice(topDown.price)+'</td><td class="down-cell">'+amountYi(topDown.v)+'</td><td class="diff-cell '+longestDiffClass+'">'+amountYi(Math.abs(topDown.v-topUp.v))+'</td></tr></tbody></table>';
+  wrap.innerHTML=html;
+}
+
+function renderImbalance(d){
+  const rows=((d.analytics||{}).imbalance_stats)||[];
+  const el=document.getElementById('imbalanceStats');
+  if(!el) return;
+  if(!rows.length){
+    el.innerHTML='<div class="hint">暂无数据</div>';
+    return;
+  }
+  el.innerHTML=rows.map(function(r){
+    return metricRow(
+      String(r.band||'-')+'点内',
+      '上方 '+fmtAmount(r.up_notional_usd)+' / 下方 '+fmtAmount(r.down_notional_usd)+' / '+String(r.verdict||'-'),
+      biasClassByText(r.verdict)
+    );
+  }).join('');
+}
+
+function renderDensity(d){
+  const rows=((d.analytics||{}).density_layers)||[];
+  const el=document.getElementById('densityLayers');
+  if(!el) return;
+  if(!rows.length){
+    el.innerHTML='<div class="hint">暂无数据</div>';
+    return;
+  }
+  let html='<table><thead><tr><th>区间</th><th>上方空单</th><th>下方多单</th></tr></thead><tbody>';
+  for(const r of rows){
+    html+='<tr><td>'+String(r.label||'-')+'</td><td>'+fmtAmount(r.up_notional_usd)+'</td><td>'+fmtAmount(r.down_notional_usd)+'</td></tr>';
+  }
+  html+='</tbody></table>';
+  el.innerHTML=html;
+}
+
+function renderTrack(d){
+  const t=((d.analytics||{}).change_tracking)||{};
+  const el=document.getElementById('changeTrack');
+  if(!el) return;
+  el.innerHTML=
+    metricRow('20点内上方空单',fmtAmount(t.up20_delta_usd),deltaClass(t.up20_delta_usd))+
+    metricRow('20点内下方多单',fmtAmount(t.down20_delta_usd),deltaClass(t.down20_delta_usd))+
+    metricRow('最长柱变化',fmtAmount(t.longest_delta_usd),deltaClass(t.longest_delta_usd))+
+    metricRow('Funding变化',fmtFunding(t.funding_delta),deltaClass(t.funding_delta));
+}
+
+function renderCore(d){
+  const c=((d.analytics||{}).core_zone)||{};
+  const el=document.getElementById('coreZone');
+  if(!el) return;
+  el.innerHTML=
+    metricRow('上方最长柱',fmtPrice(c.up_price)+' / '+fmtAmount(c.up_notional_usd),'warn')+
+    metricRow('下方最长柱',fmtPrice(c.down_price)+' / '+fmtAmount(c.down_notional_usd),'good')+
+    metricRow('最近强区',fmtPrice(c.nearest_strong_price)+' / '+(isFinite(Number(c.nearest_distance))?Number(c.nearest_distance).toFixed(1):'-')+'点',biasClassByText(c.nearest_side))+
+    metricRow('方向',String(c.nearest_side||'-'));
+}
+
+function renderContrib(d){
+  const rows=((d.analytics||{}).exchange_contrib)||[];
+  const el=document.getElementById('exchangeContrib');
+  if(!el) return;
+  if(!rows.length){
+    el.innerHTML='<div class="hint">暂无数据</div>';
+    return;
+  }
+  el.innerHTML=rows.map(function(r){
+    const share=Math.max(0,Number(r.share||0));
+    return '<div class="bar-row"><div>'+String(r.exchange||'-')+'</div><div class="bar"><div class="fill" style="width:'+Math.max(4,share*100)+'%"></div></div><div>'+(share*100).toFixed(0)+'%</div></div>';
+  }).join('')+'<div class="mini">主贡献交易所：'+String(((d.analytics||{}).dominant_exchange)||'-')+'</div>';
+}
+
+function renderAlerts(d){
+  const a=((d.analytics||{}).alert)||{};
+  const el=document.getElementById('alerts');
+  if(!el) return;
+  el.innerHTML=
+    metricRow('当前预警',String(a.level||'-'),String(a.level||'').includes('预警')?'danger':'')+
+    metricRow('最近事件',[a.recent_exchange||'-',a.recent_side||'-',a.recent_price?fmtPrice(a.recent_price):'-'].join(' / '))+
+    metricRow('近1分钟清算',fmtAmount(a.recent_1m_usd),'warn')+
+    metricRow('Binance / Bybit / OKX',fmtAmount(a.recent_1m_binance_usd)+' / '+fmtAmount(a.recent_1m_bybit_usd)+' / '+fmtAmount(a.recent_1m_okx_usd))+
+    metricRow('建议',String(a.suggestion||'-'));
+}
+
+async function load(opts){
+  const seq=++monitorLoadSeq;
+  const requestedDays=Number((opts&&opts.days));
+  updateMonitorLoadState({pending:true,done:false,days:Number.isFinite(requestedDays)?requestedDays:currentDays,error:'',heatReady:false,seq:seq});
+  try{
+    const cfg=await fetch('/api/model-config').then(function(r){return r.json();}).catch(function(){return null;});
+    const bucket=Number((cfg&&cfg.BucketMin)||(cfg&&cfg.bucket_min)||5);
+    const step=Number((cfg&&cfg.PriceStep)||(cfg&&cfg.price_step)||5);
+    const range=Number((cfg&&cfg.PriceRange)||(cfg&&cfg.price_range)||400);
+    const responses=await Promise.all([
+      fetch('/api/dashboard'),
+      fetch('/api/model/liquidation-map?bucket_min='+bucket+'&price_step='+step+'&price_range='+range)
+    ]);
+    const dashResp=responses[0], mapResp=responses[1];
+    if(!dashResp.ok) throw new Error('load dashboard failed: '+dashResp.status);
+    if(!mapResp.ok) throw new Error('load model map failed: '+mapResp.status);
+    const d=await dashResp.json();
+    const mapData=await mapResp.json().catch(function(){return null;});
+    if(seq!==monitorLoadSeq) return false;
+    monitorLiqMapData=mapData;
+    currentDays=(d.window_days===0||d.window_days)?d.window_days:currentDays;
+    renderActive();
+    const heroTime=document.getElementById('heroTime');
+    if(heroTime) heroTime.textContent=new Date(d.generated_at||Date.now()).toLocaleString('zh-CN',{hour12:false});
+    renderTopCards(d);
+    renderHeatReport(d);
+    renderImbalance(d);
+    renderDensity(d);
+    renderTrack(d);
+    renderCore(d);
+    renderContrib(d);
+    renderAlerts(d);
+    const wrap=document.getElementById('heatReport');
+    const heatReady=!!(wrap&&(wrap.querySelector('table')||String(wrap.textContent||'').trim().length>0));
+    updateMonitorLoadState({pending:false,done:true,days:currentDays,error:'',heatReady:heatReady,seq:seq,generatedAt:Number(d.generated_at||0)});
+    return true;
+  }catch(err){
+    if(seq!==monitorLoadSeq) return false;
+    const msg=String((err&&err.message)||err||'load failed').trim();
+    const wrap=document.getElementById('heatReport');
+    if(wrap&&!String(wrap.textContent||'').trim()) wrap.innerHTML='<div class="hint">加载失败</div>';
+    updateMonitorLoadState({pending:false,done:true,days:currentDays,error:msg,heatReady:false,seq:seq});
+    throw err;
+  }
+}
+
+async function openUpgradeModal(){
+  const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');
+  if(!m||!logEl||!foot) return;
+  m.classList.add('show');
+  logEl.textContent='';
+  foot.textContent='正在触发升级...';
+  const r=await fetch('/api/upgrade/pull',{method:'POST'});
+  const d=await r.json().catch(function(){return {error:'response parse failed',output:''};});
+  if(d.error){
+    logEl.textContent=String(d.output||'');
+    foot.textContent='触发失败: '+d.error;
+    return;
+  }
+  foot.textContent='已触发，正在执行...';
+  let stable=0;
+  for(let i=0;i<180;i++){
+    await new Promise(function(res){setTimeout(res,1000);});
+    const pr=await fetch('/api/upgrade/progress').then(function(x){return x.json();}).catch(function(){return null;});
+    if(!pr) continue;
+    logEl.textContent=String(pr.log||'');
+    logEl.scrollTop=logEl.scrollHeight;
+    if(pr.done){
+      foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');
+      return;
+    }
+    if(!pr.running) stable++; else stable=0;
+    if(stable>=3){
+      foot.textContent='升级进程已结束，但状态未知，请检查日志';
+      return;
+    }
+  }
+  foot.textContent='升级仍在进行，请稍后再看';
+}
+
+function closeUpgradeModal(){
+  const m=document.getElementById('upgradeModal');
+  if(m) m.classList.remove('show');
+}
+
+async function doUpgrade(event){
+  if(event) event.preventDefault();
+  openUpgradeModal();
+  return false;
+}
+
+updateMonitorLoadState({});
+initTheme();
+document.querySelectorAll('button[data-days]').forEach(function(b){b.onclick=function(){setWindow(Number(b.dataset.days)).catch(function(){});};});
+document.addEventListener('keydown',function(e){
+  if(e.key==='0') setWindow(0).catch(function(){});
+  if(e.key==='1') setWindow(1).catch(function(){});
+  if(e.key==='7') setWindow(7).catch(function(){});
+  if(e.key==='3') setWindow(30).catch(function(){});
+});
+setInterval(function(){load().catch(function(){});},5000);
+load().catch(function(){});
+(async function(){
+  try{
+    const r=await fetch('/api/version');
+    const v=await r.json();
+    const el=document.getElementById('globalFooter');
+    if(el) el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');
+  }catch(_){
+    const el=document.getElementById('globalFooter');
+    if(el) el.textContent='Code by Yuhao@jiansutech.com - - - -';
+  }
+})();
 </script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
 const mapHTML = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>盘口汇总</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>鐩樺彛姹囨€?/title>
 <style>
 body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
 .nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
@@ -6942,50 +7063,50 @@ canvas{width:100%;height:760px;display:block;border:1px solid #e5e7eb;border-rad
 [data-theme="dark"] .event-card{background:#000;border-color:#1f2937}
 [data-theme="dark"] .wsline,[data-theme="dark"] .merge-val,[data-theme="dark"] .event-title,[data-theme="dark"] .event-card h4,[data-theme="dark"] #mergeTitle{color:#e5e7eb}
 .upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head><body>
-<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map" class="active">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">娓呯畻鐑尯</a><a href="/config">妯″瀷閰嶇疆</a><a href="/monitor">闆峰尯鐩戞帶</a><a href="/map" class="active">鐩樺彛姹囨€?/a><a href="/liquidations">寮哄钩娓呯畻</a><a href="/bubbles">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel">娑堟伅閫氶亾</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">涓婚</button><button id="themeDark" onclick="setTheme('dark')">娣辫壊</button><button id="themeLight" onclick="setTheme('light')">娴呰壊</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap">
   <div class="panel">
     <div class="row">
       <div>
-        <h2 style="margin:0;color:#111827">盘口汇总</h2>
-        <div class="small">覆盖 Binance / Bybit / OKX 盘口与流动性</div>
+        <h2 style="margin:0;color:#111827">鐩樺彛姹囨€?/h2>
+        <div class="small">瑕嗙洊 Binance / Bybit / OKX 鐩樺彛涓庢祦鍔ㄦ€?/div>
       </div>
-      <div class="row"><div class="mode"><button data-mode="weighted">加权模式</button><button data-mode="merged">合并模式</button></div></div>
+      <div class="row"><div class="mode"><button data-mode="weighted">鍔犳潈妯″紡</button><button data-mode="merged">鍚堝苟妯″紡</button></div></div>
     </div>
     <div id="meta" class="meta"></div>
     <div id="weights" class="weights"></div>
     <div id="wsStatus" class="wsline"></div>
     <div class="legend"><span><i class="swatch" style="background:#8b5cf6"></i>Binance</span><span><i class="swatch" style="background:#eab308"></i>OKX</span><span><i class="swatch" style="background:#67e8f9"></i>Bybit</span></div>
     <div class="tune">
-      <label>半衰期
+      <label>鍗婅“鏈?
         <select id="halfLifeSel">
-          <option value="60">60秒</option>
-          <option value="120">120秒</option>
-          <option value="180">180秒</option>
+          <option value="60">60绉?/option>
+          <option value="120">120绉?/option>
+          <option value="180">180绉?/option>
         </select>
       </label>
-      <label>滚动窗口
+      <label>婊氬姩绐楀彛
         <select id="rollWinSel">
-          <option value="3">3分钟</option>
-          <option value="5">5分钟</option>
-          <option value="10">10分钟</option>
+          <option value="3">3鍒嗛挓</option>
+          <option value="5">5鍒嗛挓</option>
+          <option value="10">10鍒嗛挓</option>
         </select>
       </label>
     </div>
   </div>
   <div class="panel">
-    <div class="row" style="justify-content:flex-start"><h3 id="mergeTitle" style="margin:0">合并盘口统计</h3><div id="mergeHint" class="small">基于成交与 OI 估计</div></div>
+    <div class="row" style="justify-content:flex-start"><h3 id="mergeTitle" style="margin:0">鍚堝苟鐩樺彛缁熻</h3><div id="mergeHint" class="small">鍩轰簬鎴愪氦涓?OI 浼拌</div></div>
     <div id="mergeStats" class="merge-grid"></div>
     <canvas id="depthChart" width="1600" height="312"></canvas>
     <div class="event-wrap">
-      <div class="event-title">价格事件</div>
+      <div class="event-title">浠锋牸浜嬩欢</div>
       <div class="event-grid">
         <div class="event-card">
-          <div class="row" style="justify-content:space-between"><h4 style="color:#16a34a;margin:0">买盘事件</h4><div class="small"><button id="bidPrev" class="toggle" onclick="evtPrev('bid')">上一页</button><button id="bidNext" class="toggle" onclick="evtNext('bid')">下一页</button><span id="bidPage" style="margin-left:8px"></span></div></div>
+          <div class="row" style="justify-content:space-between"><h4 style="color:#16a34a;margin:0">涔扮洏浜嬩欢</h4><div class="small"><button id="bidPrev" class="toggle" onclick="evtPrev('bid')">涓婁竴椤?/button><button id="bidNext" class="toggle" onclick="evtNext('bid')">涓嬩竴椤?/button><span id="bidPage" style="margin-left:8px"></span></div></div>
           <div id="bidEvents"></div>
         </div>
         <div class="event-card">
-          <div class="row" style="justify-content:space-between"><h4 style="color:#dc2626;margin:0">卖盘事件</h4><div class="small"><button id="askPrev" class="toggle" onclick="evtPrev('ask')">上一页</button><button id="askNext" class="toggle" onclick="evtNext('ask')">下一页</button><span id="askPage" style="margin-left:8px"></span></div></div>
+          <div class="row" style="justify-content:space-between"><h4 style="color:#dc2626;margin:0">鍗栫洏浜嬩欢</h4><div class="small"><button id="askPrev" class="toggle" onclick="evtPrev('ask')">涓婁竴椤?/button><button id="askNext" class="toggle" onclick="evtNext('ask')">涓嬩竴椤?/button><span id="askPage" style="margin-left:8px"></span></div></div>
           <div id="askEvents"></div>
         </div>
       </div>
@@ -6999,9 +7120,9 @@ function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';
 const depthMemory={halfLifeMs:120000,rollingWindowMs:5*60*1000,bidGhost:{},askGhost:{},bidMax:{},askMax:{},lastUpdate:0};
 const depthEvents={minPersistMs:3000,linkFactor:0.6,bidTrack:{},askTrack:{},bidList:[],askList:[]};
 function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1})}
-function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'亿';if(a>=1e6)return (n/1e6).toFixed(2)+'百万';return (n/1e4).toFixed(2)+'万';}
+function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'浜?;if(a>=1e6)return (n/1e6).toFixed(2)+'鐧句竾';return (n/1e4).toFixed(2)+'涓?;}
 function fmtQty(n){n=Number(n);if(!isFinite(n))return '-';return n.toLocaleString('zh-CN',{maximumFractionDigits:2})}
-function windowLabel(v){return Number(v)===0?'日内':(Number(v)+'天')}
+function windowLabel(v){return Number(v)===0?'鏃ュ唴':(Number(v)+'澶?)}
 function syncTuneUI(){const h=document.getElementById('halfLifeSel'),r=document.getElementById('rollWinSel');if(h)h.value=String(Math.round(depthMemory.halfLifeMs/1000));if(r)r.value=String(Math.round(depthMemory.rollingWindowMs/60000));}
 function applyTuneFromUI(){const h=document.getElementById('halfLifeSel'),r=document.getElementById('rollWinSel');const hs=Number(h&&h.value||120),rm=Number(r&&r.value||5);depthMemory.halfLifeMs=Math.max(1000,hs*1000);depthMemory.rollingWindowMs=Math.max(60000,rm*60000);try{localStorage.setItem('depth_tune',JSON.stringify({half_life_sec:hs,rolling_min:rm}));}catch(_){ }drawDepth();}
 function loadTuneFromStorage(){try{const raw=localStorage.getItem('depth_tune');if(!raw)return;const t=JSON.parse(raw);const hs=Number(t&&t.half_life_sec||0),rm=Number(t&&t.rolling_min||0);if(hs===60||hs===120||hs===180)depthMemory.halfLifeMs=hs*1000;if(rm===3||rm===5||rm===10)depthMemory.rollingWindowMs=rm*60000;}catch(_){ }}
@@ -7021,30 +7142,30 @@ function renderActive(){document.querySelectorAll('button[data-mode]').forEach(b
 function resetDepthMemory(){depthMemory.bidGhost={};depthMemory.askGhost={};depthMemory.bidMax={};depthMemory.askMax={};depthMemory.lastUpdate=0;depthState=null;depthEvents.bidTrack={};depthEvents.askTrack={};depthEvents.bidList=[];depthEvents.askList=[];persistedEvents={bid:{rows:[],page:1,total:0},ask:{rows:[],page:1,total:0}};}
 function setMode(mode){const m=(mode==='merged')?'merged':'weighted';if(currentMode===m)return;currentMode=m;resetDepthMemory();try{localStorage.setItem('orderbook_mode',currentMode);}catch(_){ }renderActive();load();}
 function loadModeFromStorage(){try{const m=localStorage.getItem('orderbook_mode');if(m==='weighted'||m==='merged')currentMode=m;}catch(_){ }}
-function renderMergedPanel(){const el=document.getElementById('mergeStats');const m=orderbook&&orderbook.merged;const t=document.getElementById('mergeTitle');const h=document.getElementById('mergeHint');if(t)t.textContent=currentMode==='weighted'?'加权盘口统计':'合并盘口统计';if(h)h.textContent=currentMode==='weighted'?'基于成交与 OI 估计':'多交易所合并盘口与价差';if(!m){el.innerHTML='<div class=\"small\">暂无盘口数据</div>';return;}const spread=(Number(m.best_ask||0)-Number(m.best_bid||0));el.innerHTML='<div class=\"merge-card\"><div class=\"merge-label\">Best Bid</div><div class=\"merge-val\">'+fmtPrice(m.best_bid)+'</div></div>'+'<div class=\"merge-card\"><div class=\"merge-label\">Best Ask</div><div class=\"merge-val\">'+fmtPrice(m.best_ask)+'</div></div>'+'<div class=\"merge-card\"><div class=\"merge-label\">Mid / Spread</div><div class=\"merge-val\">'+fmtPrice(m.mid)+' <span style=\"font-size:12px;color:#64748b\">('+fmtPrice(spread)+')</span></div></div>';}
+function renderMergedPanel(){const el=document.getElementById('mergeStats');const m=orderbook&&orderbook.merged;const t=document.getElementById('mergeTitle');const h=document.getElementById('mergeHint');if(t)t.textContent=currentMode==='weighted'?'鍔犳潈鐩樺彛缁熻':'鍚堝苟鐩樺彛缁熻';if(h)h.textContent=currentMode==='weighted'?'鍩轰簬鎴愪氦涓?OI 浼拌':'澶氫氦鏄撴墍鍚堝苟鐩樺彛涓庝环宸?;if(!m){el.innerHTML='<div class=\"small\">鏆傛棤鐩樺彛鏁版嵁</div>';return;}const spread=(Number(m.best_ask||0)-Number(m.best_bid||0));el.innerHTML='<div class=\"merge-card\"><div class=\"merge-label\">Best Bid</div><div class=\"merge-val\">'+fmtPrice(m.best_bid)+'</div></div>'+'<div class=\"merge-card\"><div class=\"merge-label\">Best Ask</div><div class=\"merge-val\">'+fmtPrice(m.best_ask)+'</div></div>'+'<div class=\"merge-card\"><div class=\"merge-label\">Mid / Spread</div><div class=\"merge-val\">'+fmtPrice(m.mid)+' <span style=\"font-size:12px;color:#64748b\">('+fmtPrice(spread)+')</span></div></div>';}
 function fmtEventTime(ts){try{return new Date(ts).toLocaleTimeString('zh-CN',{hour12:false});}catch(_){return '-';}}
 function fmtDur(ms){const s=Math.max(0,Math.round(Number(ms||0)/1000));return s+'s';}
-function eventTable(list){if(!list||!list.length)return '<div class=\"small\">暂无事件</div>';let h='<table><thead><tr><th>价格</th><th>峰值</th><th>持续时间</th><th>时间</th></tr></thead><tbody>';for(const e of list.slice(0,8)){h+='<tr><td>'+fmtPrice(e.price)+'</td><td>'+fmtAmount(e.peak)+'</td><td>'+fmtDur(e.dur_ms)+'</td><td>'+fmtEventTime(e.ts)+'</td></tr>';}return h+'</tbody></table>';}
+function eventTable(list){if(!list||!list.length)return '<div class=\"small\">鏆傛棤浜嬩欢</div>';let h='<table><thead><tr><th>浠锋牸</th><th>宄板€?/th><th>鎸佺画鏃堕棿</th><th>鏃堕棿</th></tr></thead><tbody>';for(const e of list.slice(0,8)){h+='<tr><td>'+fmtPrice(e.price)+'</td><td>'+fmtAmount(e.peak)+'</td><td>'+fmtDur(e.dur_ms)+'</td><td>'+fmtEventTime(e.ts)+'</td></tr>';}return h+'</tbody></table>';}
 function renderEventTables(){const be=document.getElementById('bidEvents'),ae=document.getElementById('askEvents');if(be)be.innerHTML=eventTable((persistedEvents.bid&&persistedEvents.bid.rows)||[]);if(ae)ae.innerHTML=eventTable((persistedEvents.ask&&persistedEvents.ask.rows)||[]);renderEvtPager('bid');renderEvtPager('ask');}
-function renderEvtPager(side){const st=persistedEvents[side];const pageEl=document.getElementById(side+'Page');const prev=document.getElementById(side+'Prev');const next=document.getElementById(side+'Next');const page=Number((st&&st.page)||1);const total=Number((st&&st.total)||0);const pageSize=25;const pages=Math.max(1,Math.ceil(total/pageSize));if(pageEl)pageEl.textContent='第 '+page+' / '+pages+' 页 · '+total+' 条';if(prev)prev.disabled=page<=1;if(next)next.disabled=page>=pages;}
+function renderEvtPager(side){const st=persistedEvents[side];const pageEl=document.getElementById(side+'Page');const prev=document.getElementById(side+'Prev');const next=document.getElementById(side+'Next');const page=Number((st&&st.page)||1);const total=Number((st&&st.total)||0);const pageSize=25;const pages=Math.max(1,Math.ceil(total/pageSize));if(pageEl)pageEl.textContent='绗?'+page+' / '+pages+' 椤?路 '+total+' 鏉?;if(prev)prev.disabled=page<=1;if(next)next.disabled=page>=pages;}
 async function loadPriceEvents(side,page){const pageSize=25;const url='/api/price-events?side='+encodeURIComponent(side)+'&page='+encodeURIComponent(String(page||1))+'&limit='+encodeURIComponent(String(pageSize))+'&minutes=30';const r=await fetch(url);const d=await r.json().catch(()=>null);if(!d||!d.rows){persistedEvents[side]={rows:[],page:1,total:0};return;}const rows=[];for(const it of (d.rows||[])){rows.push({price:Number(it.price||0),peak:Number(it.peak||0),dur_ms:Number(it.duration_ms||0),ts:Number(it.event_ts||0)});}persistedEvents[side]={rows:rows,page:Number(d.page||1),total:Number(d.total||0)};}
 async function evtPrev(side){const st=persistedEvents[side];const page=Math.max(1,Number((st&&st.page)||1)-1);await loadPriceEvents(side,page);renderEventTables();}
 async function evtNext(side){const st=persistedEvents[side];const page=Math.max(1,Number((st&&st.page)||1)+1);await loadPriceEvents(side,page);renderEventTables();}
 function syncDepthCanvas(c){const rect=c.getBoundingClientRect();const dpr=window.devicePixelRatio||1;const W=Math.max(320,Math.floor(rect.width));const H=Math.max(240,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return{x,W,H};}
 function clampDepthView(minP,maxP){if(!depthState||!(depthState.fullMax>depthState.fullMin))return[minP,maxP];const fullMin=depthState.fullMin,fullMax=depthState.fullMax,fullSpan=Math.max(1e-6,fullMax-fullMin);const minSpan=Math.max(2,fullSpan*0.05);let span=Math.max(minSpan,maxP-minP);span=Math.min(fullSpan,span);let vMin=minP,vMax=vMin+span;if(vMin<fullMin){vMin=fullMin;vMax=vMin+span;}if(vMax>fullMax){vMax=fullMax;vMin=vMax-span;}return[vMin,vMax];}
 function initDepthView(allPrices,cur){const rawMin=Math.min(...allPrices,cur),rawMax=Math.max(...allPrices,cur);const rawSpan=Math.max(2,rawMax-rawMin);const pad=Math.max(1,rawSpan*0.06);const dataMin=rawMin-pad,dataMax=rawMax+pad;if(!depthState||!(depthState.fullMax>depthState.fullMin)){depthState={fullMin:dataMin,fullMax:dataMax,viewMin:dataMin,viewMax:dataMax,padL:64,padR:24,padT:20,padB:44,W:0,H:0};[depthState.viewMin,depthState.viewMax]=clampDepthView(depthState.viewMin,depthState.viewMax);return;}depthState.fullMin=dataMin;depthState.fullMax=dataMax;const span=(depthState.viewMax>depthState.viewMin)?(depthState.viewMax-depthState.viewMin):(dataMax-dataMin);let vMin=cur-span/2,vMax=cur+span/2;[vMin,vMax]=clampDepthView(vMin,vMax);depthState.viewMin=vMin;depthState.viewMax=vMax;}
-function drawDepth(){const c=document.getElementById('depthChart');const v=syncDepthCanvas(c),x=v.x,W=v.W,H=v.H;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);const m=orderbook&&orderbook.merged;const bids=(m&&m.bids)||[];const asks=(m&&m.asks)||[];const cur=Number((m&&m.mid)||0)||Number((dashboard&&dashboard.current_price)||0);if(!(cur>0)||(!bids.length&&!asks.length)){x.fillStyle='#6b7280';x.font='14px sans-serif';x.fillText('暂无盘口数据',20,24);return;}const all=bids.concat(asks).map(v=>({p:Number(v.price||0),n:Number(v.qty||0)*Number(v.price||0)})).filter(v=>v.p>0&&v.n>0);if(!all.length){x.fillStyle='#6b7280';x.font='14px sans-serif';x.fillText('暂无盘口数据',20,24);return;}initDepthView(all.map(v=>v.p),cur);const padL=64,padR=24,padT=20,padB=44,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;depthState.padL=padL;depthState.padR=padR;depthState.padT=padT;depthState.padB=padB;depthState.W=W;depthState.H=H;const minP=depthState.viewMin,maxP=depthState.viewMax,span=Math.max(1e-6,maxP-minP);const bidNow=levelMap(bids),askNow=levelMap(asks);const visible=all.filter(v=>v.p>=minP&&v.p<=maxP);const ghostVals=[];for(const [k,vv] of Object.entries(depthMemory.bidGhost)){const p=Number(k);if(p>=minP&&p<=maxP&&vv>0)ghostVals.push(vv);}for(const [k,vv] of Object.entries(depthMemory.askGhost)){const p=Number(k);if(p>=minP&&p<=maxP&&vv>0)ghostVals.push(vv);}const maxVals=[];for(const [k,o] of Object.entries(depthMemory.bidMax)){const p=Number(k);if(p>=minP&&p<=maxP&&o&&o.v>0)maxVals.push(o.v);}for(const [k,o] of Object.entries(depthMemory.askMax)){const p=Number(k);if(p>=minP&&p<=maxP&&o&&o.v>0)maxVals.push(o.v);}const maxN=Math.max(1,...(visible.length?visible.map(v=>v.n):all.map(v=>v.n)),...(ghostVals.length?ghostVals:[1]),...(maxVals.length?maxVals:[1]));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxN)*ph;x.strokeStyle='#e5e7eb';x.lineWidth=1;x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4),val=maxN*(1-i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#475569';x.fillText(fmtAmount(val),6,y+4);}const minLabelGap=12;const approxLabelW=Math.max(36,x.measureText(fmtPrice(minP)).width,x.measureText(fmtPrice(maxP)).width);const maxTicks=Math.max(2,Math.floor(pw/(approxLabelW+minLabelGap)));const tickCount=Math.max(2,Math.min(10,maxTicks));for(let i=0;i<=tickCount;i++){const p=minP+span*(i/tickCount),px=sx(p);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(px,by);x.lineTo(px,by+4);x.stroke();const label=fmtPrice(p);const lw=x.measureText(label).width;const tx=Math.max(padL,Math.min(px-lw/2,W-padR-lw));x.fillStyle='#64748b';x.fillText(label,tx,by+18);}if(cur>=minP&&cur<=maxP){const cp=sx(cur);x.strokeStyle='#dc2626';x.setLineDash([6,4]);x.beginPath();x.moveTo(cp,padT);x.lineTo(cp,by);x.stroke();x.setLineDash([]);x.fillStyle='#111827';x.fillText('当前价 '+fmtPrice(cur),Math.max(padL,Math.min(cp-34,W-150)),padT-4);}const barCount=Math.max(1,visible.length);const barW=Math.max(1,Math.min(12,pw/Math.max(50,barCount)));for(const [k,n] of Object.entries(depthMemory.bidGhost)){const p=Number(k);if(!(p>=minP&&p<=maxP&&n>0&&p<=cur))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(22,163,74,0.18)';x.fillRect(px-barW/2,y,barW,by-y);}for(const [k,n] of Object.entries(depthMemory.askGhost)){const p=Number(k);if(!(p>=minP&&p<=maxP&&n>0&&p>=cur))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(220,38,38,0.16)';x.fillRect(px-barW/2,y,barW,by-y);}for(const [k,o] of Object.entries(depthMemory.bidMax)){const p=Number(k),n=Number(o&&o.v||0);if(!(p>=minP&&p<=maxP&&n>0&&p<=cur))continue;const px=sx(p),y=sy(n);x.strokeStyle='rgba(22,163,74,0.85)';x.lineWidth=1.3;x.beginPath();x.moveTo(px-barW/2,y);x.lineTo(px+barW/2,y);x.stroke();}for(const [k,o] of Object.entries(depthMemory.askMax)){const p=Number(k),n=Number(o&&o.v||0);if(!(p>=minP&&p<=maxP&&n>0&&p>=cur))continue;const px=sx(p),y=sy(n);x.strokeStyle='rgba(220,38,38,0.85)';x.lineWidth=1.3;x.beginPath();x.moveTo(px-barW/2,y);x.lineTo(px+barW/2,y);x.stroke();}x.lineWidth=1;
+function drawDepth(){const c=document.getElementById('depthChart');const v=syncDepthCanvas(c),x=v.x,W=v.W,H=v.H;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);const m=orderbook&&orderbook.merged;const bids=(m&&m.bids)||[];const asks=(m&&m.asks)||[];const cur=Number((m&&m.mid)||0)||Number((dashboard&&dashboard.current_price)||0);if(!(cur>0)||(!bids.length&&!asks.length)){x.fillStyle='#6b7280';x.font='14px sans-serif';x.fillText('鏆傛棤鐩樺彛鏁版嵁',20,24);return;}const all=bids.concat(asks).map(v=>({p:Number(v.price||0),n:Number(v.qty||0)*Number(v.price||0)})).filter(v=>v.p>0&&v.n>0);if(!all.length){x.fillStyle='#6b7280';x.font='14px sans-serif';x.fillText('鏆傛棤鐩樺彛鏁版嵁',20,24);return;}initDepthView(all.map(v=>v.p),cur);const padL=64,padR=24,padT=20,padB=44,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;depthState.padL=padL;depthState.padR=padR;depthState.padT=padT;depthState.padB=padB;depthState.W=W;depthState.H=H;const minP=depthState.viewMin,maxP=depthState.viewMax,span=Math.max(1e-6,maxP-minP);const bidNow=levelMap(bids),askNow=levelMap(asks);const visible=all.filter(v=>v.p>=minP&&v.p<=maxP);const ghostVals=[];for(const [k,vv] of Object.entries(depthMemory.bidGhost)){const p=Number(k);if(p>=minP&&p<=maxP&&vv>0)ghostVals.push(vv);}for(const [k,vv] of Object.entries(depthMemory.askGhost)){const p=Number(k);if(p>=minP&&p<=maxP&&vv>0)ghostVals.push(vv);}const maxVals=[];for(const [k,o] of Object.entries(depthMemory.bidMax)){const p=Number(k);if(p>=minP&&p<=maxP&&o&&o.v>0)maxVals.push(o.v);}for(const [k,o] of Object.entries(depthMemory.askMax)){const p=Number(k);if(p>=minP&&p<=maxP&&o&&o.v>0)maxVals.push(o.v);}const maxN=Math.max(1,...(visible.length?visible.map(v=>v.n):all.map(v=>v.n)),...(ghostVals.length?ghostVals:[1]),...(maxVals.length?maxVals:[1]));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxN)*ph;x.strokeStyle='#e5e7eb';x.lineWidth=1;x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4),val=maxN*(1-i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#475569';x.fillText(fmtAmount(val),6,y+4);}const minLabelGap=12;const approxLabelW=Math.max(36,x.measureText(fmtPrice(minP)).width,x.measureText(fmtPrice(maxP)).width);const maxTicks=Math.max(2,Math.floor(pw/(approxLabelW+minLabelGap)));const tickCount=Math.max(2,Math.min(10,maxTicks));for(let i=0;i<=tickCount;i++){const p=minP+span*(i/tickCount),px=sx(p);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(px,by);x.lineTo(px,by+4);x.stroke();const label=fmtPrice(p);const lw=x.measureText(label).width;const tx=Math.max(padL,Math.min(px-lw/2,W-padR-lw));x.fillStyle='#64748b';x.fillText(label,tx,by+18);}if(cur>=minP&&cur<=maxP){const cp=sx(cur);x.strokeStyle='#dc2626';x.setLineDash([6,4]);x.beginPath();x.moveTo(cp,padT);x.lineTo(cp,by);x.stroke();x.setLineDash([]);x.fillStyle='#111827';x.fillText('褰撳墠浠?'+fmtPrice(cur),Math.max(padL,Math.min(cp-34,W-150)),padT-4);}const barCount=Math.max(1,visible.length);const barW=Math.max(1,Math.min(12,pw/Math.max(50,barCount)));for(const [k,n] of Object.entries(depthMemory.bidGhost)){const p=Number(k);if(!(p>=minP&&p<=maxP&&n>0&&p<=cur))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(22,163,74,0.18)';x.fillRect(px-barW/2,y,barW,by-y);}for(const [k,n] of Object.entries(depthMemory.askGhost)){const p=Number(k);if(!(p>=minP&&p<=maxP&&n>0&&p>=cur))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(220,38,38,0.16)';x.fillRect(px-barW/2,y,barW,by-y);}for(const [k,o] of Object.entries(depthMemory.bidMax)){const p=Number(k),n=Number(o&&o.v||0);if(!(p>=minP&&p<=maxP&&n>0&&p<=cur))continue;const px=sx(p),y=sy(n);x.strokeStyle='rgba(22,163,74,0.85)';x.lineWidth=1.3;x.beginPath();x.moveTo(px-barW/2,y);x.lineTo(px+barW/2,y);x.stroke();}for(const [k,o] of Object.entries(depthMemory.askMax)){const p=Number(k),n=Number(o&&o.v||0);if(!(p>=minP&&p<=maxP&&n>0&&p>=cur))continue;const px=sx(p),y=sy(n);x.strokeStyle='rgba(220,38,38,0.85)';x.lineWidth=1.3;x.beginPath();x.moveTo(px-barW/2,y);x.lineTo(px+barW/2,y);x.stroke();}x.lineWidth=1;
 const exColors={binance:'rgba(139,92,246,0.75)',okx:'rgba(234,179,8,0.72)',bybit:'rgba(103,232,249,0.72)'};
 if(currentMode==='weighted'&&m&&m.per_exchange){const order=['binance','okx','bybit'];for(const side of ['bids','asks']){for(const ex of order){const ls=((m.per_exchange[ex]||{})[side])||[];for(const lv of ls){const p=Number(lv.price||0),n=Number(lv.qty||0)*p;if(!(p>=minP&&p<=maxP&&n>0&&((side==='bids'&&p<=cur)||(side==='asks'&&p>=cur))))continue;const px=sx(p),y=sy(n);x.fillStyle=exColors[ex];x.fillRect(px-barW/2,y,barW,by-y);}}}}
 else {for(const b of bids){const p=Number(b.price||0),n=Number(b.qty||0)*p;if(!(p>=minP&&p<=maxP&&n>0&&p<=cur))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(22,163,74,0.75)';x.fillRect(px-barW/2,y,barW,by-y);}for(const a of asks){const p=Number(a.price||0),n=Number(a.qty||0)*p;if(!(p>=minP&&p<=maxP&&n>0&&p>=cur))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(220,38,38,0.72)';x.fillRect(px-barW/2,y,barW,by-y);}}
-x.fillStyle='#16a34a';x.fillText('Bid 深度',padL,14);x.fillStyle='#dc2626';x.fillText('Ask 深度',padL+100,14);x.fillStyle='#64748b';x.fillText('半衰期 '+Math.round(depthMemory.halfLifeMs/1000)+'s  滚动窗口 '+Math.round(depthMemory.rollingWindowMs/60000)+' 分钟',padL+220,14);x.fillText('X 轴价格 / Y 轴挂单金额',W-190,14);}
+x.fillStyle='#16a34a';x.fillText('Bid 娣卞害',padL,14);x.fillStyle='#dc2626';x.fillText('Ask 娣卞害',padL+100,14);x.fillStyle='#64748b';x.fillText('鍗婅“鏈?'+Math.round(depthMemory.halfLifeMs/1000)+'s  婊氬姩绐楀彛 '+Math.round(depthMemory.rollingWindowMs/60000)+' 鍒嗛挓',padL+220,14);x.fillText('X 杞翠环鏍?/ Y 杞存寕鍗曢噾棰?,W-190,14);}
 function bindDepthInteraction(){const c=document.getElementById('depthChart');if(!c||c.dataset.bound==='1')return;c.dataset.bound='1';c.addEventListener('wheel',e=>{if(!depthState||!(depthState.viewMax>depthState.viewMin))return;e.preventDefault();const rect=c.getBoundingClientRect();const xPos=e.clientX-rect.left;const s=depthState,pw=s.W-s.padL-s.padR;if(pw<=0)return;const ratio=Math.max(0,Math.min(1,(xPos-s.padL)/pw));const focus=s.viewMin+(s.viewMax-s.viewMin)*ratio;const factor=e.deltaY<0?0.88:1.14;let vMin=focus-(focus-s.viewMin)*factor,vMax=vMin+(s.viewMax-s.viewMin)*factor;[vMin,vMax]=clampDepthView(vMin,vMax);s.viewMin=vMin;s.viewMax=vMax;drawDepth();},{passive:false});c.addEventListener('mousedown',e=>{if(e.button!==0||!depthState)return;isDraggingDepth=true;depthLastX=e.clientX;});window.addEventListener('mousemove',e=>{if(!isDraggingDepth||!depthState)return;const s=depthState,pw=s.W-s.padL-s.padR;if(pw<=0)return;const dx=e.clientX-depthLastX;depthLastX=e.clientX;const dp=(dx/pw)*(s.viewMax-s.viewMin);let vMin=s.viewMin-dp,vMax=s.viewMax-dp;[vMin,vMax]=clampDepthView(vMin,vMax);s.viewMin=vMin;s.viewMax=vMax;drawDepth();});window.addEventListener('mouseup',()=>{isDraggingDepth=false;});window.addEventListener('mouseleave',()=>{isDraggingDepth=false;});window.addEventListener('resize',()=>drawDepth());}
 function buildShares(states){const order=['binance','okx','bybit'];const out={};let total=0;for(const ex of order){const s=(states||[]).find(v=>(v.exchange||'').toLowerCase()===ex);const oi=Number((s&&s.oi_value_usd)||0);out[ex]=oi;total+=oi;}if(total<=0){for(const ex of order)out[ex]=1/order.length;}else{for(const ex of order)out[ex]/=total;}return out;}
 function exchangeWsHealthy(ex){const ob=orderbook&&orderbook[ex];if(!ob)return false;const now=Date.now();const last=Math.max(Number(ob.last_ws_event||0),Number(ob.last_snapshot||0),Number(ob.updated_ts||0));if(!(last>0))return false;return (now-last)<=20000;}
-function renderWsStatus(){const el=document.getElementById('wsStatus');if(!el)return;const show=(name,ex)=>name+' '+(exchangeWsHealthy(ex)?'已连接':'未连接');el.textContent=[show('Binance','binance'),show('OKX','okx'),show('Bybit','bybit')].join('  ');}
-function renderMeta(){if(!dashboard)return;const t=new Date(dashboard.generated_at).toLocaleString();document.getElementById('meta').textContent='覆盖 Binance / Bybit / OKX | 更新时间 '+t+' | 当前模式 '+currentMode;const s=buildShares(dashboard.states);document.getElementById('weights').textContent=currentMode==='weighted'?('OI 权重 Binance '+(s.binance*100).toFixed(1)+'% | Bybit '+(s.bybit*100).toFixed(1)+'% | OKX '+(s.okx*100).toFixed(1)+'%'):'合并模式下直接聚合多交易所盘口';}
+function renderWsStatus(){const el=document.getElementById('wsStatus');if(!el)return;const show=(name,ex)=>name+' '+(exchangeWsHealthy(ex)?'宸茶繛鎺?:'鏈繛鎺?);el.textContent=[show('Binance','binance'),show('OKX','okx'),show('Bybit','bybit')].join('  ');}
+function renderMeta(){if(!dashboard)return;const t=new Date(dashboard.generated_at).toLocaleString();document.getElementById('meta').textContent='瑕嗙洊 Binance / Bybit / OKX | 鏇存柊鏃堕棿 '+t+' | 褰撳墠妯″紡 '+currentMode;const s=buildShares(dashboard.states);document.getElementById('weights').textContent=currentMode==='weighted'?('OI 鏉冮噸 Binance '+(s.binance*100).toFixed(1)+'% | Bybit '+(s.bybit*100).toFixed(1)+'% | OKX '+(s.okx*100).toFixed(1)+'%'):'鍚堝苟妯″紡涓嬬洿鎺ヨ仛鍚堝浜ゆ槗鎵€鐩樺彛';}
 async function load(){const [r1,r2]=await Promise.all([fetch('/api/dashboard'),fetch('/api/orderbook?limit=60&mode='+encodeURIComponent(currentMode))]);dashboard=await r1.json();orderbook=await r2.json();updateDepthMemory();await Promise.all([loadPriceEvents('bid',1),loadPriceEvents('ask',1)]);renderActive();renderMeta();renderWsStatus();renderMergedPanel();drawDepth();renderEventTables();}
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 document.querySelectorAll('button[data-mode]').forEach(b=>b.onclick=()=>setMode((b.dataset.mode||'weighted')));
@@ -7056,80 +7177,305 @@ if(hs)hs.onchange=applyTuneFromUI;
 if(rw)rw.onchange=applyTuneFromUI;
 bindDepthInteraction();
 initTheme();setInterval(load,5000);load();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
 const channelHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>&#28040;&#24687;&#36890;&#36947;</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{max-width:900px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.small{font-size:12px;color:#6b7280}button.primary{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.switch-row{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:14px;padding:12px;border:1px solid #dce3ec;border-radius:8px}.switch-row input{width:auto;margin:0;transform:scale(1.2)}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}[data-theme="dark"] body{background:#000;color:#e5e7eb}[data-theme="dark"] .nav{background:#000;border-bottom-color:#111827}[data-theme="dark"] .panel{background:#000;border-color:#1f2937}[data-theme="dark"] .small{color:#94a3b8}[data-theme="dark"] input,[data-theme="dark"] button.secondary{background:#000;color:#e5e7eb;border-color:#334155}[data-theme="dark"] .switch-row{border-color:#1f2937}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel" class="active">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><h2 style="margin-top:0">Telegram 消息通道</h2><div class="small">配置 Telegram 机器人与频道，系统将按设定间隔发送通知。</div><label class="switch-row"><span><strong>启用自动推送</strong><div class="small">默认关闭；开启后按通知间隔推送清算热区速报。</div></span><input id="notify-enabled" type="checkbox"></label><div style="margin-top:14px"><label>Telegram Bot Token</label><input id="token" autocomplete="off" placeholder="123456:ABC..."></div><div style="margin-top:14px"><label>Telegram Channel / Chat ID</label><input id="channel" autocomplete="off" placeholder="@mychannel 或 -100123456789"></div><div style="margin-top:14px"><label>通知间隔（分钟）</label><input id="notify-interval" type="number" min="1" step="1" placeholder="15"></div><div style="margin-top:14px"><label>发送内容正则（最多三行）</label><textarea id="notify-regex" rows="3" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" placeholder="monitor&#10;webdatasource&#10;30d"></textarea><div class="small" style="margin-top:6px">留空时默认发送全部内容；填写后，只有标签命中正则的内容块才会发送。可匹配：monitor、/monitor、清算热区速报、webdatasource、/webdatasource、30d。</div></div><div style="margin-top:16px" class="row"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="testTelegram()">测试发送</button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">娓呯畻鐑尯</a><a href="/config">妯″瀷閰嶇疆</a><a href="/monitor">闆峰尯鐩戞帶</a><a href="/map">鐩樺彛姹囨€?/a><a href="/liquidations">寮哄钩娓呯畻</a><a href="/bubbles">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel" class="active">娑堟伅閫氶亾</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">涓婚</button><button id="themeDark" onclick="setTheme('dark')">娣辫壊</button><button id="themeLight" onclick="setTheme('light')">娴呰壊</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="wrap"><div class="panel"><h2 style="margin-top:0">Telegram 娑堟伅閫氶亾</h2><div class="small">閰嶇疆 Telegram 鏈哄櫒浜轰笌棰戦亾锛岀郴缁熷皢鎸夎瀹氶棿闅斿彂閫侀€氱煡銆?/div><label class="switch-row"><span><strong>鍚敤鑷姩鎺ㄩ€?/strong><div class="small">榛樿鍏抽棴锛涘紑鍚悗鎸夐€氱煡闂撮殧鎺ㄩ€佹竻绠楃儹鍖洪€熸姤銆?/div></span><input id="notify-enabled" type="checkbox"></label><div style="margin-top:14px"><label>Telegram Bot Token</label><input id="token" autocomplete="off" placeholder="123456:ABC..."></div><div style="margin-top:14px"><label>Telegram Channel / Chat ID</label><input id="channel" autocomplete="off" placeholder="@mychannel 鎴?-100123456789"></div><div style="margin-top:14px"><label>閫氱煡闂撮殧锛堝垎閽燂級</label><input id="notify-interval" type="number" min="1" step="1" placeholder="15"></div><div style="margin-top:16px" class="row"><button class="primary" onclick="save()">淇濆瓨</button><button class="secondary" onclick="testTelegram()">娴嬭瘯鍙戦€?/button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
 <script>
-let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawEnabled={{.NotifyEnabled}},rawRegex={{printf "%q" .NotifyRegexRules}},tokenDirty=false,channelDirty=false,regexDirty=false;
+let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawEnabled={{.NotifyEnabled}},tokenDirty=false,channelDirty=false;
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
-function maskInput(v){v=String(v||'');if(!v)return '';if(v.length<=8)return '*'.repeat(v.length);return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}function syncInputs(){const t=document.getElementById('token'),c=document.getElementById('channel'),n=document.getElementById('notify-interval'),e=document.getElementById('notify-enabled'),rx=document.getElementById('notify-regex');if(!tokenDirty)t.value=maskInput(rawToken);if(!channelDirty)c.value=maskInput(rawChannel);n.value=rawInterval||15;e.checked=!!rawEnabled;if(!regexDirty&&rx)rx.value=String(rawRegex||'');}function currentValue(i,raw,dirty){return dirty?(i?String(i.value||''):''):raw;}document.getElementById('token').addEventListener('input',()=>{tokenDirty=true});document.getElementById('channel').addEventListener('input',()=>{channelDirty=true});document.getElementById('notify-regex').addEventListener('input',()=>{regexDirty=true});syncInputs();initTheme();
-async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+function maskInput(v){v=String(v||'');if(!v)return '';if(v.length<=8)return '*'.repeat(v.length);return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}function syncInputs(){const t=document.getElementById('token'),c=document.getElementById('channel'),n=document.getElementById('notify-interval'),e=document.getElementById('notify-enabled');if(!tokenDirty)t.value=maskInput(rawToken);if(!channelDirty)c.value=maskInput(rawChannel);n.value=rawInterval||15;e.checked=!!rawEnabled;}function currentValue(i,raw,dirty){return dirty?(i?String(i.value||''):''):raw;}document.getElementById('token').addEventListener('input',()=>{tokenDirty=true});document.getElementById('channel').addEventListener('input',()=>{channelDirty=true});syncInputs();initTheme();
+async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
-async function save(){const n=document.getElementById('notify-interval');const iv=Math.max(1,Number((n&&n.value)||rawInterval||15)|0);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken,tokenDirty),telegram_channel:currentValue(document.getElementById('channel'),rawChannel,channelDirty),notify_interval_min:iv,notify_enabled:document.getElementById('notify-enabled').checked,notify_regex_rules:regexDirty?String((document.getElementById('notify-regex')||{}).value||''):rawRegex};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=iv;rawEnabled=body.notify_enabled;rawRegex=body.notify_regex_rules||'';tokenDirty=false;channelDirty=false;regexDirty=false;syncInputs();document.getElementById('msg').textContent='保存成功';}else{document.getElementById('msg').textContent='保存失败';}}
-async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='正在发送测试消息...';const r=await fetch('/api/channel/test',{method:'POST'});msg.textContent=r.ok?'测试发送成功':('测试发送失败: '+await r.text());}
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+async function save(){const n=document.getElementById('notify-interval');const iv=Math.max(1,Number((n&&n.value)||rawInterval||15)|0);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken,tokenDirty),telegram_channel:currentValue(document.getElementById('channel'),rawChannel,channelDirty),notify_interval_min:iv,notify_enabled:document.getElementById('notify-enabled').checked};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=iv;rawEnabled=body.notify_enabled;tokenDirty=false;channelDirty=false;syncInputs();document.getElementById('msg').textContent='淇濆瓨鎴愬姛';}else{document.getElementById('msg').textContent='淇濆瓨澶辫触';}}
+async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='姝ｅ湪鍙戦€佹祴璇曟秷鎭?..';const r=await fetch('/api/channel/test',{method:'POST'});msg.textContent=r.ok?'娴嬭瘯鍙戦€佹垚鍔?:('娴嬭瘯鍙戦€佸け璐? '+await r.text());}
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
-const usersHTML = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>用户管理</title>
-<style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu{display:flex;align-items:center;flex-wrap:wrap}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.admin-state{font-size:12px;color:#9ca3af}.wrap{max-width:980px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.small{font-size:12px;color:#6b7280}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}.btn.primary{background:#22c55e;color:#fff;border-color:#22c55e}.btn.secondary{background:#fff}.table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:center;font-size:13px}td input{width:100%;box-sizing:border-box;padding:8px;border:1px solid #cbd5e1;border-radius:6px}.admin-only{display:none}.admin-toolbar{display:flex;gap:10px;align-items:center}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/users" class="active">用户管理</a><a href="/" class="admin-only">清算热区</a><a href="/config" class="admin-only">模型配置</a><a href="/monitor" class="admin-only">雷区监控</a><a href="/map" class="admin-only">盘口汇总</a><a href="/liquidations" class="admin-only">强平清算</a><a href="/bubbles" class="admin-only">气泡图</a><a href="/webdatasource" class="admin-only">页面数据源</a><a href="/channel" class="admin-only">消息通道</a></div></div><div class="nav-right"><div class="admin-state" id="adminState"></div><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade admin-only" onclick="return doUpgrade(event)">程序升级</a><a href="#" class="upgrade admin-only" onclick="return doRestart(event)">程序重启</a></div></div>
-<div class="wrap"><div class="panel"><div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">用户管理</h2><div class="admin-toolbar"><button class="btn secondary" onclick="addRow()">新增邮箱</button><button class="btn primary" onclick="saveUsers()">保存</button><span id="msg" class="small" style="margin-left:10px"></span></div></div><div id="adminHint" class="small" style="margin-top:8px">勾选“管理员”后展示全部顶部菜单和程序升级/重启入口；取消后仅保留本页。</div><table><thead><tr><th>邮箱</th><th>管理员</th><th>操作</th></tr></thead><tbody id="userBody"></tbody></table></div></div>
+const channelHTMLV2 = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>消息通道</title>
+<style>
+body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
+.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
+.nav-left,.nav-right{display:flex;align-items:center;gap:20px}
+.brand{font-size:18px;font-weight:700;color:#eef3f9}
+.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}
+.menu a.active{color:#fff;font-weight:700}
+.upgrade{color:#fff;font-weight:700;text-decoration:none}
+.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}
+.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}
+.theme-toggle button.label{cursor:default;opacity:.92}
+.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}
+.wrap{max-width:1584px;margin:0 auto;padding:22px}
+.channel-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:start}
+.panel{border:1px solid #dce3ec;background:#fff;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04);min-width:0}
+.small{font-size:12px;color:#6b7280;line-height:1.6}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.field label{display:block;font-size:12px;color:#6b7280}
+.field input,.field textarea{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}
+.field textarea{min-height:110px;resize:vertical}
+.switch-row{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:14px;padding:12px;border:1px solid #dce3ec;border-radius:8px}
+.switch-row input{width:auto;margin:0;transform:scale(1.2)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.hint{margin-top:8px;padding:10px 12px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.status{min-height:20px}
+.table-scroll{width:100%;overflow-x:auto;margin-top:10px}
+.history-table{width:100%;border-collapse:collapse;table-layout:fixed}
+.history-table-wide{width:138%;min-width:138%}
+.history-table th,.history-table td{padding:8px 10px;border-top:1px solid #e5e7eb;text-align:left;font-size:12px;vertical-align:top;word-break:break-word}
+.history-table thead th{border-top:0;color:#64748b}
+.ok{color:#15803d;font-weight:700}
+.fail{color:#dc2626;font-weight:700}
+@media (max-width:960px){.channel-layout,.grid{grid-template-columns:1fr}}
+[data-theme="dark"] body{background:#000;color:#e5e7eb}
+[data-theme="dark"] .nav{background:#000;border-bottom-color:#111827}
+[data-theme="dark"] .panel{background:#000;border-color:#1f2937}
+[data-theme="dark"] .small,[data-theme="dark"] .field label,[data-theme="dark"] .history-table thead th{color:#94a3b8}
+[data-theme="dark"] .field input,[data-theme="dark"] .field textarea,[data-theme="dark"] button.secondary{background:#000;color:#e5e7eb;border-color:#334155}
+[data-theme="dark"] .switch-row,[data-theme="dark"] .hint{border-color:#1f2937;background:#020617}
+[data-theme="dark"] .history-table th,[data-theme="dark"] .history-table td{border-top-color:#1f2937}
+.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}
+.upgrade-modal.show{display:flex}
+.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}
+.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}
+.upgrade-title{font-size:14px;font-weight:700}
+.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}
+.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}
+.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}
+.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}
+button.primary{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}
+button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}
+</style>
+</head>
+<body>
+<div class="nav">
+  <div class="nav-left">
+    <div class="brand">ETH Liquidation Map</div>
+    <div class="menu">
+      <a href="/">首页</a>
+      <a href="/config">模型配置</a>
+      <a href="/monitor">雷区监控</a>
+      <a href="/map">盘口汇总</a>
+      <a href="/liquidations">强平清算</a>
+      <a href="/bubbles">气泡图</a>
+      <a href="/webdatasource">页面数据源</a>
+      <a href="/channel" class="active">消息通道</a>
+    </div>
+  </div>
+  <div class="nav-right">
+    <div class="theme-toggle">
+      <button class="label" type="button">主题</button>
+      <button id="themeDark" onclick="setTheme('dark')">深色</button>
+      <button id="themeLight" onclick="setTheme('light')">浅色</button>
+    </div>
+    <a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="channel-layout">
+    <div class="panel">
+      <h2 style="margin-top:0">Telegram 消息通道</h2>
+      <div class="small">配置 Telegram Bot 和频道后，系统会按工作时间和非工作时间的不同频率自动推送消息。</div>
+      <label class="switch-row">
+        <span>
+          <strong>启用自动通知</strong>
+          <div class="small">关闭时不会自动推送；开启后会按下方配置的时间范围和频率执行。</div>
+        </span>
+        <input id="notify-enabled" type="checkbox">
+      </label>
+      <div class="grid" style="margin-top:14px">
+        <div class="field" style="grid-column:1/-1">
+          <label>Telegram Bot Token</label>
+          <input id="token" autocomplete="off" placeholder="123456:ABC...">
+          <div class="small">留空会保留当前已保存的 Token。</div>
+        </div>
+        <div class="field" style="grid-column:1/-1">
+          <label>Telegram Channel / Chat ID</label>
+          <input id="channel" autocomplete="off" placeholder="@mychannel 或 -100123456789">
+          <div class="small">留空会保留当前已保存的频道或 Chat ID。</div>
+        </div>
+        <div class="field">
+          <label>工作时间通知间隔（分钟）</label>
+          <input id="notify-work-interval" type="number" min="1" step="1" placeholder="15">
+        </div>
+        <div class="field">
+          <label>非工作时间通知间隔（分钟）</label>
+          <input id="notify-off-interval" type="number" min="1" step="1" placeholder="60">
+        </div>
+        <div class="field" style="grid-column:1/-1">
+          <label>工作时间范围 / 正则表达式</label>
+          <textarea id="work-time-expr" placeholder="09:00-12:00,13:00-18:00&#10;或 regex:^(Mon|Tue|Wed|Thu|Fri) (09|1[0-7]):[0-5][0-9]$"></textarea>
+          <div class="hint small">支持两种写法：<span class="mono">09:00-18:00</span>、<span class="mono">09:00-12:00,13:00-18:00</span>；也支持直接输入正则，推荐带上 <span class="mono">regex:</span> 前缀。留空表示全天按“工作时间通知间隔”处理。</div>
+        </div>
+      </div>
+      <div style="margin-top:16px" class="row">
+        <button class="primary" onclick="save()">保存</button>
+        <button class="secondary" onclick="testTelegram()">发送测试消息</button>
+        <span id="msg" class="small status" style="margin-left:10px"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h3 style="margin:0">历史发送记录</h3>
+          <div class="small">显示最近 15 条历史发送记录。</div>
+        </div>
+        <button class="secondary" onclick="loadHistory()">刷新</button>
+      </div>
+      <div class="table-scroll">
+        <table class="history-table history-table-wide">
+          <colgroup>
+            <col style="width:16%">
+            <col style="width:10%">
+            <col style="width:29%">
+            <col style="width:10%">
+            <col style="width:35%">
+          </colgroup>
+          <thead>
+            <tr><th>时间</th><th>类型</th><th>组别</th><th>结果</th><th>详情</th></tr>
+          </thead>
+          <tbody id="historyBody"><tr><td colspan="5" class="small">加载中...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h3 style="margin:0">抓取历史</h3>
+          <div class="small">显示最近 24 小时的 24 条抓取记录。</div>
+        </div>
+        <button class="secondary" onclick="loadTimeline()">刷新</button>
+      </div>
+      <div class="table-scroll">
+        <table class="history-table">
+          <colgroup>
+            <col style="width:18%">
+            <col style="width:12%">
+            <col style="width:12%">
+            <col style="width:26%">
+            <col style="width:12%">
+            <col style="width:20%">
+          </colgroup>
+          <thead>
+            <tr><th>时间</th><th>来源</th><th>类型</th><th>窗口/目标</th><th>状态</th><th>详情</th></tr>
+          </thead>
+          <tbody id="timelineBody"><tr><td colspan="6" class="small">加载中...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h3 style="margin:0">24小时的预计推送时间表</h3>
+          <div class="small">列出未来 24 小时内的抓取与推送计划，方便查看更长的未来安排。</div>
+        </div>
+        <button class="secondary" onclick="loadSchedule()">刷新</button>
+      </div>
+      <div class="table-scroll">
+        <table class="history-table">
+          <colgroup>
+            <col style="width:18%">
+            <col style="width:18%">
+            <col style="width:12%">
+            <col style="width:12%">
+            <col style="width:40%">
+          </colgroup>
+          <thead>
+            <tr><th>预计推送时间</th><th>预计抓取时间</th><th>时段</th><th>频率</th><th>说明</th></tr>
+          </thead>
+          <tbody id="scheduleBody"><tr><td colspan="5" class="small">加载中...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
-let users=[];
-let hasAdmin=false;
+let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawWorkInterval={{.NotifyWorkIntervalMin}},rawOffInterval={{.NotifyOffIntervalMin}},rawWorkExpr={{printf "%q" .WorkTimeExpr}},rawEnabled={{.NotifyEnabled}},tokenDirty=false,channelDirty=false;
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
-function applyAdminVisibility(){hasAdmin=(users||[]).some(u=>!!u.is_admin);document.querySelectorAll('.admin-only').forEach(el=>{el.style.display=hasAdmin?'':'none';});const st=document.getElementById('adminState');if(st){st.textContent=hasAdmin?'管理员模式：显示全部菜单':'仅用户管理';}}
-function renderUsers(){const tb=document.getElementById('userBody');if(!tb)return;tb.innerHTML='';if(!Array.isArray(users)||!users.length){tb.innerHTML='<tr><td colspan="3">暂无邮箱配置</td></tr>';applyAdminVisibility();return;}for(let i=0;i<users.length;i++){const u=users[i];const email=(u.email||'').trim();const checked=!!u.is_admin;tb.insertAdjacentHTML('beforeend','<tr data-index="'+i+'"><td><input class="email-input" data-index="'+i+'" value="'+escapeHtml(email)+'" placeholder="name@example.com"></td><td><input type="checkbox" class="admin-input" data-index="'+i+'" '+(checked?'checked':'')+'></td><td><button class="btn secondary" onclick="removeRow('+i+')">删除</button></td></tr>');}applyAdminVisibility();}
-function escapeHtml(v){return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
-function collectUsers(){const out=[];const rows=document.querySelectorAll('#userBody tr');for(const r of rows){const email=((r.querySelector('.email-input')||{}).value||'').trim();if(!email)continue;const isAdmin=!!((r.querySelector('.admin-input')||{}).checked);out.push({email:email.toLowerCase(),is_admin:isAdmin});}return out;}
-function syncFromInputs(){users=collectUsers();applyAdminVisibility();}
-function addRow(){users.push({email:'',is_admin:false});renderUsers();}
-function removeRow(i){if(!Array.isArray(users)||i<0||i>=users.length)return;users.splice(i,1);renderUsers();}
-async function loadUsers(){try{const r=await fetch('/api/users');const d=await r.json();users=Array.isArray(d.users)?d.users:[];}catch(_){users=[];}renderUsers();}
-async function saveUsers(){const msg=document.getElementById('msg');const payload={users:collectUsers()};try{const r=await fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!r.ok){if(msg)msg.textContent='保存失败';return;}const d=await r.json();users=Array.isArray(d.users)?d.users:payload.users;renderUsers();if(msg)msg.textContent='保存成功';}catch(_){if(msg)msg.textContent='保存失败';}}
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+function maskInput(v){v=String(v||'');if(!v)return '';if(v.length<=8)return '*'.repeat(v.length);return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}
+function syncInputs(){const t=document.getElementById('token'),c=document.getElementById('channel'),w=document.getElementById('notify-work-interval'),o=document.getElementById('notify-off-interval'),x=document.getElementById('work-time-expr'),e=document.getElementById('notify-enabled');if(!tokenDirty){t.value='';t.placeholder=rawToken?maskInput(rawToken):'123456:ABC...';}if(!channelDirty){c.value='';c.placeholder=rawChannel?maskInput(rawChannel):'@mychannel 或 -100123456789';}w.value=rawWorkInterval||rawInterval||15;o.value=rawOffInterval||rawWorkInterval||rawInterval||15;x.value=rawWorkExpr||'';e.checked=!!rawEnabled;}
+function currentValue(i,raw){const next=String((i&&i.value)||'').trim();return next!==''?next:raw;}
+function intValue(id,fallback){const el=document.getElementById(id);const raw=String((el&&el.value)||'').trim();const v=Number(raw);return Number.isFinite(v)&&v>0?Math.floor(v):fallback;}
+function fmtHistoryTime(ts){if(!ts)return '-';return new Date(ts).toLocaleString('zh-CN',{hour12:false});}
+function esc(v){return String(v||'').replace(/[&<>"]/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[s]));}
+function sendModeLabel(v){if(v==='test')return '测试';if(v==='auto')return '自动';if(v==='manual')return '手动';return String(v||'-');}
+function sourceLabel(v){if(v==='channel')return '消息通道';if(v==='webdatasource')return '页面数据源';return String(v||'-');}
+function typeLabel(v){if(v==='push')return '推送';if(v==='capture')return '抓取';return String(v||'-');}
+function periodLabel(v){if(v==='work-hours')return '工作时间';if(v==='off-hours')return '非工作时间';return String(v||'-');}
+
+document.getElementById('token').addEventListener('input',()=>{tokenDirty=true;});
+document.getElementById('channel').addEventListener('input',()=>{channelDirty=true;});
+syncInputs();
+initTheme();
+
+async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束，但状态未知，请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
-async function doRestart(event){if(event)event.preventDefault();const btn=event&&event.currentTarget;if(!hasAdmin)return false;if(btn)btn.textContent='重启中...';try{const r=await fetch('/api/upgrade/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});if(r.ok){const msg=document.getElementById('msg');if(msg)msg.textContent='已触发服务重启';}else{const msg=document.getElementById('msg');if(msg)msg.textContent='重启触发失败';}}finally{if(btn)btn.textContent='程序重启';}return false;}
-document.addEventListener('input',e=>{if(e.target&&e.target.classList&&(e.target.classList.contains('email-input')||e.target.classList.contains('admin-input'))){syncFromInputs();}});
-document.addEventListener('change',e=>{if(e.target&&e.target.classList&&e.target.classList.contains('admin-input')){syncFromInputs();}});
-initTheme();loadUsers();
-(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+
+async function loadHistory(){const body=document.getElementById('historyBody');if(!body)return;const rows=await fetch('/api/channel/history?limit=15').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="5" class="small">暂无最近历史发送记录</td></tr>';return;}body.innerHTML=rows.map(it=>'<tr><td>'+fmtHistoryTime(it.sent_at)+'</td><td>'+sendModeLabel(it.send_mode)+'</td><td>第'+Number(it.group_index||0)+'组 / '+esc(it.group_name||'-')+'</td><td class="'+(String(it.status||'').toLowerCase()==='success'?'ok':'fail')+'">'+(String(it.status||'').toLowerCase()==='success'?'成功':'失败')+'</td><td>'+esc(it.error_text||'-')+'</td></tr>').join('');}
+async function loadTimeline(){const body=document.getElementById('timelineBody');if(!body)return;const rows=await fetch('/api/channel/timeline?hours=24&limit=24').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="6" class="small">近 24 小时暂无抓取记录</td></tr>';return;}body.innerHTML=rows.map(it=>{const status=String(it.status||'').toLowerCase();const statusCls=status==='success'?'ok':(status==='failed'?'fail':'');const target=it.target||it.window||'-';const detail=[it.records?('记录数 '+Number(it.records)):'',it.detail||''].filter(Boolean).join(' | ');return '<tr><td>'+fmtHistoryTime(it.ts)+'</td><td>'+esc(sourceLabel(it.source||'-'))+'</td><td>'+esc(typeLabel(it.type||'-'))+'</td><td>'+esc(target)+'</td><td class="'+statusCls+'">'+esc(it.status||'-')+'</td><td>'+esc(detail||'-')+'</td></tr>';}).join('');}
+async function loadSchedule(){const body=document.getElementById('scheduleBody');if(!body)return;const rows=await fetch('/api/channel/schedule?hours=24').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="5" class="small">'+(rawEnabled?'未来 24 小时暂无预计推送项目':'自动通知未开启，暂无未来推送计划')+'</td></tr>';return;}body.innerHTML=rows.map(it=>'<tr><td>'+fmtHistoryTime(it.push_ts)+'</td><td>'+fmtHistoryTime(it.capture_ts)+'</td><td>'+esc(periodLabel(it.period||'-'))+'</td><td>'+(Number(it.interval_min||0)>0?(Number(it.interval_min)+' 分钟'):'-')+'</td><td>'+esc(it.detail||'-')+'</td></tr>').join('');}
+async function save(){const msg=document.getElementById('msg');msg.textContent='正在保存...';const workInterval=intValue('notify-work-interval',rawWorkInterval||rawInterval||15);const offInterval=intValue('notify-off-interval',rawOffInterval||workInterval);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken),telegram_channel:currentValue(document.getElementById('channel'),rawChannel),notify_interval_min:workInterval,notify_work_interval_min:workInterval,notify_off_interval_min:offInterval,work_time_expr:String((document.getElementById('work-time-expr').value||'').trim()),notify_enabled:document.getElementById('notify-enabled').checked};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;tokenDirty=false;channelDirty=false;syncInputs();await loadSchedule();msg.textContent='保存成功';return;}msg.textContent='保存失败: '+await r.text();}
+async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='正在发送测试消息...';const r=await fetch('/api/channel/test',{method:'POST'});msg.textContent=r.ok?'测试发送成功':'测试发送失败: '+await r.text();await loadHistory();}
+
+window.addEventListener('load',async()=>{await loadFooter();await loadHistory();await loadTimeline();await loadSchedule();});
+</script>
+<div id="upgradeModal" class="upgrade-modal">
+  <div class="upgrade-card">
+    <div class="upgrade-head">
+      <div class="upgrade-title">升级过程</div>
+      <button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button>
+    </div>
+    <pre id="upgradeLog" class="upgrade-log"></pre>
+    <div id="upgradeFoot" class="upgrade-foot">等待开始...</div>
+  </div>
+</div>
+<div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
+</body>
+</html>`
 
 const configHTMLLegacy = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>模型配置</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>妯″瀷閰嶇疆</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{max-width:900px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}label{display:block;margin-top:12px;font-size:13px;color:#334155}input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}.small{font-size:12px;color:#64748b}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config" class="active">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><h2 style="margin-top:0">模型配置</h2><div class="small">修改模型参数以调整清算热区与强平清算计算。</div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">娓呯畻鐑尯</a><a href="/config" class="active">妯″瀷閰嶇疆</a><a href="/monitor">闆峰尯鐩戞帶</a><a href="/map">鐩樺彛姹囨€?/a><a href="/liquidations">寮哄钩娓呯畻</a><a href="/bubbles">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel">娑堟伅閫氶亾</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="wrap"><div class="panel"><h2 style="margin-top:0">妯″瀷閰嶇疆</h2><div class="small">淇敼妯″瀷鍙傛暟浠ヨ皟鏁存竻绠楃儹鍖轰笌寮哄钩娓呯畻璁＄畻銆?/div>
 <label>lookback_min<input id="lookback_min" type="number" min="60" max="1440" step="1"></label>
 <label>bucket_min<input id="bucket_min" type="number" min="1" max="30" step="1"></label>
 <label>price_step<input id="price_step" type="number" min="1" max="50" step="0.1"></label>
 <label>price_range<input id="price_range" type="number" min="100" max="1000" step="1"></label>
-<div class="row" style="margin-top:16px"><button class="btn" onclick="save()">保存</button><span id="msg" class="small"></span></div>
+<div class="row" style="margin-top:16px"><button class="btn" onclick="save()">淇濆瓨</button><span id="msg" class="small"></span></div>
 </div></div>
 <script>
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 function val(id){return Number((document.getElementById(id).value||'').trim())}
 async function load(){const r=await fetch('/api/model-config');const d=await r.json();document.getElementById('lookback_min').value=d.lookback_min;document.getElementById('bucket_min').value=d.bucket_min;document.getElementById('price_step').value=d.price_step;document.getElementById('price_range').value=d.price_range;}
-async function save(){const body={lookback_min:val('lookback_min'),bucket_min:val('bucket_min'),price_step:val('price_step'),price_range:val('price_range')};const r=await fetch('/api/model-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('msg').textContent=r.ok?'保存成功':'保存失败';if(r.ok)load();}
+async function save(){const body={lookback_min:val('lookback_min'),bucket_min:val('bucket_min'),price_step:val('price_step'),price_range:val('price_range')};const r=await fetch('/api/model-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('msg').textContent=r.ok?'淇濆瓨鎴愬姛':'淇濆瓨澶辫触';if(r.ok)load();}
 (async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();load();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
 const liquidationsHTML = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>强平清算</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>寮哄钩娓呯畻</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{max-width:1200px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:center;font-size:13px}.row{display:flex;gap:8px;align-items:center}.btn{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:8px 12px;border-radius:8px;cursor:pointer}.btn.primary{background:#22c55e;color:#fff;border-color:#22c55e}.small{font-size:12px;color:#64748b}[data-theme="dark"] body{background:#000;color:#e5e7eb}[data-theme="dark"] .nav{background:#000;border-bottom-color:#111827}[data-theme="dark"] .panel{background:#000;border-color:#1f2937}[data-theme="dark"] .small{color:#94a3b8}[data-theme="dark"] th,[data-theme="dark"] td{border-bottom-color:#1f2937}[data-theme="dark"] .btn{background:#000;color:#e5e7eb;border-color:#334155}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations" class="active">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><div class="row" style="justify-content:space-between"><h2 style="margin:0">ETH 强平清算（Binance / Bybit / OKX）</h2><div class="row"><button id="filterBtn" class="btn" onclick="toggleFilter()">过滤小单</button><button class="btn" onclick="prev()">上一页</button><button class="btn" onclick="next()">下一页</button><button class="btn primary" onclick="load()">刷新</button></div></div><div id="meta" class="small" style="margin:8px 0 10px 0"></div><div id="table"></div></div></div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">娓呯畻鐑尯</a><a href="/config">妯″瀷閰嶇疆</a><a href="/monitor">闆峰尯鐩戞帶</a><a href="/map">鐩樺彛姹囨€?/a><a href="/liquidations" class="active">寮哄钩娓呯畻</a><a href="/bubbles">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel">娑堟伅閫氶亾</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">涓婚</button><button id="themeDark" onclick="setTheme('dark')">娣辫壊</button><button id="themeLight" onclick="setTheme('light')">娴呰壊</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="wrap"><div class="panel"><div class="row" style="justify-content:space-between"><h2 style="margin:0">ETH 寮哄钩娓呯畻锛圔inance / Bybit / OKX锛?/h2><div class="row"><button id="filterBtn" class="btn" onclick="toggleFilter()">杩囨护灏忓崟</button><button class="btn" onclick="prev()">涓婁竴椤?/button><button class="btn" onclick="next()">涓嬩竴椤?/button><button class="btn primary" onclick="load()">鍒锋柊</button></div></div><div id="meta" class="small" style="margin:8px 0 10px 0"></div><div id="table"></div></div></div>
 <script>
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
@@ -7138,22 +7484,22 @@ function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDig
 function fmtQty(n){return Number(n).toLocaleString('zh-CN',{maximumFractionDigits:4})}
 function fmtAmt(n){n=Number(n);if(!isFinite(n))return '-';return n.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function fmtTime(ts){try{return new Date(Number(ts||0)).toLocaleString('zh-CN',{hour12:false});}catch(_){return '-';}}
-function render(rows){if(!rows||!rows.length){document.getElementById('table').innerHTML='<div class="small">暂无数据</div>';return;}let h='<table><thead><tr><th>时间</th><th>交易所</th><th>方向</th><th>价格</th><th>数量</th><th>金额 (USD)</th></tr></thead><tbody>';for(const r of rows){h+='<tr><td>'+fmtTime(r.event_ts)+'</td><td>'+String(r.exchange||'').toUpperCase()+'</td><td>'+r.side+'</td><td>'+fmtPrice(r.price)+'</td><td>'+fmtQty(r.qty)+'</td><td>'+fmtAmt(r.notional_usd)+'</td></tr>';}h+='</tbody></table>';document.getElementById('table').innerHTML=h;}
-function toggleFilter(){filterSmall=!filterSmall;const b=document.getElementById('filterBtn');if(b)b.textContent=filterSmall?'显示全部':'过滤小单';load();}
-async function load(){const r=await fetch('/api/liquidations?page='+page+'&limit='+pageSize);const d=await r.json();let rows=(d.rows||[]);if(filterSmall)rows=rows.filter(x=>Number(x.qty||0)>=1);document.getElementById('meta').textContent='第 '+d.page+' 页 | 每页 '+d.page_size+' 条'+(filterSmall?' | 已过滤小于 1 ETH 的记录':'');render(rows);}
+function render(rows){if(!rows||!rows.length){document.getElementById('table').innerHTML='<div class="small">鏆傛棤鏁版嵁</div>';return;}let h='<table><thead><tr><th>鏃堕棿</th><th>浜ゆ槗鎵€</th><th>鏂瑰悜</th><th>浠锋牸</th><th>鏁伴噺</th><th>閲戦 (USD)</th></tr></thead><tbody>';for(const r of rows){h+='<tr><td>'+fmtTime(r.event_ts)+'</td><td>'+String(r.exchange||'').toUpperCase()+'</td><td>'+r.side+'</td><td>'+fmtPrice(r.price)+'</td><td>'+fmtQty(r.qty)+'</td><td>'+fmtAmt(r.notional_usd)+'</td></tr>';}h+='</tbody></table>';document.getElementById('table').innerHTML=h;}
+function toggleFilter(){filterSmall=!filterSmall;const b=document.getElementById('filterBtn');if(b)b.textContent=filterSmall?'鏄剧ず鍏ㄩ儴':'杩囨护灏忓崟';load();}
+async function load(){const r=await fetch('/api/liquidations?page='+page+'&limit='+pageSize);const d=await r.json();let rows=(d.rows||[]);if(filterSmall)rows=rows.filter(x=>Number(x.qty||0)>=1);document.getElementById('meta').textContent='绗?'+d.page+' 椤?| 姣忛〉 '+d.page_size+' 鏉?+(filterSmall?' | 宸茶繃婊ゅ皬浜?1 ETH 鐨勮褰?:'');render(rows);}
 function prev(){if(page>1){page--;load();}}
 function next(){page++;load();}
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 initTheme();setInterval(load,5000);load();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
 const bubblesHTML = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>气泡图</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>姘旀场鍥?/title>
 <style>:root{--bg:#f5f7fb;--text:#1f2937;--muted:#64748b;--nav-bg:#0b1220;--nav-border:#243145;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#fff;--panel-border:#dce3ec;--ctl-bg:#fff;--ctl-text:#111827;--ctl-border:#cbd5e1;--chart-border:#e5e7eb}[data-theme="dark"]{--bg:#000;--text:#e5e7eb;--muted:#94a3b8;--nav-bg:#000;--nav-border:#111827;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#000;--panel-border:#1f2937;--ctl-bg:#000;--ctl-text:#e5e7eb;--ctl-border:#334155;--chart-border:#1f2937}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:var(--nav-bg);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:14px}.brand{font-size:18px;font-weight:700;color:var(--nav-text)}.menu a{color:var(--link);text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{width:100%;max-width:none;margin:0 auto;padding:14px;box-sizing:border-box}.panel{border:1px solid var(--panel-border);background:var(--panel-bg);margin:10px 0;padding:12px;border-radius:10px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.small{font-size:12px;color:var(--muted)}select,button,input{height:34px;border:1px solid var(--ctl-border);border-radius:8px;background:var(--ctl-bg);color:var(--ctl-text);padding:0 10px}input{width:96px}button{cursor:pointer}.btn-applied{background:#0f172a;color:#eef3f9;border-color:#0f172a}.chart{width:100%;height:682px;border:1px solid var(--chart-border);border-radius:8px;background:var(--panel-bg);display:block}.chart-wrap{position:relative}.legend{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:8px}.tag{display:inline-flex;align-items:center;gap:6px}.dot{width:10px;height:10px;border-radius:999px;display:inline-block}.bubble-tip{position:absolute;display:none;min-width:180px;max-width:260px;background:rgba(15,23,42,.96);color:#e2e8f0;border:1px solid rgba(148,163,184,.25);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.5;box-shadow:0 10px 28px rgba(2,6,23,.35);pointer-events:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:var(--nav-text);cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:var(--muted);text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles" class="active">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><div class="row"><span>周期</span><select id="iv"><option value="1m">1M</option><option value="2m">2M</option><option value="5m">5M</option><option value="10m">10M</option><option value="15m">15M</option><option value="30m">30M</option><option value="1h">1H</option><option value="4h">4H</option><option value="8h">8H</option><option value="12h">12H</option><option value="1d">1D</option><option value="3d">3D</option><option value="7d" selected>7D</option></select><button onclick="load()">刷新</button><span class="small">过滤小单 ETH 数量</span><input id="qtyFilter" type="number" min="0" step="0.1" value="50"><button id="filterBtn" onclick="applyQtyFilter()">应用过滤</button><label class="small" style="display:inline-flex;align-items:center;gap:6px;margin-left:6px"><input id="hist" type="checkbox">历史</label><button id="moreBtn" style="display:none" onclick="loadMoreHistory()">向左加载</button><span id="meta" class="small"></span></div><div class="chart-wrap"><canvas id="cv" class="chart" width="1600" height="620"></canvas><div id="bubbleTip" class="bubble-tip"></div></div><div class="legend small"><div>气泡大小代表清算金额，颜色代表多空方向。滚轮缩放（默认以最右侧K线为锚点），按住鼠标左键左右拖动。</div><div class="tag"><span class="dot" style="background:#dc2626"></span><span>红色=多单爆仓</span><span class="dot" style="margin-left:10px;background:#16a34a"></span><span>绿色=空单爆仓</span></div></div></div></div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">娓呯畻鐑尯</a><a href="/config">妯″瀷閰嶇疆</a><a href="/monitor">闆峰尯鐩戞帶</a><a href="/map">鐩樺彛姹囨€?/a><a href="/liquidations">寮哄钩娓呯畻</a><a href="/bubbles" class="active">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel">娑堟伅閫氶亾</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">涓婚</button><button id="themeDark" onclick="setTheme('dark')">娣辫壊</button><button id="themeLight" onclick="setTheme('light')">娴呰壊</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="wrap"><div class="panel"><div class="row"><span>鍛ㄦ湡</span><select id="iv"><option value="1m">1M</option><option value="2m">2M</option><option value="5m">5M</option><option value="10m">10M</option><option value="15m">15M</option><option value="30m">30M</option><option value="1h">1H</option><option value="4h">4H</option><option value="8h">8H</option><option value="12h">12H</option><option value="1d">1D</option><option value="3d">3D</option><option value="7d" selected>7D</option></select><button onclick="load()">鍒锋柊</button><span class="small">杩囨护灏忓崟 ETH 鏁伴噺</span><input id="qtyFilter" type="number" min="0" step="0.1" value="50"><button id="filterBtn" onclick="applyQtyFilter()">搴旂敤杩囨护</button><label class="small" style="display:inline-flex;align-items:center;gap:6px;margin-left:6px"><input id="hist" type="checkbox">鍘嗗彶</label><button id="moreBtn" style="display:none" onclick="loadMoreHistory()">鍚戝乏鍔犺浇</button><span id="meta" class="small"></span></div><div class="chart-wrap"><canvas id="cv" class="chart" width="1600" height="620"></canvas><div id="bubbleTip" class="bubble-tip"></div></div><div class="legend small"><div>姘旀场澶у皬浠ｈ〃娓呯畻閲戦锛岄鑹蹭唬琛ㄥ绌烘柟鍚戙€傛粴杞缉鏀撅紙榛樿浠ユ渶鍙充晶K绾夸负閿氱偣锛夛紝鎸変綇榧犳爣宸﹂敭宸﹀彸鎷栧姩銆?/div><div class="tag"><span class="dot" style="background:#dc2626"></span><span>绾㈣壊=澶氬崟鐖嗕粨</span><span class="dot" style="margin-left:10px;background:#16a34a"></span><span>缁胯壊=绌哄崟鐖嗕粨</span></div></div></div></div>
 <script>
 let candles=[],events=[],viewStart=0,viewCount=120,drag=false,lastX=0,intervalMs=0,latestStart=0,qtyFilter=50,filterApplied=false,bubbleHoverMeta=[],klineSource='-';
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
@@ -7165,7 +7511,7 @@ function mapInterval(v){if(v==='10m')return '5m';if(v==='7d')return '1w';return 
 function visibleEvents(){return (events||[]).filter(ev=>toNum(ev.qty)>=qtyFilter);}
 function syncFilterBtn(){const btn=document.getElementById('filterBtn');if(btn)btn.classList.toggle('btn-applied',!!filterApplied);}
 function applyQtyFilter(){const input=document.getElementById('qtyFilter');qtyFilter=Math.max(0,toNum(input&&input.value));if(input)input.value=String(qtyFilter);filterApplied=true;syncFilterBtn();draw();updateMeta();}
-function updateMeta(){const meta=document.getElementById('meta');if(!meta)return;meta.textContent='K线来源: '+(klineSource||((document.getElementById('iv')&&document.getElementById('iv').value)||'-'))+' | 区间清算事件 '+visibleEvents().length+' 条 | 已过滤小于 '+qtyFilter+' ETH';}
+function updateMeta(){const meta=document.getElementById('meta');if(!meta)return;meta.textContent='K绾挎潵婧? '+(klineSource||((document.getElementById('iv')&&document.getElementById('iv').value)||'-'))+' | 鍖洪棿娓呯畻浜嬩欢 '+visibleEvents().length+' 鏉?| 宸茶繃婊ゅ皬浜?'+qtyFilter+' ETH';}
 function drawMessage(msg){const v=fit(),x=v.x,W=v.w,H=v.h;x.clearRect(0,0,W,H);x.fillStyle=cssVar('--panel-bg','#fff');x.fillRect(0,0,W,H);x.fillStyle=cssVar('--muted','#64748b');x.font='14px sans-serif';x.fillText(msg,16,26);}
 function fmtAmt(n){n=toNum(n);if(!isFinite(n))return '-';return n.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function fmtQty(n){return toNum(n).toLocaleString('zh-CN',{maximumFractionDigits:4});}
@@ -7176,12 +7522,12 @@ function showBubbleTip(hit,ev){
   const tip=document.getElementById('bubbleTip');
   const wrap=document.querySelector('.chart-wrap');
   if(!tip||!wrap||!hit)return;
-  tip.innerHTML='<div><strong>'+(String(hit.side)==='long'?'多单爆仓':'空单爆仓')+'</strong></div>'+
-    '<div>交易所: '+String(hit.exchange||'-').toUpperCase()+'</div>'+
-    '<div>价格: '+fmtPrice(hit.price)+'</div>'+
-    '<div>时间: '+fmtTime(hit.event_ts)+'</div>'+
-    '<div>数量: '+fmtQty(hit.qty)+' ETH</div>'+
-    '<div>金额: '+fmtAmt(hit.notional_usd)+' USD</div>';
+  tip.innerHTML='<div><strong>'+(String(hit.side)==='long'?'澶氬崟鐖嗕粨':'绌哄崟鐖嗕粨')+'</strong></div>'+
+    '<div>浜ゆ槗鎵€: '+String(hit.exchange||'-').toUpperCase()+'</div>'+
+    '<div>浠锋牸: '+fmtPrice(hit.price)+'</div>'+
+    '<div>鏃堕棿: '+fmtTime(hit.event_ts)+'</div>'+
+    '<div>鏁伴噺: '+fmtQty(hit.qty)+' ETH</div>'+
+    '<div>閲戦: '+fmtAmt(hit.notional_usd)+' USD</div>';
   tip.style.display='block';
   const wr=wrap.getBoundingClientRect();
   let left=(ev.clientX-wr.left)+14,top=(ev.clientY-wr.top)+14;
@@ -7193,7 +7539,7 @@ function showBubbleTip(hit,ev){
 }
 function parseRows(rows,interval){let cs=(rows||[]).map(r=>({t:toNum(r[0]),o:toNum(r[1]),h:toNum(r[2]),l:toNum(r[3]),c:toNum(r[4])}));if(interval==='2m'){const out=[];for(let i=0;i+1<cs.length;i+=2){const a=cs[i],b=cs[i+1];out.push({t:a.t,o:a.o,h:Math.max(a.h,b.h),l:Math.min(a.l,b.l),c:b.c});}cs=out;}if(interval==='10m'){const out=[];for(let i=0;i+1<cs.length;i+=2){const a=cs[i],b=cs[i+1];out.push({t:a.t,o:a.o,h:Math.max(a.h,b.h),l:Math.min(a.l,b.l),c:b.c});}cs=out;}if(interval==='7d'){const out=[];for(let i=0;i+6<cs.length;i+=7){const a=cs[i],g=cs.slice(i,i+7),z=g[g.length-1];out.push({t:a.t,o:a.o,h:Math.max(...g.map(v=>v.h)),l:Math.min(...g.map(v=>v.l)),c:z.c});}cs=out;}return cs;}
 function cssVar(name,fallback){try{const v=getComputedStyle(document.documentElement).getPropertyValue(name).trim();return v||fallback;}catch(_){return fallback;}}
-function draw(){const v=fit(),x=v.x,W=v.w,H=v.h,padL=70,padR=20,padT=18,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;x.clearRect(0,0,W,H);bubbleHoverMeta=[];hideBubbleTip();const bg=cssVar('--panel-bg','#fff');const muted=cssVar('--muted','#64748b');const grid=cssVar('--chart-border','#e5e7eb');x.fillStyle=bg;x.fillRect(0,0,W,H);if(!candles.length){x.fillStyle=muted;x.fillText('暂无数据',16,24);return;}const s=Math.max(0,Math.min(candles.length-1,viewStart)),e=Math.max(s+10,Math.min(candles.length,s+viewCount));const cs=candles.slice(s,e);const minP=Math.min(...cs.map(v=>v.l)),maxP=Math.max(...cs.map(v=>v.h));const span=Math.max(1e-6,maxP-minP);const sx=i=>padL+(i/(cs.length-1))*pw,sy=p=>padT+((maxP-p)/span)*ph;x.strokeStyle=grid;x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*i/4,val=maxP-(span*i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle=muted;x.fillText(val.toFixed(1),6,y+4);}const bodyW=Math.max(3,Math.min(12,pw/Math.max(20,cs.length)));for(let i=0;i<cs.length;i++){const c=cs[i],px=sx(i),yo=sy(c.o),yc=sy(c.c),yh=sy(c.h),yl=sy(c.l),up=c.c>=c.o;x.strokeStyle=up?'#16a34a':'#dc2626';x.beginPath();x.moveTo(px,yh);x.lineTo(px,yl);x.stroke();x.fillStyle=up?'rgba(22,163,74,0.75)':'rgba(220,38,38,0.75)';x.fillRect(px-bodyW/2,Math.min(yo,yc),bodyW,Math.max(1,Math.abs(yc-yo)));}
+function draw(){const v=fit(),x=v.x,W=v.w,H=v.h,padL=70,padR=20,padT=18,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;x.clearRect(0,0,W,H);bubbleHoverMeta=[];hideBubbleTip();const bg=cssVar('--panel-bg','#fff');const muted=cssVar('--muted','#64748b');const grid=cssVar('--chart-border','#e5e7eb');x.fillStyle=bg;x.fillRect(0,0,W,H);if(!candles.length){x.fillStyle=muted;x.fillText('鏆傛棤鏁版嵁',16,24);return;}const s=Math.max(0,Math.min(candles.length-1,viewStart)),e=Math.max(s+10,Math.min(candles.length,s+viewCount));const cs=candles.slice(s,e);const minP=Math.min(...cs.map(v=>v.l)),maxP=Math.max(...cs.map(v=>v.h));const span=Math.max(1e-6,maxP-minP);const sx=i=>padL+(i/(cs.length-1))*pw,sy=p=>padT+((maxP-p)/span)*ph;x.strokeStyle=grid;x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*i/4,val=maxP-(span*i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle=muted;x.fillText(val.toFixed(1),6,y+4);}const bodyW=Math.max(3,Math.min(12,pw/Math.max(20,cs.length)));for(let i=0;i<cs.length;i++){const c=cs[i],px=sx(i),yo=sy(c.o),yc=sy(c.c),yh=sy(c.h),yl=sy(c.l),up=c.c>=c.o;x.strokeStyle=up?'#16a34a':'#dc2626';x.beginPath();x.moveTo(px,yh);x.lineTo(px,yl);x.stroke();x.fillStyle=up?'rgba(22,163,74,0.75)':'rgba(220,38,38,0.75)';x.fillRect(px-bodyW/2,Math.min(yo,yc),bodyW,Math.max(1,Math.abs(yc-yo)));}
 function upperBound(arr,x){let lo=0,hi=arr.length;while(lo<hi){const mid=(lo+hi)>>1;if(arr[mid]<=x)lo=mid+1;else hi=mid;}return lo;}
 const t0=cs[0].t,t1=cs[cs.length-1].t;
 const spanMs=(intervalMs>0?intervalMs:intervalToMs(document.getElementById('iv').value||''))||0;
@@ -7226,51 +7572,51 @@ x.fillStyle=muted;for(let i=0;i<=6;i++){const k=Math.floor((cs.length-1)*i/6),px
 function uniqByT(list){const out=[];const seen=new Set();for(const it of (list||[])){const t=toNum(it.t);if(!t||seen.has(t))continue;seen.add(t);out.push(it);}out.sort((a,b)=>a.t-b.t);return out;}
 function mergeEvents(a,b){const out=[];const key=(e)=>String(toNum(e.event_ts))+'|'+String(e.exchange||'')+'|'+String(e.side||'')+'|'+String(toNum(e.price))+'|'+String(toNum(e.qty));const seen=new Set();for(const it of (a||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}for(const it of (b||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}out.sort((x,y)=>toNum(x.event_ts)-toNum(y.event_ts));return out;}
 function setMoreBtnVisible(){const cb=document.getElementById('hist');const b=document.getElementById('moreBtn');if(!cb||!b)return;b.style.display=cb.checked?'inline-block':'none';}
-async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');if(!kr.ok){const msg='K线加载失败: '+await kr.text();candles=[];events=[];klineSource='-';updateMeta();drawMessage(msg);return;}const kd=await kr.json();klineSource=kd.source||iv;candles=uniqByT(parseRows(kd.rows||[],iv));if(!candles.length){events=[];updateMeta();drawMessage('K线加载失败: 返回数据为空');return;}intervalMs=(candles.length>=2)?Math.max(0,toNum(candles[candles.length-1].t)-toNum(candles[candles.length-2].t)):intervalToMs(iv);if(!(intervalMs>0))intervalMs=intervalToMs(iv);latestStart=candles.length?toNum(candles[candles.length-1].t):0;events=[];if(candles.length){const startTS=toNum(candles[0].t);const endTS=latestStart+(intervalMs>0?intervalMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];}viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);setMoreBtnVisible();updateMeta();draw();}
-async function loadMoreHistory(){const cb=document.getElementById('hist');if(!cb||!cb.checked)return;if(!candles.length)return;const iv=document.getElementById('iv').value;const endTS=Math.max(0,toNum(candles[0].t)-1);const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500&end_ts='+encodeURIComponent(endTS));if(!kr.ok){document.getElementById('meta').textContent='历史K线加载失败: '+await kr.text();return;}const kd=await kr.json();klineSource=kd.source||klineSource;const more=uniqByT(parseRows(kd.rows||[],iv));if(!more.length){document.getElementById('meta').textContent='没有更多历史K线';return;}const added=more.filter(x=>toNum(x.t)<toNum(candles[0].t));if(!added.length){document.getElementById('meta').textContent='没有更多历史K线';return;}candles=uniqByT(added.concat(candles));const spanMs=(intervalMs>0?intervalMs:intervalToMs(iv));const startTS=toNum(added[0].t),endTS2=toNum(added[added.length-1].t)+(spanMs>0?spanMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS2));const ed=await er.json();events=mergeEvents(ed.rows||[],events);viewStart=Math.max(0,viewStart+added.length);updateMeta();draw();}
+async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');if(!kr.ok){const msg='K绾垮姞杞藉け璐? '+await kr.text();candles=[];events=[];klineSource='-';updateMeta();drawMessage(msg);return;}const kd=await kr.json();klineSource=kd.source||iv;candles=uniqByT(parseRows(kd.rows||[],iv));if(!candles.length){events=[];updateMeta();drawMessage('K绾垮姞杞藉け璐? 杩斿洖鏁版嵁涓虹┖');return;}intervalMs=(candles.length>=2)?Math.max(0,toNum(candles[candles.length-1].t)-toNum(candles[candles.length-2].t)):intervalToMs(iv);if(!(intervalMs>0))intervalMs=intervalToMs(iv);latestStart=candles.length?toNum(candles[candles.length-1].t):0;events=[];if(candles.length){const startTS=toNum(candles[0].t);const endTS=latestStart+(intervalMs>0?intervalMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];}viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);setMoreBtnVisible();updateMeta();draw();}
+async function loadMoreHistory(){const cb=document.getElementById('hist');if(!cb||!cb.checked)return;if(!candles.length)return;const iv=document.getElementById('iv').value;const endTS=Math.max(0,toNum(candles[0].t)-1);const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500&end_ts='+encodeURIComponent(endTS));if(!kr.ok){document.getElementById('meta').textContent='鍘嗗彶K绾垮姞杞藉け璐? '+await kr.text();return;}const kd=await kr.json();klineSource=kd.source||klineSource;const more=uniqByT(parseRows(kd.rows||[],iv));if(!more.length){document.getElementById('meta').textContent='娌℃湁鏇村鍘嗗彶K绾?;return;}const added=more.filter(x=>toNum(x.t)<toNum(candles[0].t));if(!added.length){document.getElementById('meta').textContent='娌℃湁鏇村鍘嗗彶K绾?;return;}candles=uniqByT(added.concat(candles));const spanMs=(intervalMs>0?intervalMs:intervalToMs(iv));const startTS=toNum(added[0].t),endTS2=toNum(added[added.length-1].t)+(spanMs>0?spanMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS2));const ed=await er.json();events=mergeEvents(ed.rows||[],events);viewStart=Math.max(0,viewStart+added.length);updateMeta();draw();}
 const c=document.getElementById('cv');c.addEventListener('wheel',e=>{if(!candles.length)return;e.preventDefault();const right=Math.min(candles.length,viewStart+viewCount);const factor=e.deltaY<0?0.88:1.12;const nextCount=Math.max(30,Math.min(candles.length,Math.round(viewCount*factor)));viewCount=nextCount;viewStart=Math.max(0,Math.min(candles.length-viewCount,right-viewCount));draw();},{passive:false});c.addEventListener('mousedown',e=>{drag=true;lastX=e.clientX});c.addEventListener('mousemove',e=>{const rect=c.getBoundingClientRect();const mx=e.clientX-rect.left,my=e.clientY-rect.top;let hit=null,dist=1e18;for(const it of bubbleHoverMeta){const d=Math.hypot(mx-it.px,my-it.py);if(d<=it.r+3&&d<dist){dist=d;hit=it.event;}}if(hit)showBubbleTip(hit,e);else hideBubbleTip();});c.addEventListener('mouseleave',()=>hideBubbleTip());window.addEventListener('mouseup',()=>drag=false);window.addEventListener('mousemove',e=>{if(!drag||!candles.length)return;const dx=e.clientX-lastX;lastX=e.clientX;const shift=Math.round(-dx/8);if(shift!==0){viewStart=Math.max(0,Math.min(candles.length-viewCount,viewStart+shift));draw();}});window.addEventListener('resize',()=>draw());document.getElementById('iv').addEventListener('change',load);document.getElementById('hist').addEventListener('change',setMoreBtnVisible);document.getElementById('qtyFilter').addEventListener('input',()=>{filterApplied=false;syncFilterBtn();});document.getElementById('qtyFilter').addEventListener('change',applyQtyFilter);
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 initTheme();syncFilterBtn();load();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div><script>(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();</script></body></html>`
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div><script>(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();</script></body></html>`
 const configHTML = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>模型配置</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>妯″瀷閰嶇疆</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{max-width:980px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.small{font-size:12px;color:#6b7280}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.field label{display:block;font-size:12px;color:#6b7280}.field input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.field input:disabled{background:#f1f5f9;color:#64748b;cursor:not-allowed}button.primary{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}.q{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:6px;border-radius:999px;border:1px solid #cbd5e1;color:#475569;font-size:12px;line-height:1;cursor:help;background:#fff}[data-theme="dark"] body{background:#000;color:#e5e7eb}[data-theme="dark"] .nav{background:#000;border-bottom-color:#111827}[data-theme="dark"] .panel{background:#000;border-color:#1f2937}[data-theme="dark"] .small,[data-theme="dark"] .field label{color:#94a3b8}[data-theme="dark"] .field input,[data-theme="dark"] select,[data-theme="dark"] button.secondary{background:#000;color:#e5e7eb;border-color:#334155}[data-theme="dark"] .q{background:#000;color:#cbd5e1;border-color:#334155}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config" class="active">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><h2 style="margin-top:0">清算地图模型参数</h2><div class="small">修改后立即影响 OI 增量模型的计算与展示。</div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">娓呯畻鐑尯</a><a href="/config" class="active">妯″瀷閰嶇疆</a><a href="/monitor">闆峰尯鐩戞帶</a><a href="/map">鐩樺彛姹囨€?/a><a href="/liquidations">寮哄钩娓呯畻</a><a href="/bubbles">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel">娑堟伅閫氶亾</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">涓婚</button><button id="themeDark" onclick="setTheme('dark')">娣辫壊</button><button id="themeLight" onclick="setTheme('light')">娴呰壊</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="wrap"><div class="panel"><h2 style="margin-top:0">娓呯畻鍦板浘妯″瀷鍙傛暟</h2><div class="small">淇敼鍚庣珛鍗冲奖鍝?OI 澧為噺妯″瀷鐨勮绠椾笌灞曠ず銆?/div>
 <div class="grid" style="margin-top:14px">
-  <div class="field"><label>回看窗口（天）</label><input id="lookback" type="number" min="0" max="30" step="1" disabled></div>
-  <div class="field"><label>时间桶（分钟）</label><input id="bucket" type="number" min="1" max="30" step="1"></div>
-  <div class="field"><label>价格步长</label><input id="step" type="number" min="1" max="50" step="0.5"></div>
-  <div class="field"><label>价格范围（±）</label><input id="range" type="number" min="100" max="1000" step="10"></div>
+  <div class="field"><label>鍥炵湅绐楀彛锛堝ぉ锛?/label><input id="lookback" type="number" min="0" max="30" step="1" disabled></div>
+  <div class="field"><label>鏃堕棿妗讹紙鍒嗛挓锛?/label><input id="bucket" type="number" min="1" max="30" step="1"></div>
+  <div class="field"><label>浠锋牸姝ラ暱</label><input id="step" type="number" min="1" max="50" step="0.5"></div>
+  <div class="field"><label>浠锋牸鑼冨洿锛埪憋級</label><input id="range" type="number" min="100" max="1000" step="10"></div>
   <div class="field" style="grid-column:1/-1">
-    <label>杠杆固定档位（1x / 5x / 10x / 20x / 30x / 50x / 100x）</label>
-    <div class="small" style="margin-top:6px">分别配置：权重、维护保证金率、资金费率缩放系数（与杠杆档位一一对应）。</div>
+    <label>鏉犳潌鍥哄畾妗ｄ綅锛?x / 5x / 10x / 20x / 30x / 50x / 100x锛?/label>
+    <div class="small" style="margin-top:6px">鍒嗗埆閰嶇疆锛氭潈閲嶃€佺淮鎶や繚璇侀噾鐜囥€佽祫閲戣垂鐜囩缉鏀剧郴鏁帮紙涓庢潬鏉嗘。浣嶄竴涓€瀵瑰簲锛夈€?/div>
     <div class="row" style="margin-top:10px;justify-content:space-between">
       <div class="field" style="min-width:280px">
-        <label>编辑范围（权重/mm）</label>
+        <label>缂栬緫鑼冨洿锛堟潈閲?mm锛?/label>
         <select id="ex_scope" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px">
-          <option value="global">全局</option>
+          <option value="global">鍏ㄥ眬</option>
           <option value="binance">Binance</option>
           <option value="okx">OKX</option>
           <option value="bybit">Bybit</option>
         </select>
-        <div class="small" style="margin-top:6px">提示：资金费率缩放系数仍为全局配置。</div>
+        <div class="small" style="margin-top:6px">鎻愮ず锛氳祫閲戣垂鐜囩缉鏀剧郴鏁颁粛涓哄叏灞€閰嶇疆銆?/div>
       </div>
       <div class="row" style="margin-top:18px">
         <input id="fit_hours" type="number" min="1" max="168" step="1" value="24" style="width:88px;height:34px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:0 10px">
-        <span class="small">小时</span>
+        <span class="small">灏忔椂</span>
         <input id="fit_min" type="number" min="5" max="200" step="1" value="25" style="width:76px;height:34px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:0 10px">
-        <span class="small">条</span>
-        <button class="secondary" type="button" onclick="fitScope()">拟合</button>
-        <button class="secondary" type="button" onclick="clearScope()">清空覆盖</button>
+        <span class="small">鏉?/span>
+        <button class="secondary" type="button" onclick="fitScope()">鎷熷悎</button>
+        <button class="secondary" type="button" onclick="clearScope()">娓呯┖瑕嗙洊</button>
         <span id="fitMsg" class="small"></span>
       </div>
     </div>
     <div style="overflow:auto;margin-top:10px">
       <table style="width:100%;border-collapse:collapse">
-        <thead><tr style="background:#f1f5f9"><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">杠杆</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">权重</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">维护保证金率 <span class="q" title="用途：近似交易所的维护保证金率（Maintenance Margin Ratio，记作 mm），用于计算清算价位置。mm 越大，允许的亏损越小，清算价越“靠近现价”。&#10;&#10;本模型的清算价（按标记价 mark 估算）：&#10;多单清算价（下方）：liqLong = mark * (1 - 1/lev + mm)&#10;空单清算价（上方）：liqShort = mark * (1 + 1/lev - mm)&#10;&#10;影响：&#10;- 提高 mm：多单清算价上移、空单清算价下移（两边都更贴近现价），柱子更集中；&#10;- 降低 mm：清算价更远离现价，柱子更分散。&#10;&#10;示例：mark=2250，lev=10x&#10;- mm=0.005：liqLong=2250*(1-0.1+0.005)=2021.25；liqShort=2250*(1+0.1-0.005)=2463.75&#10;- mm=0.010：liqLong=2250*(1-0.1+0.010)=2032.50；liqShort=2250*(1+0.1-0.010)=2452.50&#10;&#10;提示：目前界面允许你为每个杠杆档位单独设置 mm。">?</span></th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">资金费率缩放系数 <span class="q" title="用途：用资金费率（Funding Rate）来调整“多/空”清算强度的分配比例。&#10;&#10;公式（每个交易所、每个杠杆档位分别计算）：&#10;longShare = clamp(0.5 + funding_rate * funding_scale, 0.2, 0.8)&#10;shortShare = 1 - longShare&#10;longAmt = ΔOI * longShare * weight&#10;shortAmt = ΔOI * shortShare * weight&#10;&#10;解释：&#10;- funding_rate > 0 通常表示多头付费，模型会把更多强度分给“空单清算价（上方区域）”，因此上方柱子会变大；&#10;- funding_rate < 0 相反，会让下方柱子更大；&#10;- funding_scale 越大，偏向越强，但会被限制在 20%~80% 区间。&#10;&#10;示例：funding_rate=0.00005（5e-5）&#10;- funding_scale=4500 ⇒ longShare=0.5+0.00005*4500=0.725（72.5%/27.5%）&#10;- funding_scale=7000 ⇒ 0.85 → clamp 到 0.80（80%/20%）">?</span></th></tr></thead>
+        <thead><tr style="background:#f1f5f9"><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">鏉犳潌</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">鏉冮噸</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">缁存姢淇濊瘉閲戠巼 <span class="q" title="鐢ㄩ€旓細杩戜技浜ゆ槗鎵€鐨勭淮鎶や繚璇侀噾鐜囷紙Maintenance Margin Ratio锛岃浣?mm锛夛紝鐢ㄤ簬璁＄畻娓呯畻浠蜂綅缃€俶m 瓒婂ぇ锛屽厑璁哥殑浜忔崯瓒婂皬锛屾竻绠椾环瓒娾€滈潬杩戠幇浠封€濄€?#10;&#10;鏈ā鍨嬬殑娓呯畻浠凤紙鎸夋爣璁颁环 mark 浼扮畻锛夛細&#10;澶氬崟娓呯畻浠凤紙涓嬫柟锛夛細liqLong = mark * (1 - 1/lev + mm)&#10;绌哄崟娓呯畻浠凤紙涓婃柟锛夛細liqShort = mark * (1 + 1/lev - mm)&#10;&#10;褰卞搷锛?#10;- 鎻愰珮 mm锛氬鍗曟竻绠椾环涓婄Щ銆佺┖鍗曟竻绠椾环涓嬬Щ锛堜袱杈归兘鏇磋创杩戠幇浠凤級锛屾煴瀛愭洿闆嗕腑锛?#10;- 闄嶄綆 mm锛氭竻绠椾环鏇磋繙绂荤幇浠凤紝鏌卞瓙鏇村垎鏁ｃ€?#10;&#10;绀轰緥锛歮ark=2250锛宭ev=10x&#10;- mm=0.005锛歭iqLong=2250*(1-0.1+0.005)=2021.25锛沴iqShort=2250*(1+0.1-0.005)=2463.75&#10;- mm=0.010锛歭iqLong=2250*(1-0.1+0.010)=2032.50锛沴iqShort=2250*(1+0.1-0.010)=2452.50&#10;&#10;鎻愮ず锛氱洰鍓嶇晫闈㈠厑璁镐綘涓烘瘡涓潬鏉嗘。浣嶅崟鐙缃?mm銆?>?</span></th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">璧勯噾璐圭巼缂╂斁绯绘暟 <span class="q" title="鐢ㄩ€旓細鐢ㄨ祫閲戣垂鐜囷紙Funding Rate锛夋潵璋冩暣鈥滃/绌衡€濇竻绠楀己搴︾殑鍒嗛厤姣斾緥銆?#10;&#10;鍏紡锛堟瘡涓氦鏄撴墍銆佹瘡涓潬鏉嗘。浣嶅垎鍒绠楋級锛?#10;longShare = clamp(0.5 + funding_rate * funding_scale, 0.2, 0.8)&#10;shortShare = 1 - longShare&#10;longAmt = 螖OI * longShare * weight&#10;shortAmt = 螖OI * shortShare * weight&#10;&#10;瑙ｉ噴锛?#10;- funding_rate > 0 閫氬父琛ㄧず澶氬ご浠樿垂锛屾ā鍨嬩細鎶婃洿澶氬己搴﹀垎缁欌€滅┖鍗曟竻绠椾环锛堜笂鏂瑰尯鍩燂級鈥濓紝鍥犳涓婃柟鏌卞瓙浼氬彉澶э紱&#10;- funding_rate < 0 鐩稿弽锛屼細璁╀笅鏂规煴瀛愭洿澶э紱&#10;- funding_scale 瓒婂ぇ锛屽亸鍚戣秺寮猴紝浣嗕細琚檺鍒跺湪 20%~80% 鍖洪棿銆?#10;&#10;绀轰緥锛歠unding_rate=0.00005锛?e-5锛?#10;- funding_scale=4500 鈬?longShare=0.5+0.00005*4500=0.725锛?2.5%/27.5%锛?#10;- funding_scale=7000 鈬?0.85 鈫?clamp 鍒?0.80锛?0%/20%锛?>?</span></th></tr></thead>
         <tbody>
           <tr><td style="padding:8px;border:1px solid #e2e8f0">1x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_1" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_1" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_1" type="number" step="100"></td></tr>
           <tr><td style="padding:8px;border:1px solid #e2e8f0">5x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_5" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_5" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_5" type="number" step="100"></td></tr>
@@ -7279,16 +7625,16 @@ const configHTML = `<!doctype html>
           <tr><td style="padding:8px;border:1px solid #e2e8f0">30x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_30" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_30" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_30" type="number" step="100"></td></tr>
           <tr><td style="padding:8px;border:1px solid #e2e8f0">50x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_50" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_50" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_50" type="number" step="100"></td></tr>
           <tr><td style="padding:8px;border:1px solid #e2e8f0">100x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_100" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_100" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_100" type="number" step="100"></td></tr>
-          <tr style="background:#f8fafc"><td style="padding:8px;border:1px solid #e2e8f0;font-weight:700">合计</td><td style="padding:8px;border:1px solid #e2e8f0"><span id="w_sum" style="font-weight:700">-</span>%</td><td style="padding:8px;border:1px solid #e2e8f0"></td><td style="padding:8px;border:1px solid #e2e8f0"></td></tr>
+          <tr style="background:#f8fafc"><td style="padding:8px;border:1px solid #e2e8f0;font-weight:700">鍚堣</td><td style="padding:8px;border:1px solid #e2e8f0"><span id="w_sum" style="font-weight:700">-</span>%</td><td style="padding:8px;border:1px solid #e2e8f0"></td><td style="padding:8px;border:1px solid #e2e8f0"></td></tr>
         </tbody>
       </table>
     </div>
   </div>
-  <div class="field"><label>清算强度缩放系数</label><input id="scale" type="number" step="0.1" min="0.1" max="50"></div>
-  <div class="field"><label>时间衰减系数 k</label><input id="decay" type="number" step="0.1"></div>
-  <div class="field"><label>邻近价扩散比例</label><input id="neighbor" type="number" step="0.01"></div>
+  <div class="field"><label>娓呯畻寮哄害缂╂斁绯绘暟</label><input id="scale" type="number" step="0.1" min="0.1" max="50"></div>
+  <div class="field"><label>鏃堕棿琛板噺绯绘暟 k</label><input id="decay" type="number" step="0.1"></div>
+  <div class="field"><label>閭昏繎浠锋墿鏁ｆ瘮渚?/label><input id="neighbor" type="number" step="0.01"></div>
 </div>
-<div class="row" style="margin-top:14px"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="reloadCfg()">重载</button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
+<div class="row" style="margin-top:14px"><button class="primary" onclick="save()">淇濆瓨</button><button class="secondary" onclick="reloadCfg()">閲嶈浇</button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
 <script>
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
@@ -7371,14 +7717,14 @@ function renderScope(){
   }
   const msg=document.getElementById('fitMsg');
   if(msg){
-    msg.textContent=(currentScope==='global')?'当前编辑：全局':('当前编辑：'+currentScope.toUpperCase());
+    msg.textContent=(currentScope==='global')?'褰撳墠缂栬緫锛氬叏灞€':('褰撳墠缂栬緫锛?+currentScope.toUpperCase());
   }
 }
 
 async function fitScope(){
   const msg=document.getElementById('fitMsg');
   if(!msg){return;}
-  msg.textContent='拟合中...';
+  msg.textContent='鎷熷悎涓?..';
   const hoursEl=document.getElementById('fit_hours');
   const hours=Math.max(1,Math.min(168,Number((hoursEl&&hoursEl.value)||24)||24));
   const minEl=document.getElementById('fit_min');
@@ -7386,10 +7732,10 @@ async function fitScope(){
   const ex=(currentScope==='global')?'':currentScope;
   const u='/api/model-fit?hours='+encodeURIComponent(String(hours))+'&min_events='+encodeURIComponent(String(minEvents))+(ex?('&exchange='+encodeURIComponent(ex)):'&mode=global');
   const r=await fetch(u).catch(()=>null);
-  if(!r){msg.textContent='拟合失败：网络错误';return;}
-  if(!r.ok){msg.textContent='拟合失败：HTTP '+String(r.status);return;}
+  if(!r){msg.textContent='鎷熷悎澶辫触锛氱綉缁滈敊璇?;return;}
+  if(!r.ok){msg.textContent='鎷熷悎澶辫触锛欻TTP '+String(r.status);return;}
   const d=await r.json().catch(()=>null);
-  if(!d){msg.textContent='拟合失败：响应解析失败';return;}
+  if(!d){msg.textContent='鎷熷悎澶辫触锛氬搷搴旇В鏋愬け璐?;return;}
   if(!d.suggestions||!d.suggestions.length){
     const cs=d.counts||{};
     const parts=[];
@@ -7398,11 +7744,11 @@ async function fitScope(){
       const n=Number(c.count||0);
       if(n>0) parts.push(k+':'+n);
     }
-    msg.textContent='拟合失败：样本不足（需>='+String(minEvents)+'条，窗口 '+String(hours)+'h）'+(parts.length?(' '+parts.join(' ')):'');
+    msg.textContent='鎷熷悎澶辫触锛氭牱鏈笉瓒筹紙闇€>='+String(minEvents)+'鏉★紝绐楀彛 '+String(hours)+'h锛?+(parts.length?(' '+parts.join(' ')):'');
     return;
   }
   const sug=d.suggestions[0];
-  if(!sug||!sug.weight_csv||!sug.maint_margin_csv){msg.textContent='拟合失败：无有效结果';return;}
+  if(!sug||!sug.weight_csv||!sug.maint_margin_csv){msg.textContent='鎷熷悎澶辫触锛氭棤鏈夋晥缁撴灉';return;}
   if(!lastCfg) lastCfg={};
   if(currentScope==='binance'){lastCfg.WeightCSVBinance=sug.weight_csv;lastCfg.MaintMarginCSVBinance=sug.maint_margin_csv;}
   else if(currentScope==='okx'){lastCfg.WeightCSVOKX=sug.weight_csv;lastCfg.MaintMarginCSVOKX=sug.maint_margin_csv;}
@@ -7410,17 +7756,17 @@ async function fitScope(){
   else {lastCfg.WeightCSV=sug.weight_csv;lastCfg.MaintMarginCSV=sug.maint_margin_csv;}
   scopeCleared=false;
   renderScope();
-  msg.textContent='拟合完成：样本 '+String(sug.count||0)+' 条';
+  msg.textContent='鎷熷悎瀹屾垚锛氭牱鏈?'+String(sug.count||0)+' 鏉?;
 }
 
 function clearScope(){
   const msg=document.getElementById('fitMsg');
   if(currentScope==='global'){
-    if(msg) msg.textContent='全局不可清空覆盖';
+    if(msg) msg.textContent='鍏ㄥ眬涓嶅彲娓呯┖瑕嗙洊';
     return;
   }
   scopeCleared=true;
-  if(msg) msg.textContent='已标记清空覆盖：保存后该交易所回退全局';
+  if(msg) msg.textContent='宸叉爣璁版竻绌鸿鐩栵細淇濆瓨鍚庤浜ゆ槗鎵€鍥為€€鍏ㄥ眬';
 }
 async function reloadCfg(){
   const cfg=await fetch('/api/model-config').then(r=>r.json()).catch(()=>null);
@@ -7443,14 +7789,14 @@ async function save(){
   const sumEl=document.getElementById('w_sum');if(sumEl)sumEl.textContent=(isFinite(sumW)?sumW:0).toFixed(2);
   // If clearing per-exchange overrides, don't validate current inputs.
   if(!(scopeCleared && currentScope!=='global')){
-    if(!(sumW>0)){document.getElementById('msg').textContent='保存失败：权重合计必须为 100.00%';return;}
-    if(Math.abs(sumW-100)>0.01){document.getElementById('msg').textContent='保存失败：权重合计需等于 100.00%，当前 '+sumW.toFixed(2)+'%';return;}
+    if(!(sumW>0)){document.getElementById('msg').textContent='淇濆瓨澶辫触锛氭潈閲嶅悎璁″繀椤讳负 100.00%';return;}
+    if(Math.abs(sumW-100)>0.01){document.getElementById('msg').textContent='淇濆瓨澶辫触锛氭潈閲嶅悎璁￠渶绛変簬 100.00%锛屽綋鍓?'+sumW.toFixed(2)+'%';return;}
     for(let i=0;i<wList.length;i++) wList[i]=wList[i]/100.0;
-    for(const v of mmList){if(!(v>0&&v<=0.02)){document.getElementById('msg').textContent='保存失败：维护保证金率需在 (0,0.02]';return;}}
+    for(const v of mmList){if(!(v>0&&v<=0.02)){document.getElementById('msg').textContent='淇濆瓨澶辫触锛氱淮鎶や繚璇侀噾鐜囬渶鍦?(0,0.02]';return;}}
   }else{
     for(let i=0;i<wList.length;i++) wList[i]=wList[i]/100.0;
   }
-  for(const v of fsList){if(!(v>=1000&&v<=20000)){document.getElementById('msg').textContent='保存失败：资金费率缩放系数需在 [1000,20000]';return;}}
+  for(const v of fsList){if(!(v>=1000&&v<=20000)){document.getElementById('msg').textContent='淇濆瓨澶辫触锛氳祫閲戣垂鐜囩缉鏀剧郴鏁伴渶鍦?[1000,20000]';return;}}
   const mmCSV=(scopeCleared && currentScope!=='global')?'':mmList.map(v=>String(v)).join(',');
   const fsCSV=fsList.map(v=>String(v)).join(',');
   const wCSV=(scopeCleared && currentScope!=='global')?'':wList.map(v=>String(v)).join(',');
@@ -7477,8 +7823,8 @@ async function save(){
     NeighborShare:Number(document.getElementById('neighbor').value||0.28)
   };
   const r=await fetch('/api/model-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  if(r.ok){document.getElementById('msg').textContent='已保存';await reloadCfg();bindWeightSumLive();}
-  else{document.getElementById('msg').textContent='保存失败';}
+  if(r.ok){document.getElementById('msg').textContent='宸蹭繚瀛?;await reloadCfg();bindWeightSumLive();}
+  else{document.getElementById('msg').textContent='淇濆瓨澶辫触';}
 }
 function bindWeightSumLive(){
   const levs=[1,5,10,20,30,50,100];
@@ -7495,12 +7841,12 @@ function bindWeightSumLive(){
   recalc();
 }
 async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束（状态未知），请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 initTheme();bind({LookbackMin:{{.LookbackMin}},BucketMin:{{.BucketMin}},PriceStep:{{.PriceStep}},PriceRange:{{.PriceRange}},LeverageCSV:{{printf "%q" .LeverageCSV}},WeightCSV:{{printf "%q" .WeightCSV}},MaintMargin:{{.MaintMargin}},MaintMarginCSV:{{printf "%q" .MaintMarginCSV}},FundingScale:{{.FundingScale}},FundingScaleCSV:{{printf "%q" .FundingScaleCSV}},IntensityScale:{{.IntensityScale}},DecayK:{{.DecayK}},NeighborShare:{{.NeighborShare}}});
 bindWeightSumLive();
 reloadCfg();
 loadFooter();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
