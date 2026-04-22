@@ -3844,7 +3844,7 @@ const webDataSourceHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>页面数据源</title>
 <style>:root{--bg:#f5f7fb;--text:#1f2937;--muted:#64748b;--nav-bg:#0b1220;--nav-border:#243145;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#fff;--panel-border:#dce3ec;--ctl-bg:#fff;--ctl-text:#111827;--ctl-border:#cbd5e1;--chart-border:#e5e7eb}[data-theme="dark"]{--bg:#000;--text:#e5e7eb;--muted:#94a3b8;--nav-bg:#000;--nav-border:#111827;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#000;--panel-border:#1f2937;--ctl-bg:#000;--ctl-text:#e5e7eb;--ctl-border:#334155;--chart-border:#1f2937}html,body{height:100%}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;overflow:hidden}.nav{height:56px;background:var(--nav-bg);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10;box-sizing:border-box}.nav-left,.nav-right{display:flex;align-items:center;gap:14px}.brand{font-size:18px;font-weight:700;color:var(--nav-text)}.menu a{color:var(--link);text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:var(--nav-text);cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{width:100%;height:calc(100vh - 56px);margin:0;padding:12px;box-sizing:border-box;display:flex;flex-direction:column}.grid{display:grid;grid-template-columns:330px minmax(0,1fr);gap:12px;min-height:0;flex:1}.panel{border:1px solid var(--panel-border);background:var(--panel-bg);padding:12px;border-radius:8px;box-sizing:border-box}.grid>.panel{overflow:auto}.main-area{display:flex;flex-direction:column;min-width:0;min-height:0}.small{font-size:12px;color:var(--muted)}.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}.field input,.field select,button{height:36px;border:1px solid var(--ctl-border);border-radius:8px;background:var(--ctl-bg);color:var(--ctl-text);padding:0 10px}.field input{width:100%;box-sizing:border-box}button{cursor:pointer}.primary{background:#0f172a;color:#eef3f9;border-color:#0f172a}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:10px}.card{border:1px solid var(--panel-border);border-radius:8px;padding:10px;background:var(--panel-bg)}.card .k{font-size:12px;color:var(--muted)}.card .v{margin-top:6px;font-size:22px;font-weight:700}.chart-panel{display:flex;flex-direction:column;min-height:0;flex:1}.chart{width:100%;height:100%;min-height:420px;border:1px solid var(--chart-border);border-radius:8px;display:block;background:var(--panel-bg);box-sizing:border-box;flex:1}.runs{max-height:260px;overflow:auto}.runs table{width:100%;border-collapse:collapse}.runs th,.runs td{padding:6px 8px;border-bottom:1px solid var(--panel-border);font-size:12px;text-align:left}.tag{display:inline-block;padding:2px 8px;border-radius:999px;background:rgba(37,99,235,.12);color:#2563eb;font-size:12px}.log-box{margin-top:12px;max-height:240px;overflow:auto;white-space:pre-wrap;font:12px/1.5 Consolas,Monaco,'Courier New',monospace;border:1px solid var(--panel-border);border-radius:8px;background:var(--panel-bg);padding:10px;box-sizing:border-box}.footer{display:none}@media (max-width:1100px){body{overflow:auto}.wrap{height:auto}.grid{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.chart{height:560px}}</style></head>
 <body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource" class="active">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div></div></div>
-<div class="wrap"><div class="grid"><div class="panel"><h2 style="margin:0 0 8px 0">抓取任务</h2><div id="statusBox" class="small">加载中...</div><div class="field" style="margin-top:12px"><label>抓取间隔（分钟）</label><input id="intervalMin" type="number" min="1" step="1"></div><div class="field" style="margin-top:12px"><label>超时（秒）</label><input id="timeoutSec" type="number" min="5" step="1"></div><div class="field" style="margin-top:12px"><label>Chrome 路径</label><input id="chromePath" placeholder="留空自动探测"></div><div class="field" style="margin-top:12px"><label>Profile 目录</label><input id="profileDir"></div><div class="row" style="margin-top:14px"><button class="primary" onclick="saveSettings()">保存设置</button><button onclick="initSession()">初始抓取</button><button onclick="runNow()">立即抓取</button><select id="runWindow"><option value="">抓取全部窗口</option><option value="1">仅 1 天</option><option value="7">仅 7 天</option><option value="30">仅 30 天</option></select></div><div class="small" id="saveMsg" style="margin-top:8px"></div><div id="stepLog" class="log-box">等待抓取日志...</div><div style="margin-top:16px"><div class="row" style="justify-content:space-between"><h3 style="margin:0">最近运行</h3><span class="tag" id="runState">-</span></div><div class="runs" style="margin-top:8px"><table><thead><tr><th>ID</th><th>窗口</th><th>状态</th><th>记录数</th><th>开始</th><th>错误</th></tr></thead><tbody id="runsBody"></tbody></table></div></div></div><div class="main-area"><div class="cards"><div class="card"><div class="k">当前窗口</div><div class="v" id="cardWindow">-</div></div><div class="card"><div class="k">多单总强度</div><div class="v" id="cardLong">-</div></div><div class="card"><div class="k">空单总强度</div><div class="v" id="cardShort">-</div></div><div class="card"><div class="k">最新抓取</div><div class="v" id="cardTime" style="font-size:16px">-</div></div></div><div class="panel chart-panel"><div class="row" style="justify-content:space-between;margin-bottom:10px"><div><strong>ETH 页面数据源清算地图</strong><div class="small" id="chartMeta">加载中...</div></div><div class="row"><select id="windowSel" onchange="loadMap()"><option value="30d">30D</option><option value="7d">7D</option><option value="1d">1D</option></select></div></div><canvas id="cv" class="chart" width="1000" height="520"></canvas></div></div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
+<div class="wrap"><div class="grid"><div class="panel"><h2 style="margin:0 0 8px 0">抓取任务</h2><div id="statusBox" class="small">加载中...</div><div class="field" style="margin-top:12px"><label>抓取间隔（分钟）</label><input id="intervalMin" type="number" min="1" step="1"></div><div class="field" style="margin-top:12px"><label>超时（秒）</label><input id="timeoutSec" type="number" min="5" step="1"></div><div class="field" style="margin-top:12px"><label>Chrome 路径</label><input id="chromePath" placeholder="留空自动探测"></div><div class="field" style="margin-top:12px"><label>Profile 目录</label><input id="profileDir"></div><div class="row" style="margin-top:14px"><button class="primary" onclick="saveSettings()">保存设置</button><button onclick="initSession()">初始抓取</button><button onclick="runNow()">立即抓取</button><select id="runWindow"><option value="">抓取全部窗口</option><option value="1">仅 1 天</option><option value="7">仅 7 天</option><option value="30">仅 30 天</option></select></div><div class="small" id="saveMsg" style="margin-top:8px"></div><div id="stepLog" class="log-box">等待抓取日志...</div><div style="margin-top:16px"><div class="row" style="justify-content:space-between"><h3 style="margin:0">最近运行</h3><span class="tag" id="runState">-</span></div><div class="runs" style="margin-top:8px"><table><thead><tr><th>ID</th><th>窗口</th><th>状态</th><th>记录数</th><th>开始</th><th>错误</th></tr></thead><tbody id="runsBody"></tbody></table></div></div></div><div class="main-area"><div class="cards"><div class="card"><div class="k">当前窗口</div><div class="v" id="cardWindow">-</div></div><div class="card"><div class="k">多单总强度</div><div class="v" id="cardLong">-</div></div><div class="card"><div class="k">空单总强度</div><div class="v" id="cardShort">-</div></div><div class="card"><div class="k">最新抓取</div><div class="v" id="cardTime" style="font-size:16px">-</div></div></div><div class="panel chart-panel"><div class="row" style="justify-content:space-between;margin-bottom:10px"><div><strong>ETH 页面数据源清算地图</strong><div class="small" id="chartMeta">加载中...</div><div class="small">滚轮缩放，按住鼠标左键左右拖动</div></div><div class="row"><select id="windowSel" onchange="loadMap()"><option value="30d">30D</option><option value="7d">7D</option><option value="1d">1D</option></select></div></div><canvas id="cv" class="chart" width="1000" height="520"></canvas></div></div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
 <script>
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
@@ -3855,6 +3855,12 @@ function fmtTime(ts){if(!ts)return '-';return new Date(ts).toLocaleString('zh-CN
 function escHTML(v){return String(v||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 let currentMap=null;
 let okxLatestClose=0;
+let mapViewMin=null;
+let mapViewMax=null;
+let mapDrag=false;
+let mapLastX=0;
+let mapHoverMeta=null;
+let mapWindowKey='';
 function exKey(v){v=String(v||'').toLowerCase();if(v.includes('binance'))return 'binance';if(v.includes('okx'))return 'okx';if(v.includes('bybit'))return 'bybit';return 'other';}
 const exStyle={binance:{fill:'rgba(255,131,0,0.58)',stroke:'rgba(255,131,0,0.96)',bg:'rgba(255,243,227,0.94)',text:'rgba(166,85,0,0.98)'},okx:{fill:'rgba(255,196,0,0.62)',stroke:'rgba(255,196,0,0.96)',bg:'rgba(255,248,214,0.94)',text:'rgba(153,118,0,0.98)'},bybit:{fill:'rgba(139,214,217,0.62)',stroke:'rgba(139,214,217,0.96)',bg:'rgba(234,249,249,0.94)',text:'rgba(48,119,123,0.98)'},other:{fill:'rgba(148,163,184,0.48)',stroke:'rgba(100,116,139,0.88)',bg:'rgba(241,245,249,0.94)',text:'rgba(71,85,105,0.98)'}};
 const stackOrder=['binance','okx','bybit','other'];
@@ -3936,6 +3942,72 @@ x.font='12px sans-serif';
 x.fillText(label,labelX,padT+11);
 x.restore();
 }
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function resetMapView(){mapViewMin=null;mapViewMax=null;}
+function clampMapView(minP,maxP,baseMin,baseMax){
+const fullSpan=Math.max(1e-6,baseMax-baseMin);
+const minSpan=Math.max(1e-4,fullSpan*0.08);
+let span=Math.max(minSpan,maxP-minP);
+span=Math.min(fullSpan,span);
+let vMin=minP,vMax=vMin+span;
+if(vMin<baseMin){vMin=baseMin;vMax=vMin+span;}
+if(vMax>baseMax){vMax=baseMax;vMin=vMax-span;}
+return [vMin,vMax];
+}
+function bindMapInteraction(){
+const c=document.getElementById('cv');
+if(!c||c.dataset.bound==='1')return;
+c.dataset.bound='1';
+c.addEventListener('mousedown',e=>{if(e.button!==0||!mapHoverMeta)return;mapDrag=true;mapLastX=e.clientX;});
+c.addEventListener('mouseleave',()=>{if(!mapDrag)return;});
+window.addEventListener('mouseup',()=>{mapDrag=false;});
+window.addEventListener('mousemove',e=>{
+if(!mapDrag||!mapHoverMeta||mapViewMin==null||mapViewMax==null)return;
+const s=mapHoverMeta;
+const pw=s.pw||1;
+if(!(pw>0))return;
+const dx=e.clientX-mapLastX;
+mapLastX=e.clientX;
+let vMin=mapViewMin-(dx/pw)*(mapViewMax-mapViewMin);
+let vMax=mapViewMax-(dx/pw)*(mapViewMax-mapViewMin);
+[vMin,vMax]=clampMapView(vMin,vMax,s.baseMin,s.baseMax);
+mapViewMin=vMin;
+mapViewMax=vMax;
+draw();
+});
+c.addEventListener('wheel',e=>{
+if(!mapHoverMeta)return;
+e.preventDefault();
+const s=mapHoverMeta;
+const rect=c.getBoundingClientRect();
+const pw=s.pw||Math.max(1,rect.width-(s.padL||70)-(s.padR||20));
+if(!(pw>0))return;
+const baseMin=s.baseMin,baseMax=s.baseMax;
+const curMin=(mapViewMin==null?baseMin:mapViewMin);
+const curMax=(mapViewMax==null?baseMax:mapViewMax);
+let span=Math.max(1e-6,curMax-curMin);
+const ratio=clamp((e.clientX-rect.left-(s.padL||70))/pw,0,1);
+const focus=curMin+span*ratio;
+const isPan=Math.abs(e.deltaX)>Math.abs(e.deltaY)||e.shiftKey;
+if(isPan){
+const d=(Math.abs(e.deltaX)>0?e.deltaX:e.deltaY);
+let vMin=curMin-(d/pw)*span;
+let vMax=curMax-(d/pw)*span;
+[vMin,vMax]=clampMapView(vMin,vMax,baseMin,baseMax);
+mapViewMin=vMin;
+mapViewMax=vMax;
+}else{
+const full=Math.max(1e-6,baseMax-baseMin);
+const nextSpan=clamp(span*(e.deltaY<0?0.88:1.14),full*0.08,full);
+let vMin=focus-nextSpan*ratio;
+let vMax=vMin+nextSpan;
+[vMin,vMax]=clampMapView(vMin,vMax,baseMin,baseMax);
+mapViewMin=vMin;
+mapViewMax=vMax;
+}
+draw();
+},{passive:false});
+}
 let localStepLogs=[];
 function fmtLogClock(ts){if(!ts)return '--:--:--';return new Date(ts).toLocaleTimeString('zh-CN',{hour12:false});}
 function logLabel(result){if(result==='success')return '成功';if(result==='failed')return '失败';return '进行中';}
@@ -3948,8 +4020,8 @@ async function runNow(){const raw=document.getElementById('runWindow').value;con
 async function loadOKXClose(){const d=await fetch('/api/okx/latest-close').then(r=>r.ok?r.json():null).catch(()=>null);okxLatestClose=Number(d&&d.close||0)||0;}
 function draw(){
 const c=document.getElementById('cv'),x=c.getContext('2d');const rect=c.getBoundingClientRect(),dpr=window.devicePixelRatio||1;const W=Math.max(760,Math.floor(rect.width)),H=Math.max(420,Math.floor(rect.height));c.width=W*dpr;c.height=H*dpr;x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);
-if(!currentMap||!currentMap.has_data||!(currentMap.points||[]).length){x.fillStyle='#64748b';x.font='14px sans-serif';x.fillText('暂无有效抓取点位',20,24);return;}
-const pts=currentMap.points||[],allGroups=buildStackGroups(pts);const minP=Number(currentMap.range_low||Math.min(...pts.map(p=>Number(p.price||0))));const maxP=Number(currentMap.range_high||Math.max(...pts.map(p=>Number(p.price||0))));const span=Math.max(1e-6,maxP-minP),padL=70,padR=20,padT=20,padB=40,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;const cp=Number(currentMap.current_price||0),close=Number(okxLatestClose||0)>0?Number(okxLatestClose):cp;const groups=sideGroupsForClose(allGroups,close);const maxV=Math.max(1,...groups.map(g=>Number(g.total||0)));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxV)*ph*0.86;
+if(!currentMap||!currentMap.has_data||!(currentMap.points||[]).length){mapHoverMeta=null;x.fillStyle='#64748b';x.font='14px sans-serif';x.fillText('暂无有效抓取点位',20,24);return;}
+const pts=currentMap.points||[],allGroups=buildStackGroups(pts);const baseMin=Number(currentMap.range_low||Math.min(...pts.map(p=>Number(p.price||0))));const baseMax=Number(currentMap.range_high||Math.max(...pts.map(p=>Number(p.price||0))));const padL=70,padR=20,padT=20,padB=40,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;const cp=Number(currentMap.current_price||0),close=Number(okxLatestClose||0)>0?Number(okxLatestClose):cp;if(!(baseMax>baseMin)){mapHoverMeta=null;x.fillStyle='#64748b';x.font='14px sans-serif';x.fillText('价格区间无效',20,24);return;}if(mapViewMin==null||mapViewMax==null||!(mapViewMax>mapViewMin)){mapViewMin=baseMin;mapViewMax=baseMax;}[mapViewMin,mapViewMax]=clampMapView(mapViewMin,mapViewMax,baseMin,baseMax);const minP=mapViewMin,maxP=mapViewMax,span=Math.max(1e-6,maxP-minP);const groups=sideGroupsForClose(allGroups,close).filter(g=>g.price>=minP&&g.price<=maxP);if(!groups.length){mapHoverMeta={pw:pw,padL:padL,padR:padR,baseMin:baseMin,baseMax:baseMax};x.fillStyle='#64748b';x.font='14px sans-serif';x.fillText('当前缩放范围内暂无点位',20,24);return;}const maxV=Math.max(1,...groups.map(g=>Number(g.total||0)));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxV)*ph*0.86;
 x.strokeStyle='#e5e7eb';x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4);const val=maxV*(1-i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#64748b';x.fillText(fmtAmt(val),6,y+4);}
 const priceCount=new Set(groups.map(g=>String(Number(g.price||0).toFixed(4)))).size||groups.length;const barW=Math.max(2,Math.min(10,pw/Math.max(80,priceCount*1.35)));
 for(const g of groups){const px=sx(g.price);let acc=0;for(const ex of stackOrder){const val=Number((g.parts||{})[ex]||0);if(!(val>0))continue;const y0=sy(acc),y1=sy(acc+val),h=Math.max(1,y0-y1),st=exStyle[ex]||exStyle.other;x.fillStyle=st.fill;x.strokeStyle=st.stroke;x.fillRect(px-barW/2,y1,barW,h);x.strokeRect(px-barW/2,y1,barW,h);acc+=val;}}
@@ -3958,7 +4030,8 @@ x.fillStyle='#64748b';for(let i=0;i<=6;i++){const p=minP+span*(i/6),px=sx(p),lab
 drawCurrentPriceMarker(x,close,sx,padT,by,W);
 const labels=topStackLabels(groups);x.font='bold 12px sans-serif';
 const occupied=[];for(const g of labels){const price=Number(g.price||0),val=Number(g.total||0);if(!(price>=minP&&price<=maxP&&val>0))continue;const px=sx(price),py=sy(val);const pct=close>0?((price-close)/close*100):0;const lines=['$'+fmtPrice(price),fmtYi(val),(pct>=0?'+':'')+pct.toFixed(2)+'%'];const st=sideLabelStyle[g.side]||sideLabelStyle.long;let tw=0;for(const s of lines)tw=Math.max(tw,x.measureText(s).width);const bw=tw+10,bh=48;const r=placeLabel(px,py,bw,bh,W,H,padB,occupied);x.fillStyle=st.bg;x.strokeStyle=st.stroke;x.lineWidth=1;x.fillRect(r.x,r.y,r.w,r.h);x.strokeRect(r.x,r.y,r.w,r.h);x.fillStyle=st.text;for(let i=0;i<lines.length;i++)x.fillText(lines[i],r.x+5,r.y+15+i*14);}
+mapHoverMeta={pw:pw,padL:padL,padR:padR,baseMin:baseMin,baseMax:baseMax};
 }
-async function loadMap(){const window=document.getElementById('windowSel').value;await loadOKXClose();const d=await fetch('/api/webdatasource/map?window='+encodeURIComponent(window)).then(r=>r.json()).catch(()=>null);currentMap=d;if(!d||!d.has_data||!(d.points||[]).length){document.getElementById('chartMeta').textContent='暂无有效抓取点位'+(d&&d.last_error?(' | 最近错误: '+d.last_error):'');document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent='-';document.getElementById('cardShort').textContent='-';document.getElementById('cardTime').textContent='-';draw();return;}document.getElementById('chartMeta').textContent='窗口 '+window.toUpperCase()+' | 价格区间 '+fmtPrice(d.range_low)+' - '+fmtPrice(d.range_high);document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent=fmtAmt(d.long_total);document.getElementById('cardShort').textContent=fmtAmt(d.short_total);document.getElementById('cardTime').textContent=fmtTime(d.generated_at);draw();}
-window.addEventListener('resize',draw);initTheme();loadStatus();loadMap();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){}})();setInterval(loadStatus,2000);
+async function loadMap(){const window=document.getElementById('windowSel').value;if(mapWindowKey!==window){resetMapView();mapWindowKey=window;}await loadOKXClose();const d=await fetch('/api/webdatasource/map?window='+encodeURIComponent(window)).then(r=>r.json()).catch(()=>null);currentMap=d;if(!d||!d.has_data||!(d.points||[]).length){document.getElementById('chartMeta').textContent='暂无有效抓取点位'+(d&&d.last_error?(' | 最近错误: '+d.last_error):'');document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent='-';document.getElementById('cardShort').textContent='-';document.getElementById('cardTime').textContent='-';draw();return;}document.getElementById('chartMeta').textContent='窗口 '+window.toUpperCase()+' | 价格区间 '+fmtPrice(d.range_low)+' - '+fmtPrice(d.range_high);document.getElementById('cardWindow').textContent=window.toUpperCase();document.getElementById('cardLong').textContent=fmtAmt(d.long_total);document.getElementById('cardShort').textContent=fmtAmt(d.short_total);document.getElementById('cardTime').textContent=fmtTime(d.generated_at);draw();}
+window.addEventListener('resize',draw);bindMapInteraction();initTheme();loadStatus();loadMap();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){}})();setInterval(loadStatus,2000);
 </script></body></html>`

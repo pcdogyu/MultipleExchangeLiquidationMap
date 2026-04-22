@@ -686,8 +686,7 @@ func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
 	}
-	tpl := template.Must(template.New("index").Parse(indexHTML))
-	_ = tpl.Execute(w, nil)
+	renderHTMLPage(w, "index", indexHTML, nil)
 }
 
 func renderHTMLPage(w http.ResponseWriter, name, body string, data any) {
@@ -729,6 +728,16 @@ func (a *App) handleMap(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
 	}
+	if body, err := os.ReadFile("map_page_fixed.html"); err == nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(body)
+		return
+	}
+	if body, err := os.ReadFile("map_page.html"); err == nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(body)
+		return
+	}
 	renderHTMLPage(w, "map", mapHTML, nil)
 }
 
@@ -747,6 +756,10 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
+	if body, err := os.ReadFile("config_page_fixed.html"); err == nil {
+		renderHTMLPage(w, "config", string(body), a.loadModelConfig())
+		return
+	}
 	renderHTMLPage(w, "config", configHTML, a.loadModelConfig())
 }
 
@@ -754,12 +767,22 @@ func (a *App) handleLiquidations(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
 	}
+	if body, err := os.ReadFile("liquidations_page_fixed.html"); err == nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(body)
+		return
+	}
 	renderHTMLPage(w, "liquidations", liquidationsHTML, nil)
 }
 
 func (a *App) handleBubbles(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	if body, err := os.ReadFile("bubbles_page_fixed.html"); err == nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(body)
+		return
 	}
 	renderHTMLPage(w, "bubbles", bubblesHTML, nil)
 }
