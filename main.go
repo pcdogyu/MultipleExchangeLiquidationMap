@@ -216,9 +216,46 @@ type App struct {
 	mu         sync.RWMutex
 	errLogMu   sync.Mutex
 	errLogNext map[string]time.Time
+	apiGuardMu sync.Mutex
+	apiGuards  map[string]*ExchangeAPIGuard
 	windowDays int
 	debug      bool
 	lastNotify int64
+}
+
+type HTTPStatusError struct {
+	URL        string
+	Status     string
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPStatusError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if strings.TrimSpace(e.Body) == "" {
+		return fmt.Sprintf("http %s", e.Status)
+	}
+	return fmt.Sprintf("http %s: %s", e.Status, strings.TrimSpace(e.Body))
+}
+
+type ExchangePausedError struct {
+	Exchange string
+	Until    time.Time
+}
+
+func (e *ExchangePausedError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s access paused until %s after repeated http 451 responses",
+		e.Exchange, e.Until.Local().Format("2006-01-02 15:04:05"))
+}
+
+type ExchangeAPIGuard struct {
+	Consecutive451 int
+	PausedUntil    time.Time
 }
 
 type Level struct {
@@ -244,6 +281,11 @@ type OrderBookHub struct {
 }
 
 var errResnapshot = errors.New("periodic resnapshot")
+
+const (
+	exchange451TripThreshold = 3
+	exchange451PauseDuration = 180 * time.Minute
+)
 
 type Snapshot struct {
 	Exchange       string
@@ -564,6 +606,7 @@ func main() {
 			Timeout: 12 * time.Second,
 		},
 		ob:         newOrderBookHub(),
+		apiGuards:  map[string]*ExchangeAPIGuard{},
 		windowDays: defaultWindowDays,
 		debug:      debug,
 	}
@@ -1869,7 +1912,7 @@ func (a *App) handleChannelHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	limit := 12
+	limit := 15
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 200 {
 			limit = n
@@ -1893,7 +1936,7 @@ func (a *App) handleChannelTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hours := 24
-	limit := 12
+	limit := 24
 	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 168 {
 			hours = n
@@ -2297,35 +2340,7 @@ func (a *App) listChannelTimeline(hours int) ([]ChannelTimelineRow, error) {
 		hours = 24
 	}
 	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour).UnixMilli()
-	out := make([]ChannelTimelineRow, 0, 256)
-
-	sendRows, err := a.db.Query(`SELECT sent_at, send_mode, group_index, group_name, status, error_text
-		FROM telegram_send_history
-		WHERE sent_at >= ?
-		ORDER BY sent_at DESC, id DESC`, cutoff)
-	if err != nil {
-		return nil, err
-	}
-	defer sendRows.Close()
-	for sendRows.Next() {
-		var sentAt int64
-		var sendMode, groupName, status, errorText string
-		var groupIndex int
-		if err := sendRows.Scan(&sentAt, &sendMode, &groupIndex, &groupName, &status, &errorText); err != nil {
-			return nil, err
-		}
-		out = append(out, ChannelTimelineRow{
-			TS:     sentAt,
-			Source: "channel",
-			Type:   "push",
-			Target: fmt.Sprintf("group %d / %s / %s", groupIndex, sendMode, groupName),
-			Status: status,
-			Detail: strings.TrimSpace(errorText),
-		})
-	}
-	if err := sendRows.Err(); err != nil {
-		return nil, err
-	}
+	out := make([]ChannelTimelineRow, 0, 64)
 
 	captureRows, err := a.db.Query(`SELECT started_at, finished_at, status, window_days, error_message, records_count
 		FROM webdatasource_runs
@@ -2359,13 +2374,6 @@ func (a *App) listChannelTimeline(hours int) ([]ChannelTimelineRow, error) {
 	if err := captureRows.Err(); err != nil {
 		return nil, err
 	}
-
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].TS == out[j].TS {
-			return out[i].Source < out[j].Source
-		}
-		return out[i].TS > out[j].TS
-	})
 	return out, nil
 }
 
@@ -3313,8 +3321,102 @@ func parseFloat(raw string) float64 {
 	return v
 }
 
-func (a *App) fetchJSON(url string, out any) error {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+func exchangeFromEndpoint(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	switch {
+	case strings.Contains(host, "binance."):
+		return "binance"
+	case strings.Contains(host, "bybit."):
+		return "bybit"
+	case strings.Contains(host, "okx."):
+		return "okx"
+	default:
+		return ""
+	}
+}
+
+func (a *App) exchangePauseUntil(exchange string) (time.Time, bool) {
+	exchange = strings.ToLower(strings.TrimSpace(exchange))
+	if exchange == "" {
+		return time.Time{}, false
+	}
+	a.apiGuardMu.Lock()
+	defer a.apiGuardMu.Unlock()
+	guard := a.apiGuards[exchange]
+	if guard == nil || guard.PausedUntil.IsZero() {
+		return time.Time{}, false
+	}
+	now := time.Now()
+	if !guard.PausedUntil.After(now) {
+		guard.PausedUntil = time.Time{}
+		guard.Consecutive451 = 0
+		return time.Time{}, false
+	}
+	return guard.PausedUntil, true
+}
+
+func (a *App) noteExchangeHTTPStatus(exchange string, statusCode int) {
+	exchange = strings.ToLower(strings.TrimSpace(exchange))
+	if exchange == "" {
+		return
+	}
+	a.apiGuardMu.Lock()
+	defer a.apiGuardMu.Unlock()
+	if a.apiGuards == nil {
+		a.apiGuards = map[string]*ExchangeAPIGuard{}
+	}
+	guard := a.apiGuards[exchange]
+	if guard == nil {
+		guard = &ExchangeAPIGuard{}
+		a.apiGuards[exchange] = guard
+	}
+	now := time.Now()
+	if !guard.PausedUntil.IsZero() && !guard.PausedUntil.After(now) {
+		guard.PausedUntil = time.Time{}
+		guard.Consecutive451 = 0
+	}
+	if statusCode == http.StatusUnavailableForLegalReasons {
+		guard.Consecutive451++
+		if guard.Consecutive451 >= exchange451TripThreshold {
+			guard.Consecutive451 = 0
+			guard.PausedUntil = now.Add(exchange451PauseDuration)
+			log.Printf("%s access paused for %d minutes after %d http 451 responses (until %s)",
+				exchange, int(exchange451PauseDuration/time.Minute), exchange451TripThreshold,
+				guard.PausedUntil.Local().Format("2006-01-02 15:04:05"))
+		}
+		return
+	}
+	guard.Consecutive451 = 0
+}
+
+func (a *App) waitExchangeRetry(ctx context.Context, exchange string, fallback time.Duration) bool {
+	delay := fallback
+	if until, ok := a.exchangePauseUntil(exchange); ok {
+		delay = time.Until(until)
+	}
+	if delay <= 0 {
+		return true
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (a *App) fetchJSON(rawURL string, out any) error {
+	exchange := exchangeFromEndpoint(rawURL)
+	if until, ok := a.exchangePauseUntil(exchange); ok {
+		return &ExchangePausedError{Exchange: exchange, Until: until}
+	}
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
 	}
@@ -3327,8 +3429,15 @@ func (a *App) fetchJSON(url string, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("http %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		a.noteExchangeHTTPStatus(exchange, resp.StatusCode)
+		return &HTTPStatusError{
+			URL:        rawURL,
+			Status:     resp.Status,
+			StatusCode: resp.StatusCode,
+			Body:       strings.TrimSpace(string(body)),
+		}
 	}
+	a.noteExchangeHTTPStatus(exchange, resp.StatusCode)
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
@@ -5483,17 +5592,18 @@ func (a *App) backfillOKXLiquidations(ctx context.Context, instID string, ctVal 
 func (a *App) syncBinanceLiquidations(ctx context.Context, symbol string) {
 	wsURL := "wss://fstream.binance.com/ws/" + strings.ToLower(symbol) + "@forceOrder"
 	for {
+		if !a.waitExchangeRetry(ctx, "binance", 0) {
+			return
+		}
 		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 		if err != nil {
 			if a.debug {
 				log.Printf("binance liquidation ws dial err: %v", err)
 			}
-			select {
-			case <-ctx.Done():
+			if !a.waitExchangeRetry(ctx, "binance", 2*time.Second) {
 				return
-			case <-time.After(2 * time.Second):
-				continue
 			}
+			continue
 		}
 		for {
 			select {
@@ -5523,37 +5633,34 @@ func (a *App) syncBinanceLiquidations(ctx context.Context, symbol string) {
 			a.insertLiquidationEvent("binance", symbol, side, side, price, qty, 0, ts)
 		}
 		_ = conn.Close()
-		select {
-		case <-ctx.Done():
+		if !a.waitExchangeRetry(ctx, "binance", 2*time.Second) {
 			return
-		case <-time.After(2 * time.Second):
 		}
 	}
 }
 
 func (a *App) syncBybitLiquidations(ctx context.Context, symbol string) {
 	for {
+		if !a.waitExchangeRetry(ctx, "bybit", 0) {
+			return
+		}
 		conn, _, err := websocket.DefaultDialer.Dial("wss://stream.bybit.com/v5/public/linear", nil)
 		if err != nil {
 			if a.debug {
 				log.Printf("bybit liquidation ws dial err: %v", err)
 			}
-			select {
-			case <-ctx.Done():
+			if !a.waitExchangeRetry(ctx, "bybit", 2*time.Second) {
 				return
-			case <-time.After(2 * time.Second):
-				continue
 			}
+			continue
 		}
 		sub := map[string]any{"op": "subscribe", "args": []string{"allLiquidation." + symbol}}
 		if err := conn.WriteJSON(sub); err != nil {
 			_ = conn.Close()
-			select {
-			case <-ctx.Done():
+			if !a.waitExchangeRetry(ctx, "bybit", 2*time.Second) {
 				return
-			case <-time.After(2 * time.Second):
-				continue
 			}
+			continue
 		}
 		for {
 			select {
@@ -5586,37 +5693,34 @@ func (a *App) syncBybitLiquidations(ctx context.Context, symbol string) {
 			}
 		}
 		_ = conn.Close()
-		select {
-		case <-ctx.Done():
+		if !a.waitExchangeRetry(ctx, "bybit", 2*time.Second) {
 			return
-		case <-time.After(2 * time.Second):
 		}
 	}
 }
 
 func (a *App) syncOKXLiquidations(ctx context.Context, instID string, ctVal float64) {
 	for {
+		if !a.waitExchangeRetry(ctx, "okx", 0) {
+			return
+		}
 		conn, _, err := websocket.DefaultDialer.Dial("wss://ws.okx.com:8443/ws/v5/public", nil)
 		if err != nil {
 			if a.debug {
 				log.Printf("okx liquidation ws dial err: %v", err)
 			}
-			select {
-			case <-ctx.Done():
+			if !a.waitExchangeRetry(ctx, "okx", 2*time.Second) {
 				return
-			case <-time.After(2 * time.Second):
-				continue
 			}
+			continue
 		}
 		sub := map[string]any{"op": "subscribe", "args": []map[string]string{{"channel": "liquidation-orders", "instType": "SWAP", "instId": instID}}}
 		if err := conn.WriteJSON(sub); err != nil {
 			_ = conn.Close()
-			select {
-			case <-ctx.Done():
+			if !a.waitExchangeRetry(ctx, "okx", 2*time.Second) {
 				return
-			case <-time.After(2 * time.Second):
-				continue
 			}
+			continue
 		}
 		for {
 			select {
@@ -5653,10 +5757,8 @@ func (a *App) syncOKXLiquidations(ctx context.Context, instID string, ctVal floa
 			}
 		}
 		_ = conn.Close()
-		select {
-		case <-ctx.Done():
+		if !a.waitExchangeRetry(ctx, "okx", 2*time.Second) {
 			return
-		case <-time.After(2 * time.Second):
 		}
 	}
 }
@@ -5667,24 +5769,26 @@ func (a *App) syncBinanceOrderBook(ctx context.Context, symbol string) {
 		return
 	}
 	for {
+		if !a.waitExchangeRetry(ctx, "binance", 0) {
+			return
+		}
 		if err := a.loadBinanceSnapshot(symbol); err != nil {
 			if a.debug {
 				log.Printf("binance snapshot err: %v", err)
 			}
-			select {
-			case <-ctx.Done():
+			if !a.waitExchangeRetry(ctx, "binance", 2*time.Second) {
 				return
-			case <-time.After(2 * time.Second):
 			}
 			continue
+		}
+		if !a.waitExchangeRetry(ctx, "binance", 0) {
+			return
 		}
 		if err := a.runBinanceWS(ctx, symbol); err != nil && a.debug {
 			log.Printf("binance ws err: %v", err)
 		}
-		select {
-		case <-ctx.Done():
+		if !a.waitExchangeRetry(ctx, "binance", 2*time.Second) {
 			return
-		case <-time.After(2 * time.Second):
 		}
 		_ = book
 	}
@@ -5792,24 +5896,26 @@ func (a *App) runBinanceWSConn(ctx context.Context, wsURL string, checkPU bool) 
 
 func (a *App) syncBybitOrderBook(ctx context.Context, symbol string) {
 	for {
+		if !a.waitExchangeRetry(ctx, "bybit", 0) {
+			return
+		}
 		if err := a.loadBybitSnapshot(symbol); err != nil {
 			if a.debug {
 				log.Printf("bybit snapshot err: %v", err)
 			}
-			select {
-			case <-ctx.Done():
+			if !a.waitExchangeRetry(ctx, "bybit", 2*time.Second) {
 				return
-			case <-time.After(2 * time.Second):
 			}
 			continue
+		}
+		if !a.waitExchangeRetry(ctx, "bybit", 0) {
+			return
 		}
 		if err := a.runBybitWS(ctx, symbol); err != nil && a.debug {
 			log.Printf("bybit ws err: %v", err)
 		}
-		select {
-		case <-ctx.Done():
+		if !a.waitExchangeRetry(ctx, "bybit", 2*time.Second) {
 			return
-		case <-time.After(2 * time.Second):
 		}
 	}
 }
@@ -5919,24 +6025,26 @@ func (a *App) runBybitWS(ctx context.Context, symbol string) error {
 
 func (a *App) syncOKXOrderBook(ctx context.Context, instID string) {
 	for {
+		if !a.waitExchangeRetry(ctx, "okx", 0) {
+			return
+		}
 		if err := a.loadOKXSnapshot(instID); err != nil {
 			if a.debug {
 				log.Printf("okx snapshot err: %v", err)
 			}
-			select {
-			case <-ctx.Done():
+			if !a.waitExchangeRetry(ctx, "okx", 2*time.Second) {
 				return
-			case <-time.After(2 * time.Second):
 			}
 			continue
+		}
+		if !a.waitExchangeRetry(ctx, "okx", 0) {
+			return
 		}
 		if err := a.runOKXWS(ctx, instID); err != nil && a.debug {
 			log.Printf("okx ws err: %v", err)
 		}
-		select {
-		case <-ctx.Done():
+		if !a.waitExchangeRetry(ctx, "okx", 2*time.Second) {
 			return
-		case <-time.After(2 * time.Second):
 		}
 	}
 }
@@ -7122,7 +7230,7 @@ body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe
 .status{min-height:20px}
 .table-scroll{width:100%;overflow-x:auto;margin-top:10px}
 .history-table{width:100%;border-collapse:collapse;table-layout:fixed}
-.history-table-wide{width:115%;min-width:115%}
+.history-table-wide{width:138%;min-width:138%}
 .history-table th,.history-table td{padding:8px 10px;border-top:1px solid #e5e7eb;text-align:left;font-size:12px;vertical-align:top;word-break:break-word}
 .history-table thead th{border-top:0;color:#64748b}
 .ok{color:#15803d;font-weight:700}
@@ -7221,18 +7329,18 @@ button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:
       <div class="row" style="justify-content:space-between">
         <div>
           <h3 style="margin:0">历史发送记录</h3>
-          <div class="small">显示最近 12 条历史发送记录。</div>
+          <div class="small">显示最近 15 条历史发送记录。</div>
         </div>
         <button class="secondary" onclick="loadHistory()">刷新</button>
       </div>
       <div class="table-scroll">
         <table class="history-table history-table-wide">
           <colgroup>
-            <col style="width:18%">
-            <col style="width:12%">
-            <col style="width:24%">
-            <col style="width:12%">
-            <col style="width:34%">
+            <col style="width:16%">
+            <col style="width:10%">
+            <col style="width:29%">
+            <col style="width:10%">
+            <col style="width:35%">
           </colgroup>
           <thead>
             <tr><th>时间</th><th>类型</th><th>组别</th><th>结果</th><th>详情</th></tr>
@@ -7245,13 +7353,21 @@ button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:
     <div class="panel">
       <div class="row" style="justify-content:space-between">
         <div>
-          <h3 style="margin:0">24小时抓取与推送时间点</h3>
-          <div class="small">显示最近 12 条抓取与推送记录。</div>
+          <h3 style="margin:0">抓取历史</h3>
+          <div class="small">显示最近 24 小时的 24 条抓取记录。</div>
         </div>
         <button class="secondary" onclick="loadTimeline()">刷新</button>
       </div>
       <div class="table-scroll">
         <table class="history-table">
+          <colgroup>
+            <col style="width:18%">
+            <col style="width:12%">
+            <col style="width:12%">
+            <col style="width:26%">
+            <col style="width:12%">
+            <col style="width:20%">
+          </colgroup>
           <thead>
             <tr><th>时间</th><th>来源</th><th>类型</th><th>窗口/目标</th><th>状态</th><th>详情</th></tr>
           </thead>
@@ -7270,6 +7386,13 @@ button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:
       </div>
       <div class="table-scroll">
         <table class="history-table">
+          <colgroup>
+            <col style="width:18%">
+            <col style="width:18%">
+            <col style="width:12%">
+            <col style="width:12%">
+            <col style="width:40%">
+          </colgroup>
           <thead>
             <tr><th>预计推送时间</th><th>预计抓取时间</th><th>时段</th><th>频率</th><th>说明</th></tr>
           </thead>
@@ -7305,8 +7428,8 @@ async function openUpgradeModal(){const m=document.getElementById('upgradeModal'
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 
-async function loadHistory(){const body=document.getElementById('historyBody');if(!body)return;const rows=await fetch('/api/channel/history?limit=12').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="5" class="small">暂无最近历史发送记录</td></tr>';return;}body.innerHTML=rows.map(it=>'<tr><td>'+fmtHistoryTime(it.sent_at)+'</td><td>'+sendModeLabel(it.send_mode)+'</td><td>第'+Number(it.group_index||0)+'组 / '+esc(it.group_name||'-')+'</td><td class="'+(String(it.status||'').toLowerCase()==='success'?'ok':'fail')+'">'+(String(it.status||'').toLowerCase()==='success'?'成功':'失败')+'</td><td>'+esc(it.error_text||'-')+'</td></tr>').join('');}
-async function loadTimeline(){const body=document.getElementById('timelineBody');if(!body)return;const rows=await fetch('/api/channel/timeline?hours=24&limit=12').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="6" class="small">近 24 小时暂无抓取或推送记录</td></tr>';return;}body.innerHTML=rows.map(it=>{const status=String(it.status||'').toLowerCase();const statusCls=status==='success'?'ok':(status==='failed'?'fail':'');const target=it.target||it.window||'-';const detail=[it.records?('记录数 '+Number(it.records)):'',it.detail||''].filter(Boolean).join(' | ');return '<tr><td>'+fmtHistoryTime(it.ts)+'</td><td>'+esc(sourceLabel(it.source||'-'))+'</td><td>'+esc(typeLabel(it.type||'-'))+'</td><td>'+esc(target)+'</td><td class="'+statusCls+'">'+esc(it.status||'-')+'</td><td>'+esc(detail||'-')+'</td></tr>';}).join('');}
+async function loadHistory(){const body=document.getElementById('historyBody');if(!body)return;const rows=await fetch('/api/channel/history?limit=15').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="5" class="small">暂无最近历史发送记录</td></tr>';return;}body.innerHTML=rows.map(it=>'<tr><td>'+fmtHistoryTime(it.sent_at)+'</td><td>'+sendModeLabel(it.send_mode)+'</td><td>第'+Number(it.group_index||0)+'组 / '+esc(it.group_name||'-')+'</td><td class="'+(String(it.status||'').toLowerCase()==='success'?'ok':'fail')+'">'+(String(it.status||'').toLowerCase()==='success'?'成功':'失败')+'</td><td>'+esc(it.error_text||'-')+'</td></tr>').join('');}
+async function loadTimeline(){const body=document.getElementById('timelineBody');if(!body)return;const rows=await fetch('/api/channel/timeline?hours=24&limit=24').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="6" class="small">近 24 小时暂无抓取记录</td></tr>';return;}body.innerHTML=rows.map(it=>{const status=String(it.status||'').toLowerCase();const statusCls=status==='success'?'ok':(status==='failed'?'fail':'');const target=it.target||it.window||'-';const detail=[it.records?('记录数 '+Number(it.records)):'',it.detail||''].filter(Boolean).join(' | ');return '<tr><td>'+fmtHistoryTime(it.ts)+'</td><td>'+esc(sourceLabel(it.source||'-'))+'</td><td>'+esc(typeLabel(it.type||'-'))+'</td><td>'+esc(target)+'</td><td class="'+statusCls+'">'+esc(it.status||'-')+'</td><td>'+esc(detail||'-')+'</td></tr>';}).join('');}
 async function loadSchedule(){const body=document.getElementById('scheduleBody');if(!body)return;const rows=await fetch('/api/channel/schedule?hours=24').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="5" class="small">'+(rawEnabled?'未来 24 小时暂无预计推送项目':'自动通知未开启，暂无未来推送计划')+'</td></tr>';return;}body.innerHTML=rows.map(it=>'<tr><td>'+fmtHistoryTime(it.push_ts)+'</td><td>'+fmtHistoryTime(it.capture_ts)+'</td><td>'+esc(periodLabel(it.period||'-'))+'</td><td>'+(Number(it.interval_min||0)>0?(Number(it.interval_min)+' 分钟'):'-')+'</td><td>'+esc(it.detail||'-')+'</td></tr>').join('');}
 async function save(){const msg=document.getElementById('msg');msg.textContent='正在保存...';const workInterval=intValue('notify-work-interval',rawWorkInterval||rawInterval||15);const offInterval=intValue('notify-off-interval',rawOffInterval||workInterval);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken),telegram_channel:currentValue(document.getElementById('channel'),rawChannel),notify_interval_min:workInterval,notify_work_interval_min:workInterval,notify_off_interval_min:offInterval,work_time_expr:String((document.getElementById('work-time-expr').value||'').trim()),notify_enabled:document.getElementById('notify-enabled').checked};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;tokenDirty=false;channelDirty=false;syncInputs();await loadSchedule();msg.textContent='保存成功';return;}msg.textContent='保存失败: '+await r.text();}
 async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='正在发送测试消息...';const r=await fetch('/api/channel/test',{method:'POST'});msg.textContent=r.ok?'测试发送成功':'测试发送失败: '+await r.text();await loadHistory();}
