@@ -4,8 +4,7 @@ import (
 	"net/http"
 
 	"multipleexchangeliquidationmap/internal/appctx"
-	"multipleexchangeliquidationmap/internal/platform/httpx"
-	"multipleexchangeliquidationmap/internal/platform/render"
+	"multipleexchangeliquidationmap/internal/platform/pageview"
 	"multipleexchangeliquidationmap/internal/shared/pages"
 )
 
@@ -18,6 +17,7 @@ func newHandlers(deps *appctx.Dependencies) *handlers {
 }
 
 func (h *handlers) handlePage(w http.ResponseWriter, r *http.Request) {
-	httpx.NoStore(w)
-	render.PreferredFileOrFallback(w, pages.Analysis(), nil)
+	pageview.Serve(w, r, pages.Analysis(), nil, pageview.Options{
+		NoStore: true,
+	})
 }

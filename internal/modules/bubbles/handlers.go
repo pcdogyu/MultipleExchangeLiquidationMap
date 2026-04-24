@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"multipleexchangeliquidationmap/internal/appctx"
-	"multipleexchangeliquidationmap/internal/platform/render"
+	"multipleexchangeliquidationmap/internal/platform/pageview"
 	"multipleexchangeliquidationmap/internal/shared/pages"
 )
 
@@ -17,5 +17,5 @@ func newHandlers(deps *appctx.Dependencies) *handlers {
 }
 
 func (h *handlers) handlePage(w http.ResponseWriter, r *http.Request) {
-	render.PreferredFileOrFallback(w, pages.Bubbles(), nil)
+	pageview.Serve(w, r, pages.Bubbles(), nil, pageview.Options{})
 }
