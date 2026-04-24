@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>模型配置</title>
+<title>{{.PageTitle}}</title>
 <style>
 body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
 .nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
@@ -52,13 +52,14 @@ th,td{padding:8px;border:1px solid #e2e8f0;text-align:left}
     <div class="brand">ETH Liquidation Map</div>
     <div class="menu">
       <a href="/">清算热区</a>
-      <a href="/config" class="active">模型配置</a>
+      <a href="/config"{{if eq .ActiveMenu "config"}} class="active"{{end}}>模型配置</a>
       <a href="/monitor">雷区监控</a>
       <a href="/map">盘口汇总</a>
       <a href="/liquidations">强平清算</a>
       <a href="/bubbles">气泡图</a>
       <a href="/webdatasource">页面数据源</a>
       <a href="/channel">消息通道</a>
+      <a href="/analysis"{{if eq .ActiveMenu "analysis"}} class="active"{{end}}>日内分析</a>
     </div>
   </div>
   <div class="nav-right">
@@ -72,6 +73,13 @@ th,td{padding:8px;border:1px solid #e2e8f0;text-align:left}
 </div>
 
 <div class="wrap">
+  {{if .ShowAnalysisInfo}}
+  <div class="panel">
+    <h2 style="margin-top:0">日内分析</h2>
+    <div class="small">首版先承接模型参数与说明，后续会在这里补充分析结果、评分与回测摘要。</div>
+    <div class="small" style="margin-top:8px">当前页面可直接编辑与日内分析相关的模型参数，保存后会与“模型配置”页面保持同步。</div>
+  </div>
+  {{end}}
   <div class="panel">
     <h2 style="margin-top:0">清算地图模型参数</h2>
     <div class="small">修改后会立刻影响 OI 增量模型的计算与展示。</div>

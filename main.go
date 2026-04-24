@@ -581,6 +581,30 @@ func (a *App) setWindow(days int) {
 	a.mu.Unlock()
 }
 
+func normalizeWindowDays(days int) (int, bool) {
+	switch days {
+	case windowIntraday, 1, 7, 30:
+		return days, true
+	default:
+		return 0, false
+	}
+}
+
+func requestedWindowDays(r *http.Request) (int, bool, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("days"))
+	if raw == "" {
+		return 0, false, nil
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, true, fmt.Errorf("invalid days")
+	}
+	if normalized, ok := normalizeWindowDays(days); ok {
+		return normalized, true, nil
+	}
+	return 0, true, fmt.Errorf("invalid days")
+}
+
 func main() {
 	debug := getenv("DEBUG", "") == "1" || strings.EqualFold(getenv("DEBUG", ""), "true")
 	closeLog, err := setupLogging(debug)
@@ -638,6 +662,7 @@ func main() {
 	mux.HandleFunc("/monitor", app.handleMonitor)
 	mux.HandleFunc("/map", app.handleMap)
 	mux.HandleFunc("/config", app.handleConfig)
+	mux.HandleFunc("/analysis", app.handleAnalysis)
 	mux.HandleFunc("/liquidations", app.handleLiquidations)
 	mux.HandleFunc("/bubbles", app.handleBubbles)
 	mux.HandleFunc("/webdatasource", app.handleWebDataSource)
@@ -685,6 +710,10 @@ func main() {
 func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
 	}
 	renderHTMLPage(w, "index", indexHTML, nil)
 }
@@ -745,6 +774,13 @@ func (a *App) handleMonitor(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
 	}
+	if strings.TrimSpace(r.URL.Query().Get("days")) == "" {
+		q := r.URL.Query()
+		q.Set("days", "30")
+		target := r.URL.Path + "?" + q.Encode()
+		http.Redirect(w, r, target, http.StatusFound)
+		return
+	}
 	tpl := template.Must(template.New("monitor").Parse(monitorHTML))
 	_ = tpl.Execute(w, nil)
 }
@@ -756,11 +792,17 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
-	if body, err := os.ReadFile("config_page_fixed.html"); err == nil {
-		renderHTMLPage(w, "config", string(body), a.loadModelConfig())
-		return
+	a.renderModelConfigPage(w, "config")
+}
+
+func (a *App) handleAnalysis(w http.ResponseWriter, r *http.Request) {
+	if a.debug {
+		log.Printf("%s %s", r.Method, r.URL.Path)
 	}
-	renderHTMLPage(w, "config", configHTML, a.loadModelConfig())
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	a.renderModelConfigPage(w, "analysis")
 }
 
 func (a *App) handleLiquidations(w http.ResponseWriter, r *http.Request) {
@@ -799,6 +841,30 @@ func (a *App) handleChannel(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type modelConfigPageData struct {
+	ModelConfig
+	PageTitle        string
+	ActiveMenu       string
+	ShowAnalysisInfo bool
+}
+
+func (a *App) renderModelConfigPage(w http.ResponseWriter, activeMenu string) {
+	data := modelConfigPageData{
+		ModelConfig:      a.loadModelConfig(),
+		ActiveMenu:       activeMenu,
+		ShowAnalysisInfo: activeMenu == "analysis",
+		PageTitle:        "模型配置",
+	}
+	if activeMenu == "analysis" {
+		data.PageTitle = "日内分析"
+	}
+	if body, err := os.ReadFile("config_page_fixed.html"); err == nil {
+		renderHTMLPage(w, "model_config_page", string(body), data)
+		return
+	}
+	renderHTMLPage(w, "model_config_page", configHTML, data)
+}
+
 func (a *App) handleWindow(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
@@ -814,10 +880,9 @@ func (a *App) handleWindow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	switch req.Days {
-	case windowIntraday, 1, 7, 30:
-		a.setWindow(req.Days)
-	default:
+	if days, ok := normalizeWindowDays(req.Days); ok {
+		a.setWindow(days)
+	} else {
 		http.Error(w, "invalid days", http.StatusBadRequest)
 	}
 }
@@ -827,6 +892,12 @@ func (a *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		log.Printf("%s %s", r.Method, r.URL.Path)
 	}
 	days := a.window()
+	if requestedDays, hasRequestedDays, err := requestedWindowDays(r); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	} else if hasRequestedDays {
+		days = requestedDays
+	}
 	dash, err := a.buildDashboard(days)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -845,6 +916,12 @@ func (a *App) handleModelLiquidationMap(w http.ResponseWriter, r *http.Request) 
 	}
 	cfg := a.loadModelConfig()
 	windowDays := a.window()
+	if requestedDays, hasRequestedDays, err := requestedWindowDays(r); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	} else if hasRequestedDays {
+		windowDays = requestedDays
+	}
 	defaultLookbackMin := lookbackMinForWindow(time.Now(), windowDays)
 	lookbackMin := defaultLookbackMin
 	lookbackOverridden := false
@@ -2551,16 +2628,16 @@ func (a *App) sendTelegramThirtyDayBundle(isTest bool) error {
 		sendMode = "test"
 	}
 
-	monitorReport, err := a.buildModelHeatReportDataForWindow(windowDays)
+	webMap := a.webds.loadLatestMap("30d")
+	displayPrice := a.resolveUnifiedDisplayPrice(webMap, 0)
+	monitorReport, modelBands, err := a.buildModelHeatReportBundleForWindow(windowDays, displayPrice)
 	if err != nil {
 		return fmt.Errorf("build 30-day monitor report: %w", err)
 	}
-	monitorBands, err := a.buildMonitorHeatBandsForWindow(windowDays)
-	if err != nil && a.debug {
-		log.Printf("build monitor heat bands for telegram failed: %v", err)
+	monitorBands := buildMonitorHeatBandsFromWebMapAtPrice(webMap, displayPrice)
+	if len(monitorBands) == 0 {
+		monitorBands = modelBands
 	}
-
-	webMap := a.webds.loadLatestMap("30d")
 
 	var errs []string
 
@@ -2600,7 +2677,7 @@ func (a *App) sendTelegramThirtyDayBundle(isTest bool) error {
 		a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "success", "")
 	}
 
-	text := a.buildTelegramThirtyDayTextV2(monitorReport, monitorBands)
+	text := a.buildTelegramThirtyDayTextV4(monitorReport, monitorBands, webMap)
 	if err := a.sendTelegramText(text); err != nil {
 		msg := fmt.Sprintf("发送失败: %v", err)
 		a.recordTelegramSendHistory(sendMode, 3, "monitor-30d-text", "failed", msg)
@@ -2647,6 +2724,7 @@ func (a *App) startTelegramNotifier(ctx context.Context) {
 
 func (a *App) buildHeatReportMessage(d Dashboard) string {
 	showBands := map[int]bool{10: true, 20: true, 30: true, 40: true, 50: true, 60: true, 80: true, 100: true, 150: true}
+
 	lines := []string{
 		"Heat report",
 		fmt.Sprintf("Current price %.1f", d.CurrentPrice),
@@ -2671,52 +2749,105 @@ func (a *App) buildModelHeatReportData() (HeatReportData, error) {
 }
 
 func (a *App) buildModelHeatReportDataForWindow(windowDays int) (HeatReportData, error) {
-	cfg := a.loadModelConfig()
-	lookbackMin := lookbackMinForWindow(time.Now(), windowDays)
-	model, err := a.buildModelLiquidationMap(defaultSymbol, lookbackMin, cfg.BucketMin, cfg.PriceStep, cfg.PriceRange, cfg)
-	if err != nil {
-		return HeatReportData{}, err
-	}
-	return buildHeatReportDataFromModel(model), nil
+	report, _, err := a.buildModelHeatReportBundleForWindow(windowDays, 0)
+	return report, err
 }
 
 func (a *App) buildMonitorHeatBandsForWindow(windowDays int) ([]HeatReportBand, error) {
+	_, bands, err := a.buildModelHeatReportBundleForWindow(windowDays, 0)
+	return bands, err
+}
+
+func (a *App) buildModelHeatReportBundleForWindow(windowDays int, anchorPrice float64) (HeatReportData, []HeatReportBand, error) {
 	cfg := a.loadModelConfig()
 	lookbackMin := lookbackMinForWindow(time.Now(), windowDays)
 	model, err := a.buildModelLiquidationMap(defaultSymbol, lookbackMin, cfg.BucketMin, cfg.PriceStep, cfg.PriceRange, cfg)
 	if err != nil {
-		return nil, err
+		return HeatReportData{}, nil, err
 	}
-	return buildMonitorHeatBandsFromModel(model), nil
+	return buildHeatReportDataFromModelAtPrice(model, anchorPrice), buildMonitorHeatBandsFromModelAtPrice(model, anchorPrice), nil
+}
+
+type heatModelPoint struct {
+	price float64
+	value float64
 }
 
 func buildMonitorHeatBandsFromModel(model map[string]any) []HeatReportBand {
-	current := toFloatAny(model["current_price"])
-	prices, _ := model["prices"].([]float64)
-	grid, _ := model["intensity_grid"].([][]float64)
-	if current <= 0 || len(prices) == 0 || len(grid) == 0 {
+	return buildMonitorHeatBandsFromModelAtPrice(model, 0)
+}
+
+func buildMonitorHeatBandsFromWebMapAtPrice(webMap WebDataSourceMapResponse, anchorPrice float64) []HeatReportBand {
+	if !webMap.HasData || len(webMap.Points) == 0 {
 		return nil
 	}
-	type pt struct {
-		price float64
-		value float64
+	current := roundDisplayPrice1(anchorPrice)
+	if current <= 0 {
+		current = roundDisplayPrice1(webMap.CurrentPrice)
 	}
-	points := make([]pt, 0, len(prices))
-	for i, p := range prices {
-		if i >= len(grid) || p <= 0 {
+	if current <= 0 {
+		return nil
+	}
+	type groupedPoint struct {
+		side  string
+		price float64
+		total float64
+	}
+	groupMap := make(map[string]*groupedPoint)
+	for _, pt := range webMap.Points {
+		side := strings.ToLower(strings.TrimSpace(pt.Side))
+		if side != "short" {
+			side = "long"
+		}
+		if pt.Price <= 0 || pt.LiqValue <= 0 {
 			continue
 		}
-		sum := 0.0
-		for _, v := range grid[i] {
-			if v > 0 {
-				sum += v
+		key := side + "|" + strconv.FormatFloat(pt.Price, 'f', 4, 64)
+		group := groupMap[key]
+		if group == nil {
+			group = &groupedPoint{side: side, price: pt.Price}
+			groupMap[key] = group
+		}
+		group.total += pt.LiqValue
+	}
+	if len(groupMap) == 0 {
+		return nil
+	}
+	desired := []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150, 200, 250, 300}
+	out := make([]HeatReportBand, 0, len(desired))
+	highlight := map[int]bool{20: true, 50: true, 80: true, 100: true, 200: true, 300: true}
+	for _, band := range desired {
+		upTotal, downTotal := 0.0, 0.0
+		upBound := current + float64(band)
+		downBound := current - float64(band)
+		for _, group := range groupMap {
+			switch group.side {
+			case "short":
+				if group.price >= current && group.price <= upBound {
+					upTotal += group.total
+				}
+			default:
+				if group.price <= current && group.price >= downBound {
+					downTotal += group.total
+				}
 			}
 		}
-		if sum > 0 {
-			points = append(points, pt{price: p, value: sum})
-		}
+		out = append(out, HeatReportBand{
+			Band:            band,
+			UpPrice:         math.Round(upBound*10) / 10,
+			UpNotionalUSD:   upTotal,
+			DownPrice:       math.Round(downBound*10) / 10,
+			DownNotionalUSD: downTotal,
+			DiffUSD:         math.Abs(downTotal - upTotal),
+			Highlight:       highlight[band],
+		})
 	}
-	if len(points) == 0 {
+	return out
+}
+
+func buildMonitorHeatBandsFromModelAtPrice(model map[string]any, anchorPrice float64) []HeatReportBand {
+	current, points, ok := modelHeatPointsAndAnchor(model, anchorPrice)
+	if !ok {
 		return nil
 	}
 	desired := []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150, 200, 250, 300}
@@ -2747,34 +2878,17 @@ func buildMonitorHeatBandsFromModel(model map[string]any) []HeatReportBand {
 }
 
 func buildHeatReportDataFromModel(model map[string]any) HeatReportData {
-	current := toFloatAny(model["current_price"])
-	prices, _ := model["prices"].([]float64)
-	grid, _ := model["intensity_grid"].([][]float64)
+	return buildHeatReportDataFromModelAtPrice(model, 0)
+}
+
+func buildHeatReportDataFromModelAtPrice(model map[string]any, anchorPrice float64) HeatReportData {
+	current, points, ok := modelHeatPointsAndAnchor(model, anchorPrice)
 	out := HeatReportData{GeneratedAt: time.Now().UnixMilli(), CurrentPrice: current}
 	if v := toFloatAny(model["generated_at"]); v > 0 {
 		out.GeneratedAt = int64(v)
 	}
-	if current <= 0 || len(prices) == 0 || len(grid) == 0 {
+	if !ok {
 		return out
-	}
-	type pt struct {
-		price float64
-		value float64
-	}
-	points := make([]pt, 0, len(prices))
-	for i, p := range prices {
-		if i >= len(grid) || p <= 0 {
-			continue
-		}
-		sum := 0.0
-		for _, v := range grid[i] {
-			if v > 0 {
-				sum += v
-			}
-		}
-		if sum > 0 {
-			points = append(points, pt{price: p, value: sum})
-		}
 	}
 	bands := []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150, 200, 250, 300}
 	highlight := map[int]bool{20: true, 50: true, 80: true, 100: true, 200: true, 300: true}
@@ -2823,6 +2937,37 @@ func buildHeatReportDataFromModel(model map[string]any) HeatReportData {
 		}
 	}
 	return out
+}
+
+func modelHeatPointsAndAnchor(model map[string]any, anchorPrice float64) (float64, []heatModelPoint, bool) {
+	current := toFloatAny(model["current_price"])
+	prices, _ := model["prices"].([]float64)
+	grid, _ := model["intensity_grid"].([][]float64)
+	if current <= 0 || len(prices) == 0 || len(grid) == 0 {
+		return 0, nil, false
+	}
+	if anchorPrice > 0 {
+		current = math.Round(anchorPrice*10) / 10
+	}
+	points := make([]heatModelPoint, 0, len(prices))
+	for i, p := range prices {
+		if i >= len(grid) || p <= 0 {
+			continue
+		}
+		sum := 0.0
+		for _, v := range grid[i] {
+			if v > 0 {
+				sum += v
+			}
+		}
+		if sum > 0 {
+			points = append(points, heatModelPoint{price: p, value: sum})
+		}
+	}
+	if len(points) == 0 {
+		return 0, nil, false
+	}
+	return current, points, true
 }
 
 func heatReportBandBySize(r HeatReportData, band int) HeatReportBand {
@@ -3102,8 +3247,48 @@ func (a *App) captureMonitorScreenshotJPEG(windowDays int) ([]byte, error) {
 
 func (a *App) captureWebDataSourceScreenshotJPEG(window string) ([]byte, error) {
 	pageURL := fmt.Sprintf("http://127.0.0.1%s/webdatasource", defaultServerAddr)
-	prepare := fmt.Sprintf(`(async()=>{ if (typeof setTheme==='function') setTheme('light'); const sel=document.getElementById('windowSel'); if (sel) sel.value=%q; if (typeof loadMap==='function') { await loadMap(); } return true; })()`, window)
-	wait := fmt.Sprintf(`(function(){ const sel=document.getElementById('windowSel'); const cv=document.getElementById('cv'); const mapReady=(typeof currentMap!=='undefined' && currentMap && currentMap.has_data && Array.isArray(currentMap.points) && currentMap.points.length>0); return !!(sel && sel.value===%q && mapReady && cv && cv.width>0 && cv.height>0); })()`, window)
+	quotedWindow := strconv.Quote(window)
+	prepare := `(async()=>{
+		const targetWindow=` + quotedWindow + `;
+		if (typeof setTheme==='function') setTheme('light');
+		const emptyBands={'1d':[],'7d':[],'30d':[]};
+		const top3On={'1d':{long:true,short:true},'7d':{long:true,short:true},'30d':{long:true,short:true}};
+		try{
+			localStorage.setItem('webdatasource_band_labels_by_window_v1', JSON.stringify(emptyBands));
+			localStorage.setItem('webdatasource_top3_labels_by_window_v1', JSON.stringify(top3On));
+			localStorage.setItem('webdatasource_label_scale_v1', '1');
+			localStorage.setItem('preferred_window_days', targetWindow==='30d'?'30':(targetWindow==='7d'?'7':(targetWindow==='1d'?'1':'30')));
+		}catch(_){}
+		if(typeof bandLabelSelections!=='undefined') bandLabelSelections=emptyBands;
+		if(typeof top3LabelVisibility!=='undefined') top3LabelVisibility=top3On;
+		if(typeof labelScale!=='undefined') labelScale=1;
+		if(typeof renderedBandControlsKey!=='undefined') renderedBandControlsKey='';
+		if(typeof renderedTop3ControlsKey!=='undefined') renderedTop3ControlsKey='';
+		if(typeof renderedLabelScaleValue!=='undefined') renderedLabelScaleValue=null;
+		if(typeof mapViewMin!=='undefined') mapViewMin=null;
+		if(typeof mapViewMax!=='undefined') mapViewMax=null;
+		if(typeof mapWindowKey!=='undefined') mapWindowKey='';
+		const sel=document.getElementById('windowSel');
+		if (sel) sel.value=targetWindow;
+		if (typeof renderLabelSizeControls==='function') renderLabelSizeControls();
+		if (typeof renderTop3Controls==='function') renderTop3Controls(targetWindow);
+		if (typeof renderBandControls==='function') renderBandControls(targetWindow);
+		if (typeof loadMap==='function') {
+			await loadMap();
+		}
+		await new Promise(resolve=>setTimeout(resolve,500));
+		if (typeof draw==='function') draw();
+		return true;
+	})()`
+	wait := `(function(){
+		const targetWindow=` + quotedWindow + `;
+		const sel=document.getElementById('windowSel');
+		const cv=document.getElementById('cv');
+		const mapReady=(typeof currentMap!=='undefined' && currentMap && currentMap.has_data && Array.isArray(currentMap.points) && currentMap.points.length>0);
+		const top3Ready=(typeof top3LabelVisibility==='undefined')||((top3LabelVisibility&&top3LabelVisibility[targetWindow]&&top3LabelVisibility[targetWindow].long===true&&top3LabelVisibility[targetWindow].short===true));
+		const bandsReady=(typeof bandLabelSelections==='undefined')||((bandLabelSelections&&Array.isArray(bandLabelSelections[targetWindow])&&bandLabelSelections[targetWindow].length===0));
+		return !!(sel && sel.value===targetWindow && mapReady && cv && cv.width>0 && cv.height>0 && top3Ready && bandsReady);
+	})()`
 	return captureCanvasJPEGWithScale(pageURL, "#cv", 1480, 980, 2, prepare, wait)
 }
 
@@ -3152,7 +3337,8 @@ func (a *App) buildWebDataSourceBundleCaption(windowDays int, m WebDataSourceMap
 }
 
 func (a *App) buildHeatReportInterpretation(windowDays int, dash Dashboard, monitor HeatReportData, webMap WebDataSourceMapResponse, isTest bool) string {
-	return a.buildTelegramThirtyDayTextV2(monitor, nil)
+	monitorBands := buildMonitorHeatBandsFromWebMapAtPrice(webMap, monitor.CurrentPrice)
+	return a.buildTelegramThirtyDayTextV4(monitor, monitorBands, webMap)
 }
 
 func (a *App) latestOKXClose() (float64, int64, error) {
@@ -3178,25 +3364,30 @@ func (a *App) latestOKXClose() (float64, int64, error) {
 	return math.Round(closePrice*10) / 10, ts, nil
 }
 
-func (a *App) resolveTelegramDisplayPrice(fallback float64) float64 {
-	if closePrice, _, err := a.latestOKXClose(); err == nil && closePrice > 0 {
-		return closePrice
-	}
-	states, err := a.loadMarketStates(defaultSymbol)
-	if err == nil {
-		if price := averageMarkPrice(states); price > 0 {
-			return math.Round(price*10) / 10
-		}
-	}
-	if fallback <= 0 {
+func roundDisplayPrice1(v float64) float64 {
+	if v <= 0 {
 		return 0
 	}
-	return math.Round(fallback*10) / 10
+	return math.Round(v*10) / 10
 }
 
-func (a *App) enrichHeatReportForTelegram(monitor HeatReportData) HeatReportData {
+func (a *App) resolveUnifiedDisplayPrice(webMap WebDataSourceMapResponse, fallback float64) float64 {
+	if webMap.CurrentPrice > 0 {
+		return roundDisplayPrice1(webMap.CurrentPrice)
+	}
+	return roundDisplayPrice1(fallback)
+}
+
+func (a *App) resolveTelegramDisplayPrice(fallback float64) float64 {
+	return a.resolveUnifiedDisplayPrice(WebDataSourceMapResponse{}, fallback)
+}
+
+func (a *App) enrichHeatReportForTelegram(monitor HeatReportData, webMap WebDataSourceMapResponse) HeatReportData {
 	display := monitor
-	price := a.resolveTelegramDisplayPrice(monitor.CurrentPrice)
+	price := roundDisplayPrice1(monitor.CurrentPrice)
+	if price <= 0 {
+		price = a.resolveUnifiedDisplayPrice(webMap, monitor.CurrentPrice)
+	}
 	if price <= 0 {
 		return display
 	}
@@ -3208,6 +3399,148 @@ func (a *App) enrichHeatReportForTelegram(monitor HeatReportData) HeatReportData
 		display.ShortPeak.Distance = math.Abs(display.ShortPeak.Price - price)
 	}
 	return display
+}
+
+func formatPrice2(v float64) string {
+	return fmt.Sprintf("%.2f", v)
+}
+
+func formatPointDistance(v float64) string {
+	return fmt.Sprintf("%.1f", math.Abs(v))
+}
+
+func telegramImbalanceLabel(up, down float64) string {
+	switch {
+	case down > up:
+		return "多单偏多"
+	case up > down:
+		return "空单偏多"
+	default:
+		return "基本均衡"
+	}
+}
+
+func telegramPeakVerdict(longPeak, shortPeak HeatReportPeak) string {
+	switch {
+	case longPeak.SingleUSD > shortPeak.SingleUSD:
+		return "下方多单更强"
+	case shortPeak.SingleUSD > longPeak.SingleUSD:
+		return "上方空单更强"
+	default:
+		return "最长柱均衡"
+	}
+}
+
+func resolveTelegramPeakFromWebMap(currentPrice float64, side string, webMap WebDataSourceMapResponse) (HeatReportPeak, bool) {
+	if !webMap.HasData || len(webMap.Points) == 0 {
+		return HeatReportPeak{}, false
+	}
+	side = strings.ToLower(strings.TrimSpace(side))
+	if side != "short" {
+		side = "long"
+	}
+	type groupedPoint struct {
+		price float64
+		total float64
+	}
+	groupMap := make(map[string]*groupedPoint)
+	for _, pt := range webMap.Points {
+		ptSide := strings.ToLower(strings.TrimSpace(pt.Side))
+		if ptSide != side || pt.Price <= 0 || pt.LiqValue <= 0 {
+			continue
+		}
+		key := strconv.FormatFloat(pt.Price, 'f', 4, 64)
+		group := groupMap[key]
+		if group == nil {
+			group = &groupedPoint{price: pt.Price}
+			groupMap[key] = group
+		}
+		group.total += pt.LiqValue
+	}
+	if len(groupMap) == 0 {
+		return HeatReportPeak{}, false
+	}
+
+	peak := HeatReportPeak{}
+	for _, group := range groupMap {
+		if group.total > peak.SingleUSD {
+			peak.Price = group.price
+			peak.SingleUSD = group.total
+			continue
+		}
+		if group.total == peak.SingleUSD && peak.Price > 0 {
+			groupDist := math.Abs(group.price - currentPrice)
+			peakDist := math.Abs(peak.Price - currentPrice)
+			if groupDist < peakDist || (groupDist == peakDist && group.price < peak.Price) {
+				peak.Price = group.price
+			}
+		}
+	}
+	if peak.Price <= 0 || peak.SingleUSD <= 0 {
+		return HeatReportPeak{}, false
+	}
+	if currentPrice > 0 {
+		peak.Distance = math.Abs(peak.Price - currentPrice)
+	}
+	for _, group := range groupMap {
+		switch side {
+		case "short":
+			if currentPrice > 0 {
+				if group.price < currentPrice || group.price > peak.Price {
+					continue
+				}
+			} else if group.price > peak.Price {
+				continue
+			}
+		default:
+			if currentPrice > 0 {
+				if group.price > currentPrice || group.price < peak.Price {
+					continue
+				}
+			} else if group.price < peak.Price {
+				continue
+			}
+		}
+		peak.CumulativeUSD += group.total
+	}
+	if peak.CumulativeUSD < peak.SingleUSD {
+		peak.CumulativeUSD = peak.SingleUSD
+	}
+	return peak, true
+}
+
+func (a *App) alignTelegramTextHeatReport(monitor HeatReportData, webMap WebDataSourceMapResponse) HeatReportData {
+	display := a.enrichHeatReportForTelegram(monitor, webMap)
+	if webMap.LongTotal > 0 {
+		display.LongTotalUSD = webMap.LongTotal
+	}
+	if webMap.ShortTotal > 0 {
+		display.ShortTotalUSD = webMap.ShortTotal
+	}
+	if peak, ok := resolveTelegramPeakFromWebMap(display.CurrentPrice, "long", webMap); ok {
+		display.LongPeak = peak
+	}
+	if peak, ok := resolveTelegramPeakFromWebMap(display.CurrentPrice, "short", webMap); ok {
+		display.ShortPeak = peak
+	}
+	return display
+}
+
+func buildTelegramImbalanceLine(b HeatReportBand) string {
+	sign := ""
+	switch {
+	case b.DownNotionalUSD > b.UpNotionalUSD:
+		sign = "+"
+	case b.UpNotionalUSD > b.DownNotionalUSD:
+		sign = "-"
+	}
+	return fmt.Sprintf(
+		"<b>%d点内</b> %s(%s%s亿)",
+		b.Band,
+		telegramImbalanceLabel(b.UpNotionalUSD, b.DownNotionalUSD),
+		sign,
+		formatYi2(math.Abs(b.DownNotionalUSD-b.UpNotionalUSD)),
+	)
 }
 
 func (a *App) buildTelegramThirtyDayText(monitor HeatReportData) string {
@@ -3261,8 +3594,8 @@ func (a *App) buildTelegramThirtyDayText(monitor HeatReportData) string {
 	return strings.Join(lines, "\n")
 }
 
-func (a *App) buildTelegramThirtyDayTextV2(monitor HeatReportData, monitorBands []HeatReportBand) string {
-	monitor = a.enrichHeatReportForTelegram(monitor)
+func (a *App) buildTelegramThirtyDayTextV2(monitor HeatReportData, monitorBands []HeatReportBand, webMap WebDataSourceMapResponse) string {
+	monitor = a.alignTelegramTextHeatReport(monitor, webMap)
 	bandBySize := func(band int) HeatReportBand {
 		if len(monitorBands) > 0 {
 			return heatBandBySize(monitorBands, band)
@@ -3307,6 +3640,77 @@ func (a *App) buildTelegramThirtyDayTextV2(monitor HeatReportData, monitorBands 
 		strings.Replace(imbalanceLine(b100), "100点内", "<b>100点</b>内", 1),
 		strings.Replace(imbalanceLine(b200), "200点内", "<b>200点</b>内", 1),
 		strings.Replace(imbalanceLine(b300), "300点内", "<b>300点</b>内", 1),
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (a *App) buildTelegramThirtyDayTextV3(monitor HeatReportData, monitorBands []HeatReportBand, webMap WebDataSourceMapResponse) string {
+	monitor = a.alignTelegramTextHeatReport(monitor, webMap)
+	bandBySize := func(band int) HeatReportBand {
+		if len(monitorBands) > 0 {
+			return heatBandBySize(monitorBands, band)
+		}
+		return heatReportBandBySize(monitor, band)
+	}
+	b20 := bandBySize(20)
+	b50 := bandBySize(50)
+	b80 := bandBySize(80)
+	b100 := bandBySize(100)
+	b200 := bandBySize(200)
+	b300 := bandBySize(300)
+	longestVerdict := telegramPeakVerdict(monitor.LongPeak, monitor.ShortPeak)
+
+	lines := []string{
+		fmt.Sprintf("<b>ETH 雷区速报 | 现价$%s</b>", formatPrice2(monitor.CurrentPrice)),
+		fmt.Sprintf("上方空单总量<b>%s亿</b> | 下方多单总量<b>%s亿</b>", formatYi1(monitor.ShortTotalUSD), formatYi1(monitor.LongTotalUSD)),
+		"",
+		"<b>上方空单最长柱</b>",
+		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice2(monitor.ShortPeak.Price), formatPointDistance(monitor.ShortPeak.Distance)),
+		fmt.Sprintf("单柱%s亿 | 从现价到该柱累计<b>%s亿</b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
+		"",
+		"<b>下方多单最长柱</b>",
+		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice2(monitor.LongPeak.Price), formatPointDistance(monitor.LongPeak.Distance)),
+		fmt.Sprintf("单柱%s亿 | 从现价到该柱累计<b>%s亿</b>", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
+		fmt.Sprintf("最长柱差值<b>%s亿</b> | %s", formatYi2(math.Abs(monitor.LongPeak.SingleUSD-monitor.ShortPeak.SingleUSD)), longestVerdict),
+		"",
+		"<b>多空失衡解读</b>",
+		buildTelegramImbalanceLine(b20),
+		buildTelegramImbalanceLine(b50),
+		buildTelegramImbalanceLine(b80),
+		buildTelegramImbalanceLine(b100),
+		buildTelegramImbalanceLine(b200),
+		buildTelegramImbalanceLine(b300),
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (a *App) buildTelegramThirtyDayTextV4(monitor HeatReportData, monitorBands []HeatReportBand, webMap WebDataSourceMapResponse) string {
+	monitor = a.alignTelegramTextHeatReport(monitor, webMap)
+	bandBySize := func(band int) HeatReportBand {
+		if len(monitorBands) > 0 {
+			return heatBandBySize(monitorBands, band)
+		}
+		return heatReportBandBySize(monitor, band)
+	}
+	lines := []string{
+		fmt.Sprintf("<b>ETH 雷区速报 | 现价$%s</b>", formatPrice2(monitor.CurrentPrice)),
+		fmt.Sprintf("总多单<b>%s亿</b>|总空单<b>%s亿</b>", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
+		"",
+		"<b>多单最长柱</b>",
+		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice2(monitor.LongPeak.Price), formatPointDistance(monitor.LongPeak.Distance)),
+		fmt.Sprintf("单柱%s亿 | 累计<b>%s亿</b>", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
+		"",
+		"<b>空单最长柱</b>",
+		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice2(monitor.ShortPeak.Price), formatPointDistance(monitor.ShortPeak.Distance)),
+		fmt.Sprintf("单柱%s亿 | 累计<b>%s亿</b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
+		"",
+		"多空失衡概览",
+		buildTelegramImbalanceLine(bandBySize(20)),
+		buildTelegramImbalanceLine(bandBySize(50)),
+		buildTelegramImbalanceLine(bandBySize(80)),
+		buildTelegramImbalanceLine(bandBySize(100)),
+		buildTelegramImbalanceLine(bandBySize(200)),
+		buildTelegramImbalanceLine(bandBySize(300)),
 	}
 	return strings.Join(lines, "\n")
 }
@@ -6531,10 +6935,10 @@ th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:center}
 .liq-dot.binance{background:rgba(249,115,22,.9)}.liq-dot.okx{background:rgba(234,179,8,.9)}.liq-dot.bybit{background:rgba(103,232,249,.9)}
 .desc{font-size:12px;color:var(--muted);line-height:1.5;margin-top:8px}
 .upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head><body>
-<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/" class="active">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/" class="active">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel top"><div><h2 style="margin:0 0 6px 0">ETH &#28165;&#31639;&#28909;&#21306;</h2><div class="hint">&#25353; <span class="mono">0</span> / <span class="mono">1</span> / <span class="mono">7</span> / <span class="mono">3</span> &#20999;&#25442; &#26085;&#20869; / 1&#22825; / 7&#22825; / 30&#22825;</div></div><div class="btns"><button data-days="0">&#26085;&#20869;</button><button data-days="1">1&#22825;</button><button data-days="7">7&#22825;</button><button data-days="30">30&#22825;</button></div></div>
 <div class="panel"><div id="status">loading...</div></div>
-<div class="grid"><div class="panel"><h3>ETH 清算地图（OI 增量模型）</h3><div class="heatmap-wrap"><canvas id="liqHeatMap" width="1400" height="320"></canvas><div id="liqTip" class="liq-tip"></div><div class="hint">滚轮缩放，Shift+滚轮左右平移，按住鼠标左键左右拖动。X轴：价格 | Y轴：清算金额（按价格聚合）</div><div id="liqDesc" class="desc"></div></div></div></div></div>
+<div class="grid"><div class="panel"><h3>ETH 清算地图（OI 增量模型）</h3><div class="heatmap-wrap"><canvas id="liqHeatMap" width="1400" height="320"></canvas><div id="liqTip" class="liq-tip"></div><div class="hint">滚轮缩放，Shift+滚轮左右平移，按住鼠标左键左右拖动。X轴：价格 | 左轴：单价位清算金额 | 右轴：从当前价累计清算金额</div><div id="liqDesc" class="desc"></div></div></div></div></div>
 <script>
 let currentDays=1;
 let liqMapData=null;
@@ -6553,7 +6957,7 @@ function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n)
 function fmt4(n){return Number(n).toFixed(8)}
 function fitCanvas(id){const c=document.getElementById(id);if(!c)return null;const dpr=window.devicePixelRatio||1;const rect=c.getBoundingClientRect();const W=Math.max(320,Math.floor(rect.width));const H=Math.max(220,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return {c,x,W,H};}
 function hideLiqTip(){const tip=document.getElementById('liqTip');if(tip)tip.style.display='none';}
-function showLiqTip(meta,ev){const tip=document.getElementById('liqTip');if(!tip||!meta||!meta.pts||!meta.pts.length)return;const rect=meta.c.getBoundingClientRect();const mx=ev.clientX-rect.left;let best=null,bd=1e18;for(const it of meta.pts){const d=Math.abs(mx-it.px);if(d<bd){bd=d;best=it;}}const hitW=Math.max(meta.hitW||0,meta.barW||0);if(!best||bd>(hitW*0.5)){hideLiqTip();return;}const lines=[];lines.push('<div class=\"t\">价格 '+fmtPrice(best.p)+'</div>');lines.push('<div class=\"row\"><span>累计清算额</span><span>'+fmtAmount(best.total)+'</span></div>');for(const ex of exOrder){const v=Number((best.ex||{})[ex]||0);lines.push('<div class=\"row\"><span><span class=\"liq-dot '+ex+'\"></span>'+ex.toUpperCase()+'</span><span>'+fmtAmount(v)+'</span></div>');}tip.innerHTML=lines.join('');tip.style.display='block';const wrap=document.querySelector('.heatmap-wrap');const wr=wrap?wrap.getBoundingClientRect():rect;let left=(ev.clientX-wr.left)+14,top=(ev.clientY-wr.top)+14;tip.style.left='0px';tip.style.top='0px';const tw=tip.offsetWidth||220,th=tip.offsetHeight||90;if(left+tw>wr.width-10)left=Math.max(8,wr.width-10-tw);if(top+th>wr.height-10)top=Math.max(8,wr.height-10-th);tip.style.left=left+'px';tip.style.top=top+'px';}
+function showLiqTip(meta,ev){const tip=document.getElementById('liqTip');if(!tip||!meta||!meta.pts||!meta.pts.length)return;const rect=meta.c.getBoundingClientRect();const mx=ev.clientX-rect.left;let best=null,bd=1e18;for(const it of meta.pts){const d=Math.abs(mx-it.px);if(d<bd){bd=d;best=it;}}const hitW=Math.max(meta.hitW||0,meta.barW||0);if(!best||bd>(hitW*0.5)){hideLiqTip();return;}const hasCum=Number(best.cumTotal||0)>0;const lines=[];lines.push('<div class=\"t\">价格 '+fmtPrice(best.p)+'</div>');lines.push('<div class=\"row\"><span>单价位清算额</span><span>'+fmtAmount(best.total)+'</span></div>');if(hasCum)lines.push('<div class=\"row\"><span>从当前价累计</span><span>'+fmtAmount(best.cumTotal)+'</span></div>');for(const ex of exOrder){const exact=Number((best.ex||{})[ex]||0);const cum=Number((best.cumEx||{})[ex]||0);const v=hasCum?cum:exact;if(!(v>0))continue;lines.push('<div class=\"row\"><span><span class=\"liq-dot '+ex+'\"></span>'+ex.toUpperCase()+(hasCum?' 累计':'')+'</span><span>'+fmtAmount(v)+'</span></div>');}tip.innerHTML=lines.join('');tip.style.display='block';const wrap=document.querySelector('.heatmap-wrap');const wr=wrap?wrap.getBoundingClientRect():rect;let left=(ev.clientX-wr.left)+14,top=(ev.clientY-wr.top)+14;tip.style.left='0px';tip.style.top='0px';const tw=tip.offsetWidth||220,th=tip.offsetHeight||90;if(left+tw>wr.width-10)left=Math.max(8,wr.width-10-tw);if(top+th>wr.height-10)top=Math.max(8,wr.height-10-th);tip.style.left=left+'px';tip.style.top=top+'px';}
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 function bindLiqHover(){
   const c=document.getElementById('liqHeatMap');
@@ -6675,6 +7079,42 @@ function drawLiqHeat(){
     return;
   }
 
+  const cp=Number(d.current_price||0);
+  const cumShortAll=[];
+  const cumLongAll=[];
+  if(cp>0){
+    let runS=0;
+    const runSEx={binance:0,okx:0,bybit:0};
+    for(const it of all){
+      if(it.p<cp) continue;
+      runS+=it.total;
+      const exTotals={};
+      for(const ex of exOrder){
+        runSEx[ex]+=Number((it.ex||{})[ex]||0);
+        if(runSEx[ex]>0) exTotals[ex]=runSEx[ex];
+      }
+      it.cumShortTotal=runS;
+      it.cumShortEx=exTotals;
+      cumShortAll.push({p:it.p,v:runS});
+    }
+    let runL=0;
+    const runLEx={binance:0,okx:0,bybit:0};
+    for(let i=all.length-1;i>=0;i--){
+      const it=all[i];
+      if(it.p>cp) continue;
+      runL+=it.total;
+      const exTotals={};
+      for(const ex of exOrder){
+        runLEx[ex]+=Number((it.ex||{})[ex]||0);
+        if(runLEx[ex]>0) exTotals[ex]=runLEx[ex];
+      }
+      it.cumLongTotal=runL;
+      it.cumLongEx=exTotals;
+      cumLongAll.push({p:it.p,v:runL});
+    }
+    cumLongAll.reverse();
+  }
+
   const baseMin=all[0].p,baseMax=all[all.length-1].p;
   const padL=66,padR=60,padT=16,padB=42;
   const pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;
@@ -6715,7 +7155,6 @@ function drawLiqHeat(){
   }
 
   const barW=Math.max(2,Math.min(12,pw/Math.max(40,pts.length)));
-  const cp=Number(d.current_price||0);
 
   for(const it of pts){
     const px=sx(it.p);
@@ -6736,29 +7175,9 @@ function drawLiqHeat(){
   }
 
   // Cumulative curves (Coinglass-style): right axis.
-  let maxCum=0;
-  const cumShort=[];
-  const cumLong=[];
-  if(cp>0){
-    let runS=0;
-    for(const it of pts){
-      if(it.p>=cp){
-        runS+=it.total;
-        cumShort.push({p:it.p,v:runS});
-        if(runS>maxCum) maxCum=runS;
-      }
-    }
-    let runL=0;
-    for(let i=pts.length-1;i>=0;i--){
-      const it=pts[i];
-      if(it.p<=cp){
-        runL+=it.total;
-        cumLong.push({p:it.p,v:runL});
-        if(runL>maxCum) maxCum=runL;
-      }
-    }
-    cumLong.reverse();
-  }
+  const cumShort=cumShortAll.filter(it=>it.p>=minP&&it.p<=maxP);
+  const cumLong=cumLongAll.filter(it=>it.p>=minP&&it.p<=maxP);
+  const maxCum=Math.max(0,...(cumShort.length?cumShort.map(it=>it.v):[0]),...(cumLong.length?cumLong.map(it=>it.v):[0]));
   if(maxCum>0){
     const scy=v=>by-(v/maxCum)*ph;
     x.fillStyle='#475569';
@@ -6808,7 +7227,7 @@ function drawLiqHeat(){
   const xt='价格';
   const xtw=x.measureText(xt).width;
   x.fillText(xt,padL+pw/2-xtw/2,H-8);
-  liqHoverMeta={c:c,pts:pts.map(it=>({p:it.p,total:it.total,ex:it.ex,px:sx(it.p)})),barW:barW,hitW:barW,pw:pw,padL:padL,baseMin:baseMin,baseMax:baseMax,fullSpan:fullSpan};
+  liqHoverMeta={c:c,pts:pts.map(it=>({p:it.p,total:it.total,ex:it.ex,cumTotal:(it.p>=cp?Number(it.cumShortTotal||0):Number(it.cumLongTotal||0)),cumEx:(it.p>=cp?(it.cumShortEx||{}):(it.cumLongEx||{})),px:sx(it.p)})),barW:barW,hitW:barW,pw:pw,padL:padL,baseMin:baseMin,baseMax:baseMax,fullSpan:fullSpan};
 }
 function renderLiqDesc(cfg,dash){
   if(!cfg){const el=document.getElementById('liqDesc');if(el)el.textContent='';return;}
@@ -6958,7 +7377,7 @@ table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--li
 .upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}
 @media (max-width:980px){.grid,.main-grid,.triple{grid-template-columns:1fr}.subgrid{grid-template-columns:1fr 1fr}.card:nth-child(2){border-right:0}.hero{align-items:flex-start;flex-direction:column}}
 </style></head><body>
-<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor" class="active">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor" class="active">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap">
 <div class="hero"><div class="hero-title">ETH 清算雷区监控（Beta）</div><div id="heroTime" class="hero-meta">--</div></div>
 <div class="panel topbar"><div class="hint">按 0 / 1 / 7 / 3 快捷切换 日内 / 1天 / 7天 / 30天</div><div class="btns"><button data-days="0">日内</button><button data-days="1">1天</button><button data-days="7">7天</button><button data-days="30">30天</button></div></div>
@@ -6977,10 +7396,43 @@ table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--li
 </div>
 </div>
 <script>
-let currentDays=1;
+let currentDays=30;
 let monitorLiqMapData=null;
+let monitorWebMap=null;
+let monitorLatestClose=0;
+let monitorDisplayPrice=0;
 let monitorLoadSeq=0;
 let monitorLoadState={pending:false,done:false,days:currentDays,error:'',heatReady:false,seq:0};
+
+function normalizeWindowDays(value){
+  const n=Number(value);
+  if(n===0||n===1||n===7||n===30) return n;
+  return null;
+}
+
+const sharedWindowDaysKey='preferred_window_days';
+
+function saveSharedWindowDays(days){
+  const n=normalizeWindowDays(days);
+  if(n==null) return;
+  try{localStorage.setItem(sharedWindowDaysKey,String(n));}catch(_){}
+}
+
+function loadSharedWindowDays(){
+  try{
+    return normalizeWindowDays(localStorage.getItem(sharedWindowDaysKey));
+  }catch(_){}
+  return null;
+}
+
+function loadRequestedWindowDays(){
+  try{
+    const raw=new URLSearchParams(window.location.search).get('days');
+    const n=normalizeWindowDays(raw);
+    if(n!=null) return n;
+  }catch(_){}
+  return 30;
+}
 
 function updateMonitorLoadState(patch){
   monitorLoadState=Object.assign(monitorLoadState,patch||{});
@@ -7012,6 +7464,12 @@ function fmtPrice(n){
   const v=Number(n);
   if(!isFinite(v)) return '-';
   return v.toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1});
+}
+
+function fmtHeatPrice(n){
+  const v=Number(n);
+  if(!isFinite(v)) return '-';
+  return v.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 
 function fmtAmount(n){
@@ -7058,6 +7516,7 @@ function renderActive(){
 
 async function setWindow(days){
   currentDays=days;
+  saveSharedWindowDays(days);
   updateMonitorLoadState({pending:true,done:false,days:days,error:'',heatReady:false});
   const resp=await fetch('/api/window',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days:days})});
   if(!resp.ok){
@@ -7081,29 +7540,103 @@ function fundingDirectionLabel(v){
   return '中性';
 }
 
-function buildHeatBandsFromModel(model){
+function roundMonitorPrice1(v){
+  const n=Number(v);
+  if(!(isFinite(n)&&n>0)) return 0;
+  return Math.round(n*10)/10;
+}
+
+function resolveMonitorDisplayPrice(fallback){
+  const webPrice=roundMonitorPrice1(monitorWebMap&&monitorWebMap.current_price);
+  if(webPrice>0) return webPrice;
+  const dashPrice=roundMonitorPrice1(fallback);
+  if(dashPrice>0) return dashPrice;
+  return roundMonitorPrice1(monitorLiqMapData&&monitorLiqMapData.current_price);
+}
+
+function buildMonitorModelPoints(model){
   if(!model||!Array.isArray(model.prices)||!Array.isArray(model.intensity_grid)||!model.prices.length) return [];
   const rows=model.prices.length;
   const cols=((model.intensity_grid&&model.intensity_grid[0])?model.intensity_grid[0].length:0);
   if(rows<1||cols<1) return [];
-  const cp=Number(model.current_price||0);
-  if(!(cp>0)) return [];
   const pts=[];
   for(let ri=0;ri<rows;ri++){
     const p=Number(model.prices[ri]||0);
     if(!(p>0)) continue;
     let sum=0;
     for(let ci=0;ci<cols;ci++) sum+=Math.max(0,Number((model.intensity_grid[ri]||[])[ci]||0));
-    if(sum>0) pts.push({price:p,notional:sum});
+    if(sum>0) pts.push({price:p,total:sum});
   }
+  return pts;
+}
+
+function buildMonitorWebGroups(map){
+  if(!map||!map.has_data||!Array.isArray(map.points)||!map.points.length) return [];
+  const groups=new Map();
+  for(const pt of map.points){
+    const price=Number(pt&&pt.price||0);
+    const val=Number(pt&&pt.liq_value||0);
+    if(!(price>0&&val>0)) continue;
+    const side=String(pt&&pt.side||'').toLowerCase()==='short'?'short':'long';
+    const key=side+'|'+price.toFixed(4);
+    let g=groups.get(key);
+    if(!g){
+      g={side:side,price:price,total:0};
+      groups.set(key,g);
+    }
+    g.total+=val;
+  }
+  return Array.from(groups.values()).sort(function(a,b){return Number(a.price||0)-Number(b.price||0);});
+}
+
+function chooseMonitorPeak(points,anchorPrice,side){
+  const cp=roundMonitorPrice1(anchorPrice);
+  if(!(cp>0)||!Array.isArray(points)||!points.length) return {price:0,v:0,cum:0};
+  const dir=side==='up'?'up':'down';
+  const peak={price:0,v:0,cum:0};
+  for(const pt of points){
+    const price=Number(pt&&pt.price||0);
+    const total=Number((pt&&(pt.total!=null?pt.total:pt.notional))||0);
+    if(!(price>0&&total>0)) continue;
+    if(dir==='up'&&price<cp) continue;
+    if(dir==='down'&&price>cp) continue;
+    if(total>peak.v){
+      peak.price=price;
+      peak.v=total;
+      continue;
+    }
+    if(total===peak.v&&peak.price>0){
+      const priceDist=Math.abs(price-cp);
+      const peakDist=Math.abs(peak.price-cp);
+      if(priceDist<peakDist||(priceDist===peakDist&&price<peak.price)){
+        peak.price=price;
+      }
+    }
+  }
+  if(!(peak.price>0&&peak.v>0)) return peak;
+  for(const pt of points){
+    const price=Number(pt&&pt.price||0);
+    const total=Number((pt&&(pt.total!=null?pt.total:pt.notional))||0);
+    if(!(price>0&&total>0)) continue;
+    if(dir==='up'&&price>=cp&&price<=peak.price) peak.cum+=total;
+    if(dir==='down'&&price<=cp&&price>=peak.price) peak.cum+=total;
+  }
+  if(peak.cum<peak.v) peak.cum=peak.v;
+  return peak;
+}
+
+function buildHeatBandsFromModel(model,anchorPrice){
+  const pts=buildMonitorModelPoints(model);
   if(!pts.length) return [];
+  const cp=roundMonitorPrice1(anchorPrice||(model&&model.current_price));
+  if(!(cp>0)) return [];
   const desired=[10,20,30,40,50,60,70,80,90,100,150,200,250,300];
   return desired.map(function(band){
     let upNotional=0,downNotional=0;
     for(const pt of pts){
       const dist=pt.price-cp;
-      if(dist>=0&&dist<=band) upNotional+=pt.notional;
-      if(dist<=0&&Math.abs(dist)<=band) downNotional+=pt.notional;
+      if(dist>=0&&dist<=band) upNotional+=pt.total;
+      if(dist<=0&&Math.abs(dist)<=band) downNotional+=pt.total;
     }
     return {
       band:band,
@@ -7113,6 +7646,89 @@ function buildHeatBandsFromModel(model){
       down_notional_usd:downNotional
     };
   });
+}
+
+function buildHeatBandsFromWebMap(map,anchorPrice){
+  if(!map||!map.has_data||!Array.isArray(map.points)||!map.points.length) return [];
+  const cp=roundMonitorPrice1(anchorPrice||(map&&map.current_price));
+  if(!(cp>0)) return [];
+  const groups=buildMonitorWebGroups(map);
+  if(!groups.length) return [];
+  const desired=[10,20,30,40,50,60,70,80,90,100,150,200,250,300];
+  return desired.map(function(band){
+    let upNotional=0,downNotional=0;
+    const upBound=cp+band;
+    const downBound=cp-band;
+    for(const g of groups){
+      const price=Number(g&&g.price||0);
+      const total=Number(g&&g.total||0);
+      const side=String(g&&g.side||'').toLowerCase()==='short'?'short':'long';
+      if(!(price>0&&total>0)) continue;
+      if(side==='short'&&price>=cp&&price<=upBound) upNotional+=total;
+      if(side==='long'&&price<=cp&&price>=downBound) downNotional+=total;
+    }
+    return {
+      band:band,
+      up_price:cp+band,
+      up_notional_usd:upNotional,
+      down_price:cp-band,
+      down_notional_usd:downNotional
+    };
+  });
+}
+
+function windowKeyForDays(days){
+  const n=Number(days);
+  if(n===30) return '30d';
+  if(n===7) return '7d';
+  if(n===1) return '1d';
+  return '';
+}
+
+function buildPeakSummaryFromModel(model,anchorPrice){
+  const pts=buildMonitorModelPoints(model);
+  const cp=roundMonitorPrice1(anchorPrice||(model&&model.current_price));
+  if(!(cp>0)||!pts.length) return null;
+  return {
+    source:'model',
+    up:chooseMonitorPeak(pts,cp,'up'),
+    down:chooseMonitorPeak(pts,cp,'down')
+  };
+}
+
+function buildPeakSummaryFromWebMap(map,anchorPrice){
+  if(!map||!map.has_data||!Array.isArray(map.points)||!map.points.length) return null;
+  const cp=roundMonitorPrice1(anchorPrice);
+  if(!(cp>0)) return null;
+  const groups=new Map();
+  for(const pt of map.points){
+    const price=Number(pt.price||0),val=Number(pt.liq_value||0);
+    if(!(price>0&&val>0)) continue;
+    const side=String(pt.side||'').toLowerCase()==='short'?'short':'long';
+    const key=side+'|'+price.toFixed(4);
+    let g=groups.get(key);
+    if(!g){
+      g={side:side,price:price,total:0};
+      groups.set(key,g);
+    }
+    g.total+=val;
+  }
+  const upPoints=[];
+  const downPoints=[];
+  for(const g of groups.values()){
+    if(g.side==='short') upPoints.push(g);
+    if(g.side==='long') downPoints.push(g);
+  }
+  return {
+    source:'webdatasource',
+    up:chooseMonitorPeak(upPoints,cp,'up'),
+    down:chooseMonitorPeak(downPoints,cp,'down')
+  };
+}
+
+function resolveMonitorPeaks(anchorPrice){
+  const cp=roundMonitorPrice1(anchorPrice||monitorDisplayPrice||(monitorLiqMapData&&monitorLiqMapData.current_price));
+  return buildPeakSummaryFromWebMap(monitorWebMap,cp)||buildPeakSummaryFromModel(monitorLiqMapData,cp)||{source:'none',up:{price:0,v:0,cum:0},down:{price:0,v:0,cum:0}};
 }
 
 function renderTopCards(d){
@@ -7153,21 +7769,21 @@ function renderTopCards(d){
 function renderHeatReport(d){
   const wrap=document.getElementById('heatReport');
   if(!wrap) return;
-  const bands=buildHeatBandsFromModel(monitorLiqMapData);
+  const anchorPrice=Number(d.current_price||monitorDisplayPrice||0);
+  const webBands=buildHeatBandsFromWebMap(monitorWebMap,anchorPrice);
+  const bands=webBands.length?webBands:buildHeatBandsFromModel(monitorLiqMapData,anchorPrice);
   if(!bands.length){
     wrap.innerHTML='<div class="hint">暂无数据</div>';
     return;
   }
-  let topUp={price:0,v:0},topDown={price:0,v:0};
-  for(const b of bands){
-    if(Number(b.up_notional_usd||0)>topUp.v) topUp={price:b.up_price,v:Number(b.up_notional_usd||0)};
-    if(Number(b.down_notional_usd||0)>topDown.v) topDown={price:b.down_price,v:Number(b.down_notional_usd||0)};
-  }
+  const peaks=resolveMonitorPeaks(anchorPrice);
+  const topUp=(peaks&&peaks.up)||{price:0,v:0,cum:0};
+  const topDown=(peaks&&peaks.down)||{price:0,v:0,cum:0};
   const hot={20:true,50:true,80:true,100:true,200:true,300:true};
   const dateText=new Date(d.generated_at||Date.now()).toLocaleDateString('zh-CN').split('/').join('.');
   let html='<table class="heat-report-table"><thead>'+
     '<tr class="title"><th colspan="6">ETH 清算雷区速报（'+dateText+'）</th></tr>'+
-    '<tr class="spot"><th>ETH现价</th><th colspan="5" class="price">'+fmtPrice(d.current_price)+'</th></tr>'+
+    '<tr class="spot"><th>ETH现价</th><th colspan="5" class="price">'+fmtHeatPrice(d.current_price)+'</th></tr>'+
     '<tr class="group"><th rowspan="2">范围</th><th colspan="2">上方空单</th><th colspan="2" class="down">下方多单</th><th rowspan="2">差值（亿）</th></tr>'+
     '<tr class="sub"><th>价格</th><th>规模（亿）</th><th class="down">价格</th><th class="down">规模（亿）</th></tr>'+
     '</thead><tbody>';
@@ -7177,10 +7793,12 @@ function renderHeatReport(d){
     const down=Number(b.down_notional_usd||0);
     const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
     const diffClass=down>up?'diff-long':(up>down?'diff-short':'diff-flat');
-    html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="up-cell">'+fmtPrice(b.up_price)+'</td><td class="up-cell">'+amountYi(up)+'</td><td class="down-cell">'+fmtPrice(b.down_price)+'</td><td class="down-cell">'+amountYi(down)+'</td><td class="diff-cell '+diffClass+'">'+amountYi(Math.abs(down-up))+'</td></tr>';
+    html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="up-cell">'+fmtHeatPrice(b.up_price)+'</td><td class="up-cell">'+amountYi(up)+'</td><td class="down-cell">'+fmtHeatPrice(b.down_price)+'</td><td class="down-cell">'+amountYi(down)+'</td><td class="diff-cell '+diffClass+'">'+amountYi(Math.abs(down-up))+'</td></tr>';
   }
-  const longestDiffClass=topDown.v>topUp.v?'diff-long':(topUp.v>topDown.v?'diff-short':'diff-flat');
-  html+='<tr class="longest"><td>最长柱</td><td class="up-cell">'+fmtPrice(topUp.price)+'</td><td class="up-cell">'+amountYi(topUp.v)+'</td><td class="down-cell">'+fmtPrice(topDown.price)+'</td><td class="down-cell">'+amountYi(topDown.v)+'</td><td class="diff-cell '+longestDiffClass+'">'+amountYi(Math.abs(topDown.v-topUp.v))+'</td></tr></tbody></table>';
+  const topUpCum=Number(topUp.cum||0);
+  const topDownCum=Number(topDown.cum||0);
+  const longestDiffClass=topDownCum>topUpCum?'diff-long':(topUpCum>topDownCum?'diff-short':'diff-flat');
+  html+='<tr class="longest"><td>最长柱内总量</td><td class="up-cell">'+fmtHeatPrice(topUp.price)+'</td><td class="up-cell">'+amountYi(topUpCum)+'</td><td class="down-cell">'+fmtHeatPrice(topDown.price)+'</td><td class="down-cell">'+amountYi(topDownCum)+'</td><td class="diff-cell '+longestDiffClass+'">'+amountYi(Math.abs(topDownCum-topUpCum))+'</td></tr></tbody></table>';
   wrap.innerHTML=html;
 }
 
@@ -7232,11 +7850,29 @@ function renderCore(d){
   const c=((d.analytics||{}).core_zone)||{};
   const el=document.getElementById('coreZone');
   if(!el) return;
+  const peaks=resolveMonitorPeaks(Number(d.current_price||monitorDisplayPrice||0));
+  const cp=Number(d.current_price||0);
+  const up=(peaks&&peaks.up&&peaks.up.v>0)?peaks.up:{price:Number(c.up_price||0),v:Number(c.up_notional_usd||0)};
+  const down=(peaks&&peaks.down&&peaks.down.v>0)?peaks.down:{price:Number(c.down_price||0),v:Number(c.down_notional_usd||0)};
+  let nearestSide=String(c.nearest_side||'-');
+  let nearestPrice=Number(c.nearest_strong_price||0);
+  let nearestDist=Number(c.nearest_distance||0);
+  const upDist=(cp>0&&up.price>0)?Math.abs(up.price-cp):Infinity;
+  const downDist=(cp>0&&down.price>0)?Math.abs(cp-down.price):Infinity;
+  if(upDist<downDist){
+    nearestSide='上方强区';
+    nearestPrice=up.price;
+    nearestDist=upDist;
+  }else if(downDist<Infinity){
+    nearestSide='下方强区';
+    nearestPrice=down.price;
+    nearestDist=downDist;
+  }
   el.innerHTML=
-    metricRow('上方最长柱',fmtPrice(c.up_price)+' / '+fmtAmount(c.up_notional_usd),'warn')+
-    metricRow('下方最长柱',fmtPrice(c.down_price)+' / '+fmtAmount(c.down_notional_usd),'good')+
-    metricRow('最近强区',fmtPrice(c.nearest_strong_price)+' / '+(isFinite(Number(c.nearest_distance))?Number(c.nearest_distance).toFixed(1):'-')+'点',biasClassByText(c.nearest_side))+
-    metricRow('方向',String(c.nearest_side||'-'));
+    metricRow('上方最长柱',fmtPrice(up.price)+' / '+fmtAmount(up.v),'warn')+
+    metricRow('下方最长柱',fmtPrice(down.price)+' / '+fmtAmount(down.v),'good')+
+    metricRow('最近强区',fmtPrice(nearestPrice)+' / '+(isFinite(Number(nearestDist))?Number(nearestDist).toFixed(1):'-')+'点',biasClassByText(nearestSide))+
+    metricRow('方向',String(nearestSide||'-'));
 }
 
 function renderContrib(d){
@@ -7267,16 +7903,18 @@ function renderAlerts(d){
 
 async function load(opts){
   const seq=++monitorLoadSeq;
-  const requestedDays=Number((opts&&opts.days));
-  updateMonitorLoadState({pending:true,done:false,days:Number.isFinite(requestedDays)?requestedDays:currentDays,error:'',heatReady:false,seq:seq});
+  const requestedDays=normalizeWindowDays(opts&&opts.days);
+  const loadDays=requestedDays!=null?requestedDays:(normalizeWindowDays(currentDays)!=null?currentDays:1);
+  updateMonitorLoadState({pending:true,done:false,days:loadDays,error:'',heatReady:false,seq:seq});
   try{
     const cfg=await fetch('/api/model-config').then(function(r){return r.json();}).catch(function(){return null;});
     const bucket=Number((cfg&&cfg.BucketMin)||(cfg&&cfg.bucket_min)||5);
     const step=Number((cfg&&cfg.PriceStep)||(cfg&&cfg.price_step)||5);
     const range=Number((cfg&&cfg.PriceRange)||(cfg&&cfg.price_range)||400);
+    const queryDays='days='+encodeURIComponent(String(loadDays));
     const responses=await Promise.all([
-      fetch('/api/dashboard'),
-      fetch('/api/model/liquidation-map?bucket_min='+bucket+'&price_step='+step+'&price_range='+range)
+      fetch('/api/dashboard?'+queryDays),
+      fetch('/api/model/liquidation-map?'+queryDays+'&bucket_min='+bucket+'&price_step='+step+'&price_range='+range)
     ]);
     const dashResp=responses[0], mapResp=responses[1];
     if(!dashResp.ok) throw new Error('load dashboard failed: '+dashResp.status);
@@ -7285,7 +7923,17 @@ async function load(opts){
     const mapData=await mapResp.json().catch(function(){return null;});
     if(seq!==monitorLoadSeq) return false;
     monitorLiqMapData=mapData;
-    currentDays=(d.window_days===0||d.window_days)?d.window_days:currentDays;
+    currentDays=normalizeWindowDays(d&&d.window_days);
+    if(currentDays==null) currentDays=loadDays;
+    const webWindow=windowKeyForDays(currentDays);
+    const auxResponses=await Promise.all([
+      webWindow?fetch('/api/webdatasource/map?window='+encodeURIComponent(webWindow)).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}):Promise.resolve(null)
+    ]);
+    if(seq!==monitorLoadSeq) return false;
+    monitorWebMap=auxResponses[0];
+    monitorLatestClose=0;
+    monitorDisplayPrice=resolveMonitorDisplayPrice(d&&d.current_price);
+    if(monitorDisplayPrice>0) d.current_price=monitorDisplayPrice;
     renderActive();
     const heroTime=document.getElementById('heroTime');
     if(heroTime) heroTime.textContent=new Date(d.generated_at||Date.now()).toLocaleString('zh-CN',{hour12:false});
@@ -7366,7 +8014,13 @@ document.addEventListener('keydown',function(e){
   if(e.key==='3') setWindow(30).catch(function(){});
 });
 setInterval(function(){load().catch(function(){});},5000);
-load().catch(function(){});
+const preferredMonitorDays=loadRequestedWindowDays();
+if(preferredMonitorDays!=null&&preferredMonitorDays!==currentDays){
+  saveSharedWindowDays(preferredMonitorDays);
+  setWindow(preferredMonitorDays).catch(function(){load().catch(function(){});});
+}else{
+  load({days:preferredMonitorDays!=null?preferredMonitorDays:currentDays}).catch(function(){});
+}
 (async function(){
   try{
     const r=await fetch('/api/version');
@@ -7423,7 +8077,7 @@ canvas{width:100%;height:760px;display:block;border:1px solid #e5e7eb;border-rad
 [data-theme="dark"] .event-card{background:#000;border-color:#1f2937}
 [data-theme="dark"] .wsline,[data-theme="dark"] .merge-val,[data-theme="dark"] .event-title,[data-theme="dark"] .event-card h4,[data-theme="dark"] #mergeTitle{color:#e5e7eb}
 .upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head><body>
-<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map" class="active">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map" class="active">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap">
   <div class="panel">
     <div class="row">
@@ -7542,7 +8196,7 @@ initTheme();setInterval(load,5000);load();(async()=>{try{const r=await fetch('/a
 const channelHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>&#28040;&#24687;&#36890;&#36947;</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{max-width:900px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.small{font-size:12px;color:#6b7280}button.primary{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.switch-row{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:14px;padding:12px;border:1px solid #dce3ec;border-radius:8px}.switch-row input{width:auto;margin:0;transform:scale(1.2)}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}[data-theme="dark"] body{background:#000;color:#e5e7eb}[data-theme="dark"] .nav{background:#000;border-bottom-color:#111827}[data-theme="dark"] .panel{background:#000;border-color:#1f2937}[data-theme="dark"] .small{color:#94a3b8}[data-theme="dark"] input,[data-theme="dark"] button.secondary{background:#000;color:#e5e7eb;border-color:#334155}[data-theme="dark"] .switch-row{border-color:#1f2937}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel" class="active">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel" class="active">消息通道</a><a href="/analysis">日内分析</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel"><h2 style="margin-top:0">Telegram 消息通道</h2><div class="small">閰嶇疆 Telegram 鏈哄櫒浜轰笌棰戦亾锛岀郴缁熷皢鎸夎瀹氶棿闅斿彂閫侀€氱煡銆?/div><label class="switch-row"><span><strong>鍚敤鑷姩鎺ㄩ€?/strong><div class="small">榛樿鍏抽棴锛涘紑鍚悗鎸夐€氱煡闂撮殧鎺ㄩ€佹竻绠楃儹鍖洪€熸姤銆?/div></span><input id="notify-enabled" type="checkbox"></label><div style="margin-top:14px"><label>Telegram Bot Token</label><input id="token" autocomplete="off" placeholder="123456:ABC..."></div><div style="margin-top:14px"><label>Telegram Channel / Chat ID</label><input id="channel" autocomplete="off" placeholder="@mychannel 鎴?-100123456789"></div><div style="margin-top:14px"><label>通知间隔（分钟）</label><input id="notify-interval" type="number" min="1" step="1" placeholder="15"></div><div style="margin-top:16px" class="row"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="testTelegram()">娴嬭瘯鍙戦€?/button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
 <script>
 let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawEnabled={{.NotifyEnabled}},tokenDirty=false,channelDirty=false;
@@ -7630,6 +8284,7 @@ button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:
       <a href="/bubbles">气泡图</a>
       <a href="/webdatasource">页面数据源</a>
       <a href="/channel" class="active">消息通道</a>
+      <a href="/analysis">日内分析</a>
     </div>
   </div>
   <div class="nav-right">
@@ -7814,7 +8469,7 @@ window.addEventListener('load',async()=>{await loadFooter();await loadHistory();
 const configHTMLLegacy = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>模型配置</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{max-width:900px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}label{display:block;margin-top:12px;font-size:13px;color:#334155}input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}.small{font-size:12px;color:#64748b}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config" class="active">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config" class="active">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel"><h2 style="margin-top:0">模型配置</h2><div class="small">淇敼妯″瀷鍙傛暟浠ヨ皟鏁存竻绠楃儹鍖轰笌寮哄钩娓呯畻璁＄畻銆?/div>
 <label>lookback_min<input id="lookback_min" type="number" min="60" max="1440" step="1"></label>
 <label>bucket_min<input id="bucket_min" type="number" min="1" max="30" step="1"></label>
@@ -7835,7 +8490,7 @@ async function save(){const body={lookback_min:val('lookback_min'),bucket_min:va
 const liquidationsHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>强平清算</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{max-width:1200px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:center;font-size:13px}.row{display:flex;gap:8px;align-items:center}.btn{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:8px 12px;border-radius:8px;cursor:pointer}.btn.primary{background:#22c55e;color:#fff;border-color:#22c55e}.small{font-size:12px;color:#64748b}[data-theme="dark"] body{background:#000;color:#e5e7eb}[data-theme="dark"] .nav{background:#000;border-bottom-color:#111827}[data-theme="dark"] .panel{background:#000;border-color:#1f2937}[data-theme="dark"] .small{color:#94a3b8}[data-theme="dark"] th,[data-theme="dark"] td{border-bottom-color:#1f2937}[data-theme="dark"] .btn{background:#000;color:#e5e7eb;border-color:#334155}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations" class="active">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations" class="active">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel"><div class="row" style="justify-content:space-between"><h2 style="margin:0">ETH 寮哄钩娓呯畻锛圔inance / Bybit / OKX锛?/h2><div class="row"><button id="filterBtn" class="btn" onclick="toggleFilter()">过滤小单</button><button class="btn" onclick="prev()">涓婁竴椤?/button><button class="btn" onclick="next()">涓嬩竴椤?/button><button class="btn primary" onclick="load()">刷新</button></div></div><div id="meta" class="small" style="margin:8px 0 10px 0"></div><div id="table"></div></div></div>
 <script>
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
@@ -7859,7 +8514,7 @@ initTheme();setInterval(load,5000);load();(async()=>{try{const r=await fetch('/a
 const bubblesHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>气泡图</title>
 <style>:root{--bg:#f5f7fb;--text:#1f2937;--muted:#64748b;--nav-bg:#0b1220;--nav-border:#243145;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#fff;--panel-border:#dce3ec;--ctl-bg:#fff;--ctl-text:#111827;--ctl-border:#cbd5e1;--chart-border:#e5e7eb}[data-theme="dark"]{--bg:#000;--text:#e5e7eb;--muted:#94a3b8;--nav-bg:#000;--nav-border:#111827;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#000;--panel-border:#1f2937;--ctl-bg:#000;--ctl-text:#e5e7eb;--ctl-border:#334155;--chart-border:#1f2937}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:var(--nav-bg);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:14px}.brand{font-size:18px;font-weight:700;color:var(--nav-text)}.menu a{color:var(--link);text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{width:100%;max-width:none;margin:0 auto;padding:14px;box-sizing:border-box}.panel{border:1px solid var(--panel-border);background:var(--panel-bg);margin:10px 0;padding:12px;border-radius:10px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.small{font-size:12px;color:var(--muted)}select,button,input{height:34px;border:1px solid var(--ctl-border);border-radius:8px;background:var(--ctl-bg);color:var(--ctl-text);padding:0 10px}input{width:96px}button{cursor:pointer}.btn-applied{background:#0f172a;color:#eef3f9;border-color:#0f172a}.chart{width:100%;height:682px;border:1px solid var(--chart-border);border-radius:8px;background:var(--panel-bg);display:block}.chart-wrap{position:relative}.legend{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:8px}.tag{display:inline-flex;align-items:center;gap:6px}.dot{width:10px;height:10px;border-radius:999px;display:inline-block}.bubble-tip{position:absolute;display:none;min-width:180px;max-width:260px;background:rgba(15,23,42,.96);color:#e2e8f0;border:1px solid rgba(148,163,184,.25);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.5;box-shadow:0 10px 28px rgba(2,6,23,.35);pointer-events:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:var(--nav-text);cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:var(--muted);text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles" class="active">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles" class="active">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel"><div class="row"><span>周期</span><select id="iv"><option value="1m">1M</option><option value="2m">2M</option><option value="5m">5M</option><option value="10m">10M</option><option value="15m">15M</option><option value="30m">30M</option><option value="1h">1H</option><option value="4h">4H</option><option value="8h">8H</option><option value="12h">12H</option><option value="1d">1D</option><option value="3d">3D</option><option value="7d" selected>7D</option></select><button onclick="load()">刷新</button><span class="small">过滤小单 ETH 数量</span><input id="qtyFilter" type="number" min="0" step="0.1" value="50"><button id="filterBtn" onclick="applyQtyFilter()">应用过滤</button><label class="small" style="display:inline-flex;align-items:center;gap:6px;margin-left:6px"><input id="hist" type="checkbox">历史</label><button id="moreBtn" style="display:none" onclick="loadMoreHistory()">向左加载</button><span id="meta" class="small"></span></div><div class="chart-wrap"><canvas id="cv" class="chart" width="1600" height="620"></canvas><div id="bubbleTip" class="bubble-tip"></div></div><div class="legend small"><div>姘旀场澶у皬浠ｈ〃娓呯畻閲戦锛岄鑹蹭唬琛ㄥ绌烘柟鍚戙€傛粴杞缉鏀撅紙榛樿浠ユ渶鍙充晶K绾夸负閿氱偣锛夛紝鎸変綇榧犳爣宸﹂敭宸﹀彸鎷栧姩銆?/div><div class="tag"><span class="dot" style="background:#dc2626"></span><span>红色=多单爆仓</span><span class="dot" style="margin-left:10px;background:#16a34a"></span><span>绿色=空单爆仓</span></div></div></div></div>
 <script>
 let candles=[],events=[],viewStart=0,viewCount=120,drag=false,lastX=0,intervalMs=0,latestStart=0,qtyFilter=50,filterApplied=false,bubbleHoverMeta=[],klineSource='-';
@@ -7942,10 +8597,10 @@ async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal
 initTheme();syncFilterBtn();load();
 </script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div><script>(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();</script></body></html>`
 const configHTML = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>模型配置</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.PageTitle}}</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{max-width:980px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.small{font-size:12px;color:#6b7280}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.field label{display:block;font-size:12px;color:#6b7280}.field input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.field input:disabled{background:#f1f5f9;color:#64748b;cursor:not-allowed}button.primary{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}.q{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:6px;border-radius:999px;border:1px solid #cbd5e1;color:#475569;font-size:12px;line-height:1;cursor:help;background:#fff}[data-theme="dark"] body{background:#000;color:#e5e7eb}[data-theme="dark"] .nav{background:#000;border-bottom-color:#111827}[data-theme="dark"] .panel{background:#000;border-color:#1f2937}[data-theme="dark"] .small,[data-theme="dark"] .field label{color:#94a3b8}[data-theme="dark"] .field input,[data-theme="dark"] select,[data-theme="dark"] button.secondary{background:#000;color:#e5e7eb;border-color:#334155}[data-theme="dark"] .q{background:#000;color:#cbd5e1;border-color:#334155}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config" class="active">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><h2 style="margin-top:0">清算地图模型参数</h2><div class="small">淇敼鍚庣珛鍗冲奖鍝?OI 澧為噺妯″瀷鐨勮绠椾笌灞曠ず銆?/div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config"{{if eq .ActiveMenu "config"}} class="active"{{end}}>模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis"{{if eq .ActiveMenu "analysis"}} class="active"{{end}}>日内分析</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="wrap">{{if .ShowAnalysisInfo}}<div class="panel"><h2 style="margin-top:0">日内分析</h2><div class="small">首版先承接模型参数与说明，后续会在这里补充分析结果、评分与回测摘要。</div><div class="small" style="margin-top:8px">当前页面可直接编辑与日内分析相关的模型参数，保存后会与“模型配置”页面保持同步。</div></div>{{end}}<div class="panel"><h2 style="margin-top:0">清算地图模型参数</h2><div class="small">淇敼鍚庣珛鍗冲奖鍝?OI 澧為噺妯″瀷鐨勮绠椾笌灞曠ず銆?/div>
 <div class="grid" style="margin-top:14px">
   <div class="field"><label>鍥炵湅绐楀彛锛堝ぉ锛?/label><input id="lookback" type="number" min="0" max="30" step="1" disabled></div>
   <div class="field"><label>鏃堕棿妗讹紙鍒嗛挓锛?/label><input id="bucket" type="number" min="1" max="30" step="1"></div>
