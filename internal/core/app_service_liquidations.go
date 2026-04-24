@@ -1,6 +1,7 @@
 package liqmap
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -56,6 +57,46 @@ func (a *App) snapshotLiquidationSymbols() []string {
 func (a *App) QueryLiquidations(opts LiquidationListOptions) []EventRow {
 	opts.Symbol = normalizeLiquidationSymbolFilter(opts.Symbol)
 	return a.loadLiquidations(opts)
+}
+
+func (a *App) RetryLiquidationExchange(exchange string) error {
+	exchange = strings.ToLower(strings.TrimSpace(exchange))
+	switch exchange {
+	case "binance", "bybit", "okx":
+	default:
+		return fmt.Errorf("unsupported exchange: %s", exchange)
+	}
+
+	a.apiGuardMu.Lock()
+	if a.apiGuards == nil {
+		a.apiGuards = map[string]*ExchangeAPIGuard{}
+	}
+	guard := a.apiGuards[exchange]
+	if guard == nil {
+		guard = &ExchangeAPIGuard{}
+		a.apiGuards[exchange] = guard
+	}
+	guard.ConsecutiveHTTPError = 0
+	guard.LastHTTPErrorKey = ""
+	guard.LastHTTPErrorText = ""
+	guard.PausedUntil = time.Time{}
+	guard.PauseReason = ""
+	retryCh := a.retrySignals[exchange]
+	a.apiGuardMu.Unlock()
+
+	a.liqWSMu.Lock()
+	if state := a.liqWS[exchange]; state != nil {
+		state.LastError = ""
+	}
+	a.liqWSMu.Unlock()
+
+	if retryCh != nil {
+		select {
+		case retryCh <- struct{}{}:
+		default:
+		}
+	}
+	return nil
 }
 
 func (a *App) ListLiquidations(limit, offset int, startTS, endTS int64) []EventRow {

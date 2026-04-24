@@ -24,3 +24,7 @@ func (s *liquidationsModuleAdapter) LiquidationSymbols(limit int) []string {
 func (s *liquidationsModuleAdapter) LiquidationWSStatuses() []liqmap.LiquidationWSStatus {
 	return s.app.LiquidationWSStatuses()
 }
+
+func (s *liquidationsModuleAdapter) RetryLiquidationExchange(exchange string) error {
+	return s.app.RetryLiquidationExchange(exchange)
+}

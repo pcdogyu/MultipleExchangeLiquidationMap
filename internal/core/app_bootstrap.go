@@ -14,6 +14,11 @@ func NewApp(db *sql.DB, debug bool) *App {
 		},
 		ob:         newOrderBookHub(),
 		apiGuards:  map[string]*ExchangeAPIGuard{},
+		retrySignals: map[string]chan struct{}{
+			"binance": make(chan struct{}, 1),
+			"bybit":   make(chan struct{}, 1),
+			"okx":     make(chan struct{}, 1),
+		},
 		liqWS:      map[string]*liquidationWSState{},
 		liqSymbols: map[string]struct{}{defaultSymbol: {}},
 		windowDays: defaultWindowDays,

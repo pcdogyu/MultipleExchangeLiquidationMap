@@ -69,6 +69,7 @@ type App struct {
 	errLogNext    map[string]time.Time
 	apiGuardMu    sync.Mutex
 	apiGuards     map[string]*ExchangeAPIGuard
+	retrySignals  map[string]chan struct{}
 	liqWSMu       sync.RWMutex
 	liqWS         map[string]*liquidationWSState
 	liqSymbolsMu  sync.RWMutex
@@ -1690,12 +1691,27 @@ func (a *App) waitExchangeRetry(ctx context.Context, exchange string, fallback t
 	if delay <= 0 {
 		return true
 	}
+	var retryCh <-chan struct{}
+	a.apiGuardMu.Lock()
+	if a.retrySignals == nil {
+		a.retrySignals = map[string]chan struct{}{}
+	}
+	if ch, ok := a.retrySignals[exchange]; ok {
+		retryCh = ch
+	} else {
+		ch = make(chan struct{}, 1)
+		a.retrySignals[exchange] = ch
+		retryCh = ch
+	}
+	a.apiGuardMu.Unlock()
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return false
 	case <-timer.C:
+		return true
+	case <-retryCh:
 		return true
 	}
 }

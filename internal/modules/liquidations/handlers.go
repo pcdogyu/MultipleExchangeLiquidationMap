@@ -1,6 +1,7 @@
 package liquidations
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -92,5 +93,28 @@ func (s *service) handleLiquidations(w http.ResponseWriter, r *http.Request) {
 		"min_value":         minValue,
 		"available_symbols": s.core.LiquidationSymbols(300),
 		"ws_status":         s.core.LiquidationWSStatuses(),
+	})
+}
+
+func (s *service) handleRetry(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpx.MethodNotAllowed(w)
+		return
+	}
+
+	var req struct {
+		Exchange string `json:"exchange"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := s.core.RetryLiquidationExchange(req.Exchange); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"exchange": strings.ToLower(strings.TrimSpace(req.Exchange)),
 	})
 }
