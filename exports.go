@@ -80,11 +80,8 @@ func (a *App) HandleOKXLatestCloseAPI(w http.ResponseWriter, r *http.Request) {
 	a.handleOKXLatestCloseAPI(w, r)
 }
 
-func (a *App) HandleOrderBook(w http.ResponseWriter, r *http.Request)    { a.handleOrderBook(w, r) }
 func (a *App) HandleCoinGlassMap(w http.ResponseWriter, r *http.Request) { a.handleCoinGlassMap(w, r) }
 func (a *App) HandleWindow(w http.ResponseWriter, r *http.Request)       { a.handleWindow(w, r) }
-
-func (a *App) HandlePriceEvents(w http.ResponseWriter, r *http.Request) { a.handlePriceEvents(w, r) }
 
 func (a *App) HandleWebDataSourceStatus(w http.ResponseWriter, r *http.Request) {
 	a.handleWebDataSourceStatus(w, r)
@@ -144,6 +141,18 @@ func (a *App) SaveModelConfig(req ModelConfig) error {
 
 func (a *App) RunModelFit(hours, minEvents int, exchange, mode string) (map[string]any, error) {
 	return a.runModelFit(hours, minEvents, exchange, mode)
+}
+
+func (a *App) OrderBookView(exchange, mode string, limit int) (any, error) {
+	return a.orderBookView(exchange, mode, limit)
+}
+
+func (a *App) ListPriceWallEvents(page, limit, minutes int, side, mode string) (any, error) {
+	return a.listPriceWallEvents(page, limit, minutes, side, mode)
+}
+
+func (a *App) RecordPriceWallEvent(req PriceWallEvent) error {
+	return a.recordPriceWallEvent(req)
 }
 
 func AnalysisHTMLFallback() string { return analysisHTMLFallback }

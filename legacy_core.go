@@ -1576,93 +1576,34 @@ func (a *App) saveSettings(req ChannelSettings) error {
 	return nil
 }
 
-func (a *App) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
+func (a *App) listPriceWallEvents(page, limit, minutes int, side, mode string) (any, error) {
+	if page <= 0 {
+		page = 1
 	}
-	switch r.Method {
-	case http.MethodGet:
-		// Backward-compatible: if no paging filters provided, return a flat array (previous behavior).
-		q := r.URL.Query()
-		side := strings.ToLower(strings.TrimSpace(q.Get("side")))
-		mode := strings.ToLower(strings.TrimSpace(q.Get("mode")))
-		hasPaging := strings.TrimSpace(q.Get("page")) != "" || strings.TrimSpace(q.Get("limit")) != "" || side != "" || mode != "" || strings.TrimSpace(q.Get("minutes")) != ""
-		if !hasPaging {
-			cutoff := time.Now().Add(-30 * time.Minute).UnixMilli()
-			rows, err := a.db.Query(`SELECT side, price, peak_notional_usd, duration_ms, event_ts, mode
-				FROM price_wall_events
-				WHERE event_ts>=?
-				ORDER BY event_ts DESC
-				LIMIT 200`, cutoff)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			defer rows.Close()
-			out := make([]PriceWallEvent, 0, 200)
-			for rows.Next() {
-				var e PriceWallEvent
-				if err := rows.Scan(&e.Side, &e.Price, &e.Peak, &e.DurationMS, &e.EventTS, &e.Mode); err != nil {
-					continue
-				}
-				out = append(out, e)
-			}
-			_ = json.NewEncoder(w).Encode(out)
-			return
-		}
-
-		page := 1
-		if raw := strings.TrimSpace(q.Get("page")); raw != "" {
-			if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 100000 {
-				page = n
-			}
-		}
-		limit := 25
-		if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
-			if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 200 {
-				limit = n
-			}
-		}
-		minutes := 30
-		if raw := strings.TrimSpace(q.Get("minutes")); raw != "" {
-			if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 24*60 {
-				minutes = n
-			}
-		}
-		if side != "" && side != "bid" && side != "ask" {
-			http.Error(w, "invalid side", http.StatusBadRequest)
-			return
-		}
-		if mode != "" && mode != "weighted" && mode != "merged" {
-			http.Error(w, "invalid mode", http.StatusBadRequest)
-			return
-		}
-
-		cutoff := time.Now().Add(-time.Duration(minutes) * time.Minute).UnixMilli()
-		baseSQL := ` FROM price_wall_events WHERE event_ts>=?`
-		args := []any{cutoff}
-		if side != "" {
-			baseSQL += ` AND side=?`
-			args = append(args, side)
-		}
-		if mode != "" {
-			baseSQL += ` AND mode=?`
-			args = append(args, mode)
-		}
-
-		var total int
-		if err := a.db.QueryRow(`SELECT COUNT(1)`+baseSQL, args...).Scan(&total); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		offset := (page - 1) * limit
-		rows, err := a.db.Query(`SELECT side, price, peak_notional_usd, duration_ms, event_ts, mode`+baseSQL+` ORDER BY event_ts DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	if limit <= 0 {
+		limit = 25
+	}
+	if minutes <= 0 {
+		minutes = 30
+	}
+	if side != "" && side != "bid" && side != "ask" {
+		return nil, BadRequestError{Message: "invalid side"}
+	}
+	if mode != "" && mode != "weighted" && mode != "merged" {
+		return nil, BadRequestError{Message: "invalid mode"}
+	}
+	if page == 1 && limit == 25 && minutes == 30 && side == "" && mode == "" {
+		cutoff := time.Now().Add(-30 * time.Minute).UnixMilli()
+		rows, err := a.db.Query(`SELECT side, price, peak_notional_usd, duration_ms, event_ts, mode
+			FROM price_wall_events
+			WHERE event_ts>=?
+			ORDER BY event_ts DESC
+			LIMIT 200`, cutoff)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return nil, err
 		}
 		defer rows.Close()
-		out := make([]PriceWallEvent, 0, limit)
+		out := make([]PriceWallEvent, 0, 200)
 		for rows.Next() {
 			var e PriceWallEvent
 			if err := rows.Scan(&e.Side, &e.Price, &e.Peak, &e.DurationMS, &e.EventTS, &e.Mode); err != nil {
@@ -1670,48 +1611,69 @@ func (a *App) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			out = append(out, e)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"page":      page,
-			"page_size": limit,
-			"total":     total,
-			"minutes":   minutes,
-			"side":      side,
-			"mode":      mode,
-			"rows":      out,
-		})
-	case http.MethodPost:
-		var req PriceWallEvent
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-		req.Side = strings.ToLower(strings.TrimSpace(req.Side))
-		if req.Side != "bid" && req.Side != "ask" {
-			http.Error(w, "invalid side", http.StatusBadRequest)
-			return
-		}
-		if req.Price <= 0 || req.Peak <= 0 || req.DurationMS <= 0 {
-			http.Error(w, "invalid payload", http.StatusBadRequest)
-			return
-		}
-		req.Mode = strings.ToLower(strings.TrimSpace(req.Mode))
-		if req.Mode != "weighted" && req.Mode != "merged" {
-			req.Mode = "weighted"
-		}
-		if req.EventTS <= 0 {
-			req.EventTS = time.Now().UnixMilli()
-		}
-		_, err := a.db.Exec(`INSERT INTO price_wall_events(side, price, peak_notional_usd, duration_ms, event_ts, mode, inserted_ts)
-			VALUES(?, ?, ?, ?, ?, ?, ?)`,
-			req.Side, req.Price, req.Peak, req.DurationMS, req.EventTS, req.Mode, time.Now().UnixMilli())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return out, nil
 	}
+
+	cutoff := time.Now().Add(-time.Duration(minutes) * time.Minute).UnixMilli()
+	baseSQL := ` FROM price_wall_events WHERE event_ts>=?`
+	args := []any{cutoff}
+	if side != "" {
+		baseSQL += ` AND side=?`
+		args = append(args, side)
+	}
+	if mode != "" {
+		baseSQL += ` AND mode=?`
+		args = append(args, mode)
+	}
+
+	var total int
+	if err := a.db.QueryRow(`SELECT COUNT(1)`+baseSQL, args...).Scan(&total); err != nil {
+		return nil, err
+	}
+	offset := (page - 1) * limit
+	rows, err := a.db.Query(`SELECT side, price, peak_notional_usd, duration_ms, event_ts, mode`+baseSQL+` ORDER BY event_ts DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]PriceWallEvent, 0, limit)
+	for rows.Next() {
+		var e PriceWallEvent
+		if err := rows.Scan(&e.Side, &e.Price, &e.Peak, &e.DurationMS, &e.EventTS, &e.Mode); err != nil {
+			continue
+		}
+		out = append(out, e)
+	}
+	return map[string]any{
+		"page":      page,
+		"page_size": limit,
+		"total":     total,
+		"minutes":   minutes,
+		"side":      side,
+		"mode":      mode,
+		"rows":      out,
+	}, nil
+}
+
+func (a *App) recordPriceWallEvent(req PriceWallEvent) error {
+	req.Side = strings.ToLower(strings.TrimSpace(req.Side))
+	if req.Side != "bid" && req.Side != "ask" {
+		return BadRequestError{Message: "invalid side"}
+	}
+	if req.Price <= 0 || req.Peak <= 0 || req.DurationMS <= 0 {
+		return BadRequestError{Message: "invalid payload"}
+	}
+	req.Mode = strings.ToLower(strings.TrimSpace(req.Mode))
+	if req.Mode != "weighted" && req.Mode != "merged" {
+		req.Mode = "weighted"
+	}
+	if req.EventTS <= 0 {
+		req.EventTS = time.Now().UnixMilli()
+	}
+	_, err := a.db.Exec(`INSERT INTO price_wall_events(side, price, peak_notional_usd, duration_ms, event_ts, mode, inserted_ts)
+		VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		req.Side, req.Price, req.Peak, req.DurationMS, req.EventTS, req.Mode, time.Now().UnixMilli())
+	return err
 }
 
 func (a *App) sendTelegramTestMessage() error {
@@ -6196,48 +6158,37 @@ func (b *OrderBook) view(limit int) map[string]any {
 	}
 }
 
-func (a *App) handleOrderBook(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	ex := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("exchange")))
-	mode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode")))
+func (a *App) orderBookView(ex, mode string, limit int) (any, error) {
+	ex = strings.ToLower(strings.TrimSpace(ex))
+	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
 		mode = "weighted"
 	}
 	if mode != "weighted" && mode != "merged" {
-		http.Error(w, "unknown mode", http.StatusBadRequest)
-		return
+		return nil, BadRequestError{Message: "unknown mode"}
 	}
-	limit := 20
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 200 {
-			limit = n
-		}
+	if limit <= 0 {
+		limit = 20
 	}
 	if ex != "" {
 		book := a.ob.get(ex)
 		if book == nil {
-			http.Error(w, "unknown exchange", http.StatusBadRequest)
-			return
+			return nil, BadRequestError{Message: "unknown exchange"}
 		}
-		_ = json.NewEncoder(w).Encode(book.view(limit))
-		return
+		return book.view(limit), nil
 	}
 	weights := a.orderBookWeights()
 	if mode == "merged" {
 		weights = map[string]float64{"binance": 1, "bybit": 1, "okx": 1}
 	}
-	resp := map[string]any{
+	return map[string]any{
 		"mode":    mode,
 		"binance": a.ob.get("binance").view(limit),
 		"bybit":   a.ob.get("bybit").view(limit),
 		"okx":     a.ob.get("okx").view(limit),
 		"weights": weights,
 		"merged":  a.mergedOrderBook(limit, weights),
-	}
-	_ = json.NewEncoder(w).Encode(resp)
+	}, nil
 }
 
 func (a *App) orderBookWeights() map[string]float64 {
