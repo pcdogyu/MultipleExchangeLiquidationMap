@@ -32,7 +32,7 @@ func newTestService(t *testing.T) *service {
 	}
 
 	core := liqmap.NewApp(db, false)
-	return newService(liqmap.NewChannelModuleServices(core))
+	return newService(liqmap.NewChannelModuleAdapter(core))
 }
 
 func TestHandleSettingsPersistsAndReturnsSettings(t *testing.T) {

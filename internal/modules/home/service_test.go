@@ -33,7 +33,7 @@ func newTestService(t *testing.T) *service {
 	}
 
 	core := liqmap.NewApp(db, false)
-	return newService(liqmap.NewHomeModuleServices(core))
+	return newService(liqmap.NewHomeModuleAdapter(core))
 }
 
 func TestHandleWindowRejectsInvalidDays(t *testing.T) {

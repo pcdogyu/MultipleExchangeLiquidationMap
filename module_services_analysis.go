@@ -1,13 +1,13 @@
 package liqmap
 
-type AnalysisModuleServices struct {
+type AnalysisModuleAdapter struct {
 	app *App
 }
 
-func NewAnalysisModuleServices(app *App) *AnalysisModuleServices {
-	return &AnalysisModuleServices{app: app}
+func NewAnalysisModuleAdapter(app *App) *AnalysisModuleAdapter {
+	return &AnalysisModuleAdapter{app: app}
 }
 
-func (s *AnalysisModuleServices) AnalysisSnapshot() (AnalysisSnapshot, error) {
+func (s *AnalysisModuleAdapter) AnalysisSnapshot() (AnalysisSnapshot, error) {
 	return s.app.buildAnalysisSnapshot()
 }

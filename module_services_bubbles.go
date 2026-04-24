@@ -1,18 +1,18 @@
 package liqmap
 
-type BubblesModuleServices struct {
+type BubblesModuleAdapter struct {
 	app *App
 }
 
-func NewBubblesModuleServices(app *App) *BubblesModuleServices {
-	return &BubblesModuleServices{app: app}
+func NewBubblesModuleAdapter(app *App) *BubblesModuleAdapter {
+	return &BubblesModuleAdapter{app: app}
 }
 
-func (s *BubblesModuleServices) FetchKlines(interval string, limit int, startTS, endTS int64) (map[string]any, error) {
+func (s *BubblesModuleAdapter) FetchKlines(interval string, limit int, startTS, endTS int64) (map[string]any, error) {
 	return s.app.fetchKlines(interval, limit, startTS, endTS)
 }
 
-func (s *BubblesModuleServices) LatestOKXClose() (map[string]any, error) {
+func (s *BubblesModuleAdapter) LatestOKXClose() (map[string]any, error) {
 	closePrice, ts, err := s.app.latestOKXClose()
 	if err != nil {
 		return nil, err

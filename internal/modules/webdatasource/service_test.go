@@ -32,7 +32,7 @@ func newTestService(t *testing.T) *service {
 	}
 
 	core := liqmap.NewApp(db, false)
-	return newService(liqmap.NewWebDataSourceModuleServices(core))
+	return newService(liqmap.NewWebDataSourceModuleAdapter(core))
 }
 
 func TestHandleStatusRejectsWrongMethod(t *testing.T) {

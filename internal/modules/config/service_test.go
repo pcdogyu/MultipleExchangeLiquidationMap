@@ -33,7 +33,7 @@ func newTestService(t *testing.T) *service {
 	}
 
 	core := liqmap.NewApp(db, false)
-	return newService(liqmap.NewConfigModuleServices(core))
+	return newService(liqmap.NewConfigModuleAdapter(core))
 }
 
 func TestHandleModelConfigPersistsSettings(t *testing.T) {

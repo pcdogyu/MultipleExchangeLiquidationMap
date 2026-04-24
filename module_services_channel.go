@@ -1,33 +1,33 @@
 package liqmap
 
-type ChannelModuleServices struct {
+type ChannelModuleAdapter struct {
 	app *App
 }
 
-func NewChannelModuleServices(app *App) *ChannelModuleServices {
-	return &ChannelModuleServices{app: app}
+func NewChannelModuleAdapter(app *App) *ChannelModuleAdapter {
+	return &ChannelModuleAdapter{app: app}
 }
 
-func (s *ChannelModuleServices) LoadSettings() ChannelSettings {
+func (s *ChannelModuleAdapter) LoadSettings() ChannelSettings {
 	return s.app.loadSettings()
 }
 
-func (s *ChannelModuleServices) SaveSettings(req ChannelSettings) error {
+func (s *ChannelModuleAdapter) SaveSettings(req ChannelSettings) error {
 	return s.app.saveSettings(req)
 }
 
-func (s *ChannelModuleServices) TriggerChannelTestSend() (string, bool) {
+func (s *ChannelModuleAdapter) TriggerChannelTestSend() (string, bool) {
 	return s.app.triggerTelegramTestSend()
 }
 
-func (s *ChannelModuleServices) ListTelegramSendHistory(limit int) ([]TelegramSendHistoryRow, error) {
+func (s *ChannelModuleAdapter) ListTelegramSendHistory(limit int) ([]TelegramSendHistoryRow, error) {
 	return s.app.listTelegramSendHistory(limit)
 }
 
-func (s *ChannelModuleServices) ListChannelTimeline(hours int) ([]ChannelTimelineRow, error) {
+func (s *ChannelModuleAdapter) ListChannelTimeline(hours int) ([]ChannelTimelineRow, error) {
 	return s.app.listChannelTimeline(hours)
 }
 
-func (s *ChannelModuleServices) ListChannelPlannedPushes(hours int) []ChannelPlannedPushRow {
+func (s *ChannelModuleAdapter) ListChannelPlannedPushes(hours int) []ChannelPlannedPushRow {
 	return s.app.listChannelPlannedPushes(hours)
 }

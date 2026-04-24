@@ -32,7 +32,7 @@ func newTestService(t *testing.T) *service {
 	}
 
 	core := liqmap.NewApp(db, false)
-	return newService(liqmap.NewBookmapModuleServices(core))
+	return newService(liqmap.NewBookmapModuleAdapter(core))
 }
 
 func TestHandlePriceEventsPersistsAndListsRows(t *testing.T) {

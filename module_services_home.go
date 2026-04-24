@@ -1,18 +1,18 @@
 package liqmap
 
-type HomeModuleServices struct {
+type HomeModuleAdapter struct {
 	app *App
 }
 
-func NewHomeModuleServices(app *App) *HomeModuleServices {
-	return &HomeModuleServices{app: app}
+func NewHomeModuleAdapter(app *App) *HomeModuleAdapter {
+	return &HomeModuleAdapter{app: app}
 }
 
-func (s *HomeModuleServices) WindowDays() int {
+func (s *HomeModuleAdapter) WindowDays() int {
 	return s.app.window()
 }
 
-func (s *HomeModuleServices) SetWindowDays(days int) error {
+func (s *HomeModuleAdapter) SetWindowDays(days int) error {
 	if normalized, ok := normalizeWindowDays(days); ok {
 		s.app.setWindow(normalized)
 		return nil
@@ -20,14 +20,14 @@ func (s *HomeModuleServices) SetWindowDays(days int) error {
 	return BadRequestError{Message: "invalid days"}
 }
 
-func (s *HomeModuleServices) Dashboard(days int) (Dashboard, error) {
+func (s *HomeModuleAdapter) Dashboard(days int) (Dashboard, error) {
 	return s.app.buildDashboard(days)
 }
 
-func (s *HomeModuleServices) ModelLiquidationMap(windowDays, lookbackMin, bucketMin int, priceStep, priceRange float64) (map[string]any, error) {
+func (s *HomeModuleAdapter) ModelLiquidationMap(windowDays, lookbackMin, bucketMin int, priceStep, priceRange float64) (map[string]any, error) {
 	return s.app.modelLiquidationMap(windowDays, lookbackMin, bucketMin, priceStep, priceRange)
 }
 
-func (s *HomeModuleServices) FetchCoinGlassMap(symbol, window string) ([]byte, error) {
+func (s *HomeModuleAdapter) FetchCoinGlassMap(symbol, window string) ([]byte, error) {
 	return s.app.fetchCoinGlassMap(symbol, window)
 }

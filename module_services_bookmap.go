@@ -1,21 +1,21 @@
 package liqmap
 
-type BookmapModuleServices struct {
+type BookmapModuleAdapter struct {
 	app *App
 }
 
-func NewBookmapModuleServices(app *App) *BookmapModuleServices {
-	return &BookmapModuleServices{app: app}
+func NewBookmapModuleAdapter(app *App) *BookmapModuleAdapter {
+	return &BookmapModuleAdapter{app: app}
 }
 
-func (s *BookmapModuleServices) OrderBookView(exchange, mode string, limit int) (any, error) {
+func (s *BookmapModuleAdapter) OrderBookView(exchange, mode string, limit int) (any, error) {
 	return s.app.orderBookView(exchange, mode, limit)
 }
 
-func (s *BookmapModuleServices) ListPriceWallEvents(page, limit, minutes int, side, mode string) (any, error) {
+func (s *BookmapModuleAdapter) ListPriceWallEvents(page, limit, minutes int, side, mode string) (any, error) {
 	return s.app.listPriceWallEvents(page, limit, minutes, side, mode)
 }
 
-func (s *BookmapModuleServices) RecordPriceWallEvent(req PriceWallEvent) error {
+func (s *BookmapModuleAdapter) RecordPriceWallEvent(req PriceWallEvent) error {
 	return s.app.recordPriceWallEvent(req)
 }

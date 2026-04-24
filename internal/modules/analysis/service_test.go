@@ -31,7 +31,7 @@ func newTestService(t *testing.T) *service {
 	}
 
 	core := liqmap.NewApp(db, false)
-	return newService(liqmap.NewAnalysisModuleServices(core))
+	return newService(liqmap.NewAnalysisModuleAdapter(core))
 }
 
 func TestHandleAnalysisRejectsWrongMethod(t *testing.T) {

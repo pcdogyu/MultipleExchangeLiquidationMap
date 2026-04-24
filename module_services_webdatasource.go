@@ -6,35 +6,35 @@ import (
 	"strings"
 )
 
-type WebDataSourceModuleServices struct {
+type WebDataSourceModuleAdapter struct {
 	app *App
 }
 
-func NewWebDataSourceModuleServices(app *App) *WebDataSourceModuleServices {
-	return &WebDataSourceModuleServices{app: app}
+func NewWebDataSourceModuleAdapter(app *App) *WebDataSourceModuleAdapter {
+	return &WebDataSourceModuleAdapter{app: app}
 }
 
-func (s *WebDataSourceModuleServices) WebDataSourceStatus() WebDataSourceStatus {
+func (s *WebDataSourceModuleAdapter) WebDataSourceStatus() WebDataSourceStatus {
 	return s.app.webds.loadStatus()
 }
 
-func (s *WebDataSourceModuleServices) TriggerWebDataSourceInit() (bool, error) {
+func (s *WebDataSourceModuleAdapter) TriggerWebDataSourceInit() (bool, error) {
 	return s.app.webds.triggerInit(context.Background())
 }
 
-func (s *WebDataSourceModuleServices) WebDataSourceInitLoginTimeoutSec() int {
+func (s *WebDataSourceModuleAdapter) WebDataSourceInitLoginTimeoutSec() int {
 	return defaultWebDataSourceInitLoginSec
 }
 
-func (s *WebDataSourceModuleServices) TriggerWebDataSourceRun(windowDays *int) (bool, error) {
+func (s *WebDataSourceModuleAdapter) TriggerWebDataSourceRun(windowDays *int) (bool, error) {
 	return s.app.webds.triggerRun(context.Background(), windowDays)
 }
 
-func (s *WebDataSourceModuleServices) ListRecentWebDataSourceRuns(limit int) []WebDataSourceRunRow {
+func (s *WebDataSourceModuleAdapter) ListRecentWebDataSourceRuns(limit int) []WebDataSourceRunRow {
 	return s.app.webds.loadRecentRuns(limit)
 }
 
-func (s *WebDataSourceModuleServices) UpdateWebDataSourceSettings(enabled *bool, intervalMin, timeoutSec int, chromePath, profileDir string) WebDataSourceStatus {
+func (s *WebDataSourceModuleAdapter) UpdateWebDataSourceSettings(enabled *bool, intervalMin, timeoutSec int, chromePath, profileDir string) WebDataSourceStatus {
 	if enabled != nil {
 		_ = s.app.webds.setSetting("enabled", strconv.FormatBool(*enabled))
 	}
@@ -51,6 +51,6 @@ func (s *WebDataSourceModuleServices) UpdateWebDataSourceSettings(enabled *bool,
 	return s.app.webds.loadStatus()
 }
 
-func (s *WebDataSourceModuleServices) WebDataSourceMap(window string) WebDataSourceMapResponse {
+func (s *WebDataSourceModuleAdapter) WebDataSourceMap(window string) WebDataSourceMapResponse {
 	return s.app.webds.loadLatestMap(window)
 }

@@ -32,7 +32,7 @@ func newTestService(t *testing.T) *service {
 	}
 
 	core := liqmap.NewApp(db, false)
-	return newService(liqmap.NewBubblesModuleServices(core))
+	return newService(liqmap.NewBubblesModuleAdapter(core))
 }
 
 func TestHandleKlinesRejectsUnsupportedInterval(t *testing.T) {

@@ -18,15 +18,15 @@ import (
 
 func NewRouter(core *liqmap.App, debug bool) *http.ServeMux {
 	mux := http.NewServeMux()
-	home.Mount(mux, liqmap.NewHomeModuleServices(core))
-	config.Mount(mux, liqmap.NewConfigModuleServices(core))
+	home.Mount(mux, liqmap.NewHomeModuleAdapter(core))
+	config.Mount(mux, liqmap.NewConfigModuleAdapter(core))
 	monitor.Mount(mux)
-	bookmap.Mount(mux, liqmap.NewBookmapModuleServices(core))
-	liquidations.Mount(mux, liqmap.NewLiquidationsModuleServices(core))
-	bubbles.Mount(mux, liqmap.NewBubblesModuleServices(core))
-	webdatasource.Mount(mux, liqmap.NewWebDataSourceModuleServices(core))
-	channel.Mount(mux, liqmap.NewChannelModuleServices(core))
-	analysis.Mount(mux, liqmap.NewAnalysisModuleServices(core))
+	bookmap.Mount(mux, liqmap.NewBookmapModuleAdapter(core))
+	liquidations.Mount(mux, liqmap.NewLiquidationsModuleAdapter(core))
+	bubbles.Mount(mux, liqmap.NewBubblesModuleAdapter(core))
+	webdatasource.Mount(mux, liqmap.NewWebDataSourceModuleAdapter(core))
+	channel.Mount(mux, liqmap.NewChannelModuleAdapter(core))
+	analysis.Mount(mux, liqmap.NewAnalysisModuleAdapter(core))
 	system.Mount(mux, debug)
 	return mux
 }
