@@ -7,7 +7,7 @@ import (
 	"multipleexchangeliquidationmap/internal/shared/pages"
 )
 
-func handlePage(w http.ResponseWriter, r *http.Request) {
+func (s *service) handlePage(w http.ResponseWriter, r *http.Request) {
 	pageview.Serve(w, r, pages.Monitor(), nil, pageview.Options{
 		DefaultQuery: map[string]string{"days": "30"},
 	})
