@@ -2996,6 +2996,10 @@ func formatYi2(v float64) string {
 	return fmt.Sprintf("%.2f", v/1e8)
 }
 
+func formatPrice1(v float64) string {
+	return fmt.Sprintf("%.1f", v)
+}
+
 func heatReportBias(up, down float64) string {
 	total := up + down
 	if total <= 0 {
@@ -3059,16 +3063,16 @@ func (a *App) renderHeatReportPNG(r HeatReportData) ([]byte, error) {
 			diffClass = "diff-short"
 		}
 		rows.WriteString(fmt.Sprintf(`<tr class="%s"><td>%d鐐瑰唴</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
-			cls, b.Band, b.UpPrice, b.UpNotionalUSD/1e8, b.DownPrice, b.DownNotionalUSD/1e8, diffClass, b.DiffUSD/1e8))
+			cls, b.Band, b.DownPrice, b.DownNotionalUSD/1e8, b.UpPrice, b.UpNotionalUSD/1e8, diffClass, b.DiffUSD/1e8))
 	}
 	longestDiffClass := "diff-flat"
 	if r.LongPeak.SingleUSD > r.ShortPeak.SingleUSD {
-		longestDiffClass = "diff-short"
-	} else if r.ShortPeak.SingleUSD > r.LongPeak.SingleUSD {
 		longestDiffClass = "diff-long"
+	} else if r.ShortPeak.SingleUSD > r.LongPeak.SingleUSD {
+		longestDiffClass = "diff-short"
 	}
 	rows.WriteString(fmt.Sprintf(`<tr class="longest"><td>最长柱</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
-		r.ShortPeak.Price, r.ShortPeak.SingleUSD/1e8, r.LongPeak.Price, r.LongPeak.SingleUSD/1e8, longestDiffClass, math.Abs(r.LongPeak.SingleUSD-r.ShortPeak.SingleUSD)/1e8))
+		r.LongPeak.Price, r.LongPeak.SingleUSD/1e8, r.ShortPeak.Price, r.ShortPeak.SingleUSD/1e8, longestDiffClass, math.Abs(r.LongPeak.SingleUSD-r.ShortPeak.SingleUSD)/1e8))
 	html := `<!doctype html><html><head><meta charset="utf-8"><style>
 body{margin:0;background:#fff;font-family:Arial,"Microsoft YaHei",sans-serif;color:#34445a}
 .shot{width:974px;background:#fff}
@@ -3089,8 +3093,8 @@ td:nth-child(4),td:nth-child(5){color:#cf7436}
 </style></head><body><div class="shot"><table>
 <thead><tr class="title"><th colspan="6">ETH Heat Report (` + time.UnixMilli(r.GeneratedAt).Format("2006.1.2") + `)</th></tr>
 <tr class="spot"><th colspan="1">ETH Price</th><th colspan="5" class="price">` + fmt.Sprintf("%.1f", r.CurrentPrice) + `</th></tr>
-<tr class="group"><th rowspan="2">Band</th><th colspan="2">Upper Shorts</th><th colspan="2" class="down">Lower Longs</th><th rowspan="2">Diff (yi)</th></tr>
-<tr class="sub"><th>Price</th><th>Size (yi)</th><th class="down">Price</th><th class="down">Size (yi)</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></body></html>`
+<tr class="group"><th rowspan="2">Band</th><th colspan="2" class="down">Lower Longs</th><th colspan="2">Upper Shorts</th><th rowspan="2">Diff (yi)</th></tr>
+<tr class="sub"><th class="down">Price</th><th class="down">Size (yi)</th><th>Price</th><th>Size (yi)</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></body></html>`
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -3109,6 +3113,39 @@ td:nth-child(4),td:nth-child(5){color:#cf7436}
 		chromedp.FullScreenshot(&png, 100),
 	)
 	return png, err
+}
+
+func buildHeatReportTableHTML(r HeatReportData) string {
+	var rows strings.Builder
+	for i, b := range r.Bands {
+		cls := ""
+		if i%2 == 1 {
+			cls += " alt"
+		}
+		if b.Highlight {
+			cls += " hot"
+		}
+		diffClass := "diff-flat"
+		if b.DownNotionalUSD > b.UpNotionalUSD {
+			diffClass = "diff-long"
+		} else if b.UpNotionalUSD > b.DownNotionalUSD {
+			diffClass = "diff-short"
+		}
+		rows.WriteString(fmt.Sprintf(`<tr class="%s"><td>%d点内</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
+			cls, b.Band, b.DownPrice, b.DownNotionalUSD/1e8, b.UpPrice, b.UpNotionalUSD/1e8, diffClass, b.DiffUSD/1e8))
+	}
+	longestDiffClass := "diff-flat"
+	if r.LongPeak.SingleUSD > r.ShortPeak.SingleUSD {
+		longestDiffClass = "diff-long"
+	} else if r.ShortPeak.SingleUSD > r.LongPeak.SingleUSD {
+		longestDiffClass = "diff-short"
+	}
+	rows.WriteString(fmt.Sprintf(`<tr class="longest"><td>最长柱</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
+		r.LongPeak.Price, r.LongPeak.SingleUSD/1e8, r.ShortPeak.Price, r.ShortPeak.SingleUSD/1e8, longestDiffClass, math.Abs(r.LongPeak.SingleUSD-r.ShortPeak.SingleUSD)/1e8))
+	return `<!doctype html><html><head><meta charset="utf-8"></head><body><table><thead>` +
+		`<tr class="group"><th rowspan="2">Band</th><th colspan="2" class="down">Lower Longs</th><th colspan="2">Upper Shorts</th><th rowspan="2">Diff (yi)</th></tr>` +
+		`<tr class="sub"><th class="down">Price</th><th class="down">Size (yi)</th><th>Price</th><th>Size (yi)</th></tr>` +
+		`</thead><tbody>` + rows.String() + `</tbody></table></body></html>`
 }
 
 func pngToJPEG(pngBytes []byte, quality int) ([]byte, error) {
@@ -3401,10 +3438,6 @@ func (a *App) enrichHeatReportForTelegram(monitor HeatReportData, webMap WebData
 	return display
 }
 
-func formatPrice2(v float64) string {
-	return fmt.Sprintf("%.2f", v)
-}
-
 func formatPointDistance(v float64) string {
 	return fmt.Sprintf("%.1f", math.Abs(v))
 }
@@ -3661,16 +3694,16 @@ func (a *App) buildTelegramThirtyDayTextV3(monitor HeatReportData, monitorBands 
 	longestVerdict := telegramPeakVerdict(monitor.LongPeak, monitor.ShortPeak)
 
 	lines := []string{
-		fmt.Sprintf("<b>ETH 雷区速报 | 现价$%s</b>", formatPrice2(monitor.CurrentPrice)),
-		fmt.Sprintf("上方空单总量<b>%s亿</b> | 下方多单总量<b>%s亿</b>", formatYi1(monitor.ShortTotalUSD), formatYi1(monitor.LongTotalUSD)),
-		"",
-		"<b>上方空单最长柱</b>",
-		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice2(monitor.ShortPeak.Price), formatPointDistance(monitor.ShortPeak.Distance)),
-		fmt.Sprintf("单柱%s亿 | 从现价到该柱累计<b>%s亿</b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
+		fmt.Sprintf("<b>ETH 雷区速报 | 现价$%s</b>", formatPrice1(monitor.CurrentPrice)),
+		fmt.Sprintf("下方多单总量<b>%s亿</b> | 上方空单总量<b>%s亿</b>", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
 		"",
 		"<b>下方多单最长柱</b>",
-		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice2(monitor.LongPeak.Price), formatPointDistance(monitor.LongPeak.Distance)),
+		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice1(monitor.LongPeak.Price), formatPointDistance(monitor.LongPeak.Distance)),
 		fmt.Sprintf("单柱%s亿 | 从现价到该柱累计<b>%s亿</b>", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
+		"",
+		"<b>上方空单最长柱</b>",
+		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice1(monitor.ShortPeak.Price), formatPointDistance(monitor.ShortPeak.Distance)),
+		fmt.Sprintf("单柱%s亿 | 从现价到该柱累计<b>%s亿</b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
 		fmt.Sprintf("最长柱差值<b>%s亿</b> | %s", formatYi2(math.Abs(monitor.LongPeak.SingleUSD-monitor.ShortPeak.SingleUSD)), longestVerdict),
 		"",
 		"<b>多空失衡解读</b>",
@@ -7299,17 +7332,17 @@ function renderHeatReport(d){
   const bands = buildHeatBandsFromModel(liqMapData);
   if(!bands.length) return '<div class="hint">\u6682\u65e0\u6570\u636e</div>';
   let html = '<table class="heat-table"><thead>' +
-    '<tr><th rowspan="2" class="col-threshold">\u70b9\u6570\u9608\u503c</th><th colspan="2">\u4e0a\u65b9\u7a7a\u5355</th><th colspan="2">\u4e0b\u65b9\u591a\u5355</th></tr>' +
-    '<tr><th class="col-up-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-up-size">\u6e05\u7b97\u89c4\u6a21</th><th class="col-down-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-down-size">\u6e05\u7b97\u89c4\u6a21</th></tr>' +
+    '<tr><th rowspan="2" class="col-threshold">\u70b9\u6570\u9608\u503c</th><th colspan="2">\u4e0b\u65b9\u591a\u5355</th><th colspan="2">\u4e0a\u65b9\u7a7a\u5355</th></tr>' +
+    '<tr><th class="col-down-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-down-size">\u6e05\u7b97\u89c4\u6a21</th><th class="col-up-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-up-size">\u6e05\u7b97\u89c4\u6a21</th></tr>' +
     '</thead><tbody>';
   const toScale = n => {n=Number(n||0);const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'浜?;if(a>=1e4)return (n/1e4).toFixed(2)+'涓?;return n.toFixed(2);};
   for(const b of bands){
     html += '<tr>' +
       '<td class="col-threshold">'+b.band+'\u70b9\u5185</td>' +
-      '<td class="col-up-price">'+(Number(b.up_price)>0?fmtPrice(b.up_price):'-')+'</td>' +
-      '<td class="col-up-size">'+toScale(b.up_notional_usd)+'</td>' +
       '<td class="col-down-price">'+(Number(b.down_price)>0?fmtPrice(b.down_price):'-')+'</td>' +
       '<td class="col-down-size">'+toScale(b.down_notional_usd)+'</td>' +
+      '<td class="col-up-price">'+(Number(b.up_price)>0?fmtPrice(b.up_price):'-')+'</td>' +
+      '<td class="col-up-size">'+toScale(b.up_notional_usd)+'</td>' +
       '</tr>';
   }
   html += '</tbody></table>';
@@ -7469,7 +7502,7 @@ function fmtPrice(n){
 function fmtHeatPrice(n){
   const v=Number(n);
   if(!isFinite(v)) return '-';
-  return v.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
+  return v.toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1});
 }
 
 function fmtAmount(n){
@@ -7784,8 +7817,8 @@ function renderHeatReport(d){
   let html='<table class="heat-report-table"><thead>'+
     '<tr class="title"><th colspan="6">ETH 清算雷区速报（'+dateText+'）</th></tr>'+
     '<tr class="spot"><th>ETH现价</th><th colspan="5" class="price">'+fmtHeatPrice(d.current_price)+'</th></tr>'+
-    '<tr class="group"><th rowspan="2">范围</th><th colspan="2">上方空单</th><th colspan="2" class="down">下方多单</th><th rowspan="2">差值（亿）</th></tr>'+
-    '<tr class="sub"><th>价格</th><th>规模（亿）</th><th class="down">价格</th><th class="down">规模（亿）</th></tr>'+
+    '<tr class="group"><th rowspan="2">范围</th><th colspan="2" class="down">下方多单</th><th colspan="2">上方空单</th><th rowspan="2">差值（亿）</th></tr>'+
+    '<tr class="sub"><th class="down">价格</th><th class="down">规模（亿）</th><th>价格</th><th>规模（亿）</th></tr>'+
     '</thead><tbody>';
   for(let i=0;i<bands.length;i++){
     const b=bands[i];
@@ -7793,12 +7826,12 @@ function renderHeatReport(d){
     const down=Number(b.down_notional_usd||0);
     const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
     const diffClass=down>up?'diff-long':(up>down?'diff-short':'diff-flat');
-    html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="up-cell">'+fmtHeatPrice(b.up_price)+'</td><td class="up-cell">'+amountYi(up)+'</td><td class="down-cell">'+fmtHeatPrice(b.down_price)+'</td><td class="down-cell">'+amountYi(down)+'</td><td class="diff-cell '+diffClass+'">'+amountYi(Math.abs(down-up))+'</td></tr>';
+    html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="down-cell">'+fmtHeatPrice(b.down_price)+'</td><td class="down-cell">'+amountYi(down)+'</td><td class="up-cell">'+fmtHeatPrice(b.up_price)+'</td><td class="up-cell">'+amountYi(up)+'</td><td class="diff-cell '+diffClass+'">'+amountYi(Math.abs(down-up))+'</td></tr>';
   }
   const topUpCum=Number(topUp.cum||0);
   const topDownCum=Number(topDown.cum||0);
   const longestDiffClass=topDownCum>topUpCum?'diff-long':(topUpCum>topDownCum?'diff-short':'diff-flat');
-  html+='<tr class="longest"><td>最长柱内总量</td><td class="up-cell">'+fmtHeatPrice(topUp.price)+'</td><td class="up-cell">'+amountYi(topUpCum)+'</td><td class="down-cell">'+fmtHeatPrice(topDown.price)+'</td><td class="down-cell">'+amountYi(topDownCum)+'</td><td class="diff-cell '+longestDiffClass+'">'+amountYi(Math.abs(topDownCum-topUpCum))+'</td></tr></tbody></table>';
+  html+='<tr class="longest"><td>最长柱内总量</td><td class="down-cell">'+fmtHeatPrice(topDown.price)+'</td><td class="down-cell">'+amountYi(topDownCum)+'</td><td class="up-cell">'+fmtHeatPrice(topUp.price)+'</td><td class="up-cell">'+amountYi(topUpCum)+'</td><td class="diff-cell '+longestDiffClass+'">'+amountYi(Math.abs(topDownCum-topUpCum))+'</td></tr></tbody></table>';
   wrap.innerHTML=html;
 }
 
