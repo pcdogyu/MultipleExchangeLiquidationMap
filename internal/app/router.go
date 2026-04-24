@@ -18,15 +18,15 @@ import (
 
 func NewRouter(deps *appctx.Dependencies) *http.ServeMux {
 	mux := http.NewServeMux()
-	home.Mount(mux, deps)
-	config.Mount(mux, deps)
-	monitor.Mount(mux, deps)
-	bookmap.Mount(mux, deps)
-	liquidations.Mount(mux, deps)
-	bubbles.Mount(mux, deps)
-	webdatasource.Mount(mux, deps)
-	channel.Mount(mux, deps)
-	analysis.Mount(mux, deps)
-	system.Mount(mux, deps)
+	home.Mount(mux, deps.Core)
+	config.Mount(mux, deps.Core)
+	monitor.Mount(mux)
+	bookmap.Mount(mux, deps.Core)
+	liquidations.Mount(mux, deps.Core)
+	bubbles.Mount(mux, deps.Core)
+	webdatasource.Mount(mux, deps.Core)
+	channel.Mount(mux, deps.Core)
+	analysis.Mount(mux, deps.Core)
+	system.Mount(mux, deps.Debug)
 	return mux
 }

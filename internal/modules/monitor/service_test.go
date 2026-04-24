@@ -7,7 +7,7 @@ import (
 )
 
 func TestHandlePageRedirectsToDefaultDays(t *testing.T) {
-	svc := newService(nil)
+	svc := newService()
 
 	req := httptest.NewRequest(http.MethodGet, "/monitor", nil)
 	rec := httptest.NewRecorder()

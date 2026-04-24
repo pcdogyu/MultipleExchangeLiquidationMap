@@ -4,11 +4,10 @@ import (
 	"net/http"
 
 	liqmap "multipleexchangeliquidationmap"
-	"multipleexchangeliquidationmap/internal/appctx"
 )
 
-func Mount(mux *http.ServeMux, deps *appctx.Dependencies) {
-	svc := newService(liqmap.NewChannelModuleServices(deps.Core))
+func Mount(mux *http.ServeMux, core *liqmap.App) {
+	svc := newService(liqmap.NewChannelModuleServices(core))
 	mux.HandleFunc("/channel", svc.handlePage)
 	mux.HandleFunc("/api/settings", svc.handleSettings)
 	mux.HandleFunc("/api/channel/test", svc.handleChannelTest)
