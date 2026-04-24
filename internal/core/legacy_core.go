@@ -5770,7 +5770,7 @@ func (a *App) runOKXWS(ctx context.Context, instID string) error {
 	}
 }
 
-const analysisHTMLFallback = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>日内分析</title></head><body style="font-family:Segoe UI,Microsoft YaHei,sans-serif;padding:24px"><h2>日内分析页面文件缺失</h2><p>请确认 <code>analysis_page_fixed.html</code> 存在，然后刷新页面。</p></body></html>`
+const analysisHTMLFallback = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>日内分析</title></head><body style="font-family:Segoe UI,Microsoft YaHei,sans-serif;padding:24px"><h2>日内分析页面文件缺失</h2><p>请确认 <code>internal/shared/pages/files/analysis_page_fixed.html</code> 存在，然后刷新页面。</p></body></html>`
 
 const indexHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">

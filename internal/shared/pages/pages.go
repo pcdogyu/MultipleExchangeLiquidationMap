@@ -1,9 +1,17 @@
 package pages
 
 import (
+	"path/filepath"
+
 	liqmap "multipleexchangeliquidationmap/internal/core"
 	sharedtypes "multipleexchangeliquidationmap/internal/shared/types"
 )
+
+const filesDir = "internal/shared/pages/files"
+
+func file(name string) string {
+	return filepath.Join(filesDir, name)
+}
 
 func Home() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
@@ -16,7 +24,7 @@ func Analysis() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "analysis",
 		FallbackHTML: liqmap.AnalysisHTMLFallback(),
-		Preferred:    []string{"analysis_page_fixed.html"},
+		Preferred:    []string{file("analysis_page_fixed.html")},
 	}
 }
 
@@ -31,7 +39,7 @@ func Bookmap() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "map",
 		FallbackHTML: liqmap.MapHTML(),
-		Preferred:    []string{"map_page_fixed.html", "map_page.html"},
+		Preferred:    []string{file("map_page_fixed.html"), file("map_page.html")},
 	}
 }
 
@@ -39,7 +47,7 @@ func Liquidations() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "liquidations",
 		FallbackHTML: liqmap.LiquidationsHTML(),
-		Preferred:    []string{"liquidations_page_fixed.html"},
+		Preferred:    []string{file("liquidations_page_fixed.html")},
 	}
 }
 
@@ -47,7 +55,7 @@ func Bubbles() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "bubbles",
 		FallbackHTML: liqmap.BubblesHTML(),
-		Preferred:    []string{"bubbles_page_fixed.html"},
+		Preferred:    []string{file("bubbles_page_fixed.html")},
 	}
 }
 
@@ -55,7 +63,7 @@ func Config() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "model_config_page",
 		FallbackHTML: liqmap.ConfigHTML(),
-		Preferred:    []string{"config_page_fixed.html"},
+		Preferred:    []string{file("config_page_fixed.html")},
 	}
 }
 
