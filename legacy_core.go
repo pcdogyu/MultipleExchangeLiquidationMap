@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
 	"sort"
 	"strconv"
@@ -1764,71 +1763,6 @@ func (a *App) handleChannelSchedule(w http.ResponseWriter, r *http.Request) {
 	rows := a.listChannelPlannedPushes(hours)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(rows)
-}
-
-func (a *App) handleUpgradePull(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	// Respond first, then trigger upgrade asynchronously. This avoids returning
-	// "signal: terminated" when liqmap.service restarts while the HTTP request is in flight.
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"output": "upgrade queued; will restart liqmap.service",
-	})
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-	go func() {
-		// Use systemd-run --scope so the upgrade process survives `systemctl restart liqmap.service`
-		// without creating a liqmap-upgrade.service unit.
-		upgradeCmd := exec.Command("bash", "-lc", "rm -f /tmp/liqmap-upgrade.exit /tmp/liqmap-upgrade.pid /tmp/liqmap-upgrade.unit; : >/tmp/liqmap-upgrade.log; unit=liqmap-upgrade.scope; echo \"$unit\" > /tmp/liqmap-upgrade.unit; systemd-run --scope --collect --no-block --unit=liqmap-upgrade /bin/bash -lc 'cd /opt/MultipleExchangeLiquidationMap && echo [git fetch] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git fetch --all --prune\" && git fetch --all --prune && echo [git reset] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git reset --hard origin/golang\" && git reset --hard origin/golang && echo [go build] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# go build -o multipleexchangeliquidationmap.exe ./cmd/server\" && go build -o multipleexchangeliquidationmap.exe ./cmd/server && echo [restart service] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl restart liqmap.service\" && systemctl restart liqmap.service && echo [service status] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl status liqmap.service --no-pager\" && systemctl status liqmap.service --no-pager; ec=$?; echo $ec >/tmp/liqmap-upgrade.exit' >>/tmp/liqmap-upgrade.log 2>&1")
-		_, _ = upgradeCmd.CombinedOutput()
-	}()
-}
-
-func (a *App) handleUpgradeProgress(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	logOut, _ := exec.Command("bash", "-lc", "tail -n 260 /tmp/liqmap-upgrade.log 2>/dev/null || true").CombinedOutput()
-	runningOut, _ := exec.Command("bash", "-lc", "unit=$(cat /tmp/liqmap-upgrade.unit 2>/dev/null || true); if [ -n \"$unit\" ] && systemctl is-active --quiet \"$unit\"; then echo 1; else echo 0; fi").CombinedOutput()
-	exitOut, _ := exec.Command("bash", "-lc", "cat /tmp/liqmap-upgrade.exit 2>/dev/null || true").CombinedOutput()
-	running := strings.TrimSpace(string(runningOut)) == "1"
-	exitCode := strings.TrimSpace(string(exitOut))
-	done := !running && exitCode != ""
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"running":   running,
-		"done":      done,
-		"exit_code": exitCode,
-		"log":       string(logOut),
-	})
-}
-
-func (a *App) handleVersion(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	branchOut, _ := exec.Command("bash", "-lc", "git rev-parse --abbrev-ref HEAD 2>/dev/null || true").CombinedOutput()
-	commitOut, _ := exec.Command("bash", "-lc", "git rev-parse --short HEAD 2>/dev/null || true").CombinedOutput()
-	timeOut, _ := exec.Command("bash", "-lc", "git show -s --format=%ci HEAD 2>/dev/null || true").CombinedOutput()
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"branch":      strings.TrimSpace(string(branchOut)),
-		"commit_id":   strings.TrimSpace(string(commitOut)),
-		"commit_time": strings.TrimSpace(string(timeOut)),
-	})
 }
 
 func (a *App) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
