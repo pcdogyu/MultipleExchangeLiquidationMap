@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"os"
@@ -142,6 +143,7 @@ type webDataSourceSession struct {
 	taskCtx context.Context
 	cancel  context.CancelFunc
 	closeOnce sync.Once
+	cleanup   func()
 }
 
 type webDataSourceProgress struct {
@@ -405,8 +407,17 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) err
 	stopProgressLogger := m.startProgressLogger(ctx, progress)
 	defer stopProgressLogger()
 
+	captureProfileDir, cleanupProfile, err := m.prepareCaptureProfile(cfg.ProfileDir)
+	if err != nil {
+		m.appendStepLog("Prepare Runtime Profile", "failed", err.Error())
+		m.finishRunState("failed", err.Error(), 0)
+		return err
+	}
+	defer cleanupProfile()
+	m.appendStepLog("Prepare Runtime Profile", "success", fmt.Sprintf("source=%s | runtime=%s", cfg.ProfileDir, captureProfileDir))
+
 	progress.setAction("Launch Chrome and open Coinglass")
-	session, err := m.newCaptureSessionV4(ctx, chromePath, cfg.ProfileDir, progress)
+	session, err := m.newCaptureSessionV4(ctx, chromePath, captureProfileDir, progress)
 	if err != nil {
 		m.appendStepLog("Init Coinglass capture session", "failed", err.Error())
 		m.finishRunState("failed", err.Error(), 0)
@@ -935,6 +946,128 @@ func detectChromePath() string {
 		}
 	}
 	return ""
+}
+
+func (m *WebDataSourceManager) prepareCaptureProfile(sourceDir string) (string, func(), error) {
+	sourceDir = strings.TrimSpace(sourceDir)
+	if sourceDir == "" {
+		return "", nil, errors.New("webdatasource profile directory is empty")
+	}
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		return "", nil, err
+	}
+	parentDir := filepath.Dir(sourceDir)
+	if parentDir == "" || parentDir == "." {
+		parentDir = sourceDir
+	}
+	runtimeDir, err := os.MkdirTemp(parentDir, filepath.Base(sourceDir)+"_runtime_*")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() {
+		_ = os.RemoveAll(runtimeDir)
+	}
+	if err := cloneChromeProfileForCapture(sourceDir, runtimeDir); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return runtimeDir, cleanup, nil
+}
+
+func cloneChromeProfileForCapture(sourceDir, targetDir string) error {
+	entries, err := os.ReadDir(sourceDir)
+	if err != nil {
+		return err
+	}
+	keepTopLevel := map[string]bool{
+		"default":      true,
+		"local state":  true,
+		"last version": true,
+		"variations":   true,
+		"first run":    true,
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		nameKey := strings.ToLower(strings.TrimSpace(name))
+		if !keepTopLevel[nameKey] || isTransientChromeProfileEntry(nameKey) {
+			continue
+		}
+		srcPath := filepath.Join(sourceDir, name)
+		dstPath := filepath.Join(targetDir, name)
+		if entry.IsDir() {
+			if err := copyChromeProfileDir(srcPath, dstPath); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := copyFile(srcPath, dstPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyChromeProfileDir(sourceDir, targetDir string) error {
+	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return os.MkdirAll(targetDir, 0o755)
+		}
+		baseKey := strings.ToLower(strings.TrimSpace(info.Name()))
+		if isTransientChromeProfileEntry(baseKey) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		dstPath := filepath.Join(targetDir, rel)
+		if info.IsDir() {
+			return os.MkdirAll(dstPath, 0o755)
+		}
+		return copyFile(path, dstPath)
+	})
+}
+
+func isTransientChromeProfileEntry(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "lockfile", "singletonlock", "singletoncookie", "singletonsocket", "devtoolsactiveport",
+		"cache", "code cache", "gpucache", "grshadercache", "shadercache",
+		"browsermetrics", "deferredbrowsermetrics", "crashpad", "component_crx_cache",
+		"extensions_crx_cache", "dawngraphitecache", "dawnwebgpucache":
+		return true
+	default:
+		return false
+	}
+}
+
+func copyFile(sourcePath, targetPath string) error {
+	sourceFile, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+	info, err := sourceFile.Stat()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return err
+	}
+	targetFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	defer targetFile.Close()
+	if _, err := io.Copy(targetFile, sourceFile); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (m *WebDataSourceManager) captureWindowLegacy(ctx context.Context, chromePath, profileDir string, days int) (map[string]any, capturedPayloadMeta, error) {
@@ -1569,8 +1702,15 @@ func (m *WebDataSourceManager) newCaptureSession(ctx context.Context, chromePath
 }
 
 func (s *webDataSourceSession) close() {
-	if s != nil && s.cancel != nil {
-		s.closeOnce.Do(s.cancel)
+	if s != nil {
+		s.closeOnce.Do(func() {
+			if s.cancel != nil {
+				s.cancel()
+			}
+			if s.cleanup != nil {
+				s.cleanup()
+			}
+		})
 	}
 }
 
