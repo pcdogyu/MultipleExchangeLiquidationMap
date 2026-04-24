@@ -14,6 +14,14 @@ type ModelConfigPageData struct {
 	ShowAnalysisInfo bool
 }
 
+type BadRequestError struct {
+	Message string
+}
+
+func (e BadRequestError) Error() string {
+	return e.Message
+}
+
 const (
 	DefaultDBPath     = defaultDBPath
 	DefaultServerAddr = defaultServerAddr
@@ -61,9 +69,6 @@ func (a *App) HandleAnalysisAPI(w http.ResponseWriter, r *http.Request) { a.hand
 func (a *App) HandleModelLiquidationMap(w http.ResponseWriter, r *http.Request) {
 	a.handleModelLiquidationMap(w, r)
 }
-
-func (a *App) HandleModelConfig(w http.ResponseWriter, r *http.Request) { a.handleModelConfig(w, r) }
-func (a *App) HandleModelFit(w http.ResponseWriter, r *http.Request)    { a.handleModelFit(w, r) }
 
 func (a *App) HandleLiquidationsAPI(w http.ResponseWriter, r *http.Request) {
 	a.handleLiquidationsAPI(w, r)
@@ -131,6 +136,14 @@ func (a *App) ListChannelPlannedPushes(hours int) []ChannelPlannedPushRow {
 
 func (a *App) LoadModelConfig() ModelConfig {
 	return a.loadModelConfig()
+}
+
+func (a *App) SaveModelConfig(req ModelConfig) error {
+	return a.saveModelConfig(req)
+}
+
+func (a *App) RunModelFit(hours, minEvents int, exchange, mode string) (map[string]any, error) {
+	return a.runModelFit(hours, minEvents, exchange, mode)
 }
 
 func AnalysisHTMLFallback() string { return analysisHTMLFallback }

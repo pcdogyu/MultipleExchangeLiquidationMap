@@ -7,8 +7,8 @@ import (
 )
 
 func Mount(mux *http.ServeMux, deps *appctx.Dependencies) {
-	h := newHandlers(deps)
-	mux.HandleFunc("/config", h.handlePage)
-	mux.HandleFunc("/api/model-config", deps.Core.HandleModelConfig)
-	mux.HandleFunc("/api/model-fit", deps.Core.HandleModelFit)
+	svc := newService(deps)
+	mux.HandleFunc("/config", svc.handlePage)
+	mux.HandleFunc("/api/model-config", svc.handleModelConfig)
+	mux.HandleFunc("/api/model-fit", svc.handleModelFit)
 }
