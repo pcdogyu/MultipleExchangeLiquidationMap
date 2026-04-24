@@ -27,6 +27,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,
 .field{display:grid;gap:6px;min-width:150px}
 .field label{font-size:12px;color:var(--muted)}
 .field select,.field input{height:38px;border:1px solid #cbd5e1;border-radius:10px;padding:0 12px;background:#fff;color:var(--ink)}
+.symbol-picker{display:grid;gap:8px}
 .btn{height:38px;background:#fff;color:var(--ink);border:1px solid #cbd5e1;padding:0 14px;border-radius:10px;cursor:pointer}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .btn:disabled{opacity:.55;cursor:not-allowed}
@@ -112,9 +113,12 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04
       <div class="controls">
         <div class="field">
           <label for="symbolSel">币对</label>
-          <select id="symbolSel" onchange="applyFilters()">
-            <option value="ALL">全部币对</option>
-          </select>
+          <div class="symbol-picker">
+            <input id="symbolSearch" type="text" placeholder="搜索币对，例如 ETH / BTC / SOL" oninput="filterSymbolOptions()">
+            <select id="symbolSel" onchange="applyFilters()">
+              <option value="ALL">全部币对</option>
+            </select>
+          </div>
         </div>
         <div class="field">
           <label for="filterField">筛选字段</label>
@@ -228,8 +232,25 @@ function renderRows(rows){
     '</tr>';
   }).join('');
 }
-function syncSymbolOptions(symbols){
+function getSymbolSearchValue(){
+  return String(document.getElementById('symbolSearch')?.value||'').trim().toUpperCase();
+}
+function renderSymbolOptions(list){
   const select=document.getElementById('symbolSel');
+  const items=Array.isArray(list)&&list.length?list:['ALL'];
+  select.innerHTML=items.map(value=>'<option value="'+esc(value)+'">'+(value==='ALL'?'全部币对':esc(value))+'</option>').join('');
+  if(items.includes(currentSymbol)){
+    select.value=currentSymbol;
+    return;
+  }
+  select.value=items.includes('ALL')?'ALL':items[0];
+}
+function filterSymbolOptions(){
+  const keyword=getSymbolSearchValue();
+  const filtered=availableSymbols.filter(value=>value==='ALL' || !keyword || value.includes(keyword));
+  renderSymbolOptions(filtered);
+}
+function syncSymbolOptions(symbols){
   const normalized=['ALL'].concat((Array.isArray(symbols)?symbols:[]).filter(Boolean));
   const next=[];
   const seen=new Set();
@@ -241,9 +262,8 @@ function syncSymbolOptions(symbols){
   }
   availableSymbols=next;
   const prev=String(currentSymbol||'ALL').toUpperCase();
-  select.innerHTML=next.map(value=>'<option value="'+esc(value)+'">'+(value==='ALL'?'全部币对':esc(value))+'</option>').join('');
   currentSymbol=next.includes(prev)?prev:'ALL';
-  select.value=currentSymbol;
+  filterSymbolOptions();
 }
 function filterFieldLabel(value){
   return value==='qty'?'数量':'金额 USD';
