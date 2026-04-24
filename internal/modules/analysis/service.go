@@ -1,6 +1,6 @@
 package analysis
 
-import liqmap "multipleexchangeliquidationmap"
+import liqmap "multipleexchangeliquidationmap/internal/core"
 
 type Services interface {
 	AnalysisSnapshot() (liqmap.AnalysisSnapshot, error)

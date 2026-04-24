@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	liqmap "multipleexchangeliquidationmap"
+	liqmap "multipleexchangeliquidationmap/internal/core"
 )
 
 type stubServices struct {

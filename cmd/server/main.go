@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	liqmap "multipleexchangeliquidationmap"
 	"multipleexchangeliquidationmap/internal/app"
+	liqmap "multipleexchangeliquidationmap/internal/core"
 	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
 
 	_ "modernc.org/sqlite"

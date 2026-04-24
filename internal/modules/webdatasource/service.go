@@ -1,6 +1,6 @@
 package webdatasource
 
-import liqmap "multipleexchangeliquidationmap"
+import liqmap "multipleexchangeliquidationmap/internal/core"
 
 type Services interface {
 	WebDataSourceStatus() liqmap.WebDataSourceStatus

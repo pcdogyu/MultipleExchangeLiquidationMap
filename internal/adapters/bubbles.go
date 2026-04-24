@@ -1,7 +1,7 @@
 package adapters
 
 import (
-	liqmap "multipleexchangeliquidationmap"
+	liqmap "multipleexchangeliquidationmap/internal/core"
 	"multipleexchangeliquidationmap/internal/modules/bubbles"
 )
 

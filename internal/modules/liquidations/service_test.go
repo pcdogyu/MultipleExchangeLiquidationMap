@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	liqmap "multipleexchangeliquidationmap"
+	liqmap "multipleexchangeliquidationmap/internal/core"
 )
 
 type stubServices struct {

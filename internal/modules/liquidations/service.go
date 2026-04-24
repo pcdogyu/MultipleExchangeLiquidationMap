@@ -1,6 +1,6 @@
 package liquidations
 
-import liqmap "multipleexchangeliquidationmap"
+import liqmap "multipleexchangeliquidationmap/internal/core"
 
 type Services interface {
 	ListLiquidations(limit, offset int, startTS, endTS int64) []liqmap.EventRow

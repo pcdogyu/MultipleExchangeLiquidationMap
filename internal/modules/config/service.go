@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	liqmap "multipleexchangeliquidationmap"
+	liqmap "multipleexchangeliquidationmap/internal/core"
 	"multipleexchangeliquidationmap/internal/platform/httpx"
 	"multipleexchangeliquidationmap/internal/platform/pageview"
 	"multipleexchangeliquidationmap/internal/shared/pages"
@@ -30,7 +30,7 @@ func newService(core Services) *service {
 func (s *service) handlePage(w http.ResponseWriter, r *http.Request) {
 	data := &liqmap.ModelConfigPageData{
 		ModelConfig:      s.core.LoadModelConfig(),
-		PageTitle:        "妯″瀷閰嶇疆",
+		PageTitle:        "濡€崇€烽柊宥囩枂",
 		ActiveMenu:       "config",
 		ShowAnalysisInfo: false,
 	}

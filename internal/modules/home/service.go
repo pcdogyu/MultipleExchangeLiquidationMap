@@ -1,6 +1,6 @@
 package home
 
-import liqmap "multipleexchangeliquidationmap"
+import liqmap "multipleexchangeliquidationmap/internal/core"
 
 type Services interface {
 	WindowDays() int

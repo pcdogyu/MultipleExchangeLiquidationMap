@@ -1,7 +1,7 @@
 package pages
 
 import (
-	liqmap "multipleexchangeliquidationmap"
+	liqmap "multipleexchangeliquidationmap/internal/core"
 	sharedtypes "multipleexchangeliquidationmap/internal/shared/types"
 )
 

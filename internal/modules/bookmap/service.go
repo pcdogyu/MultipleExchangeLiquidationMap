@@ -1,6 +1,6 @@
 package bookmap
 
-import liqmap "multipleexchangeliquidationmap"
+import liqmap "multipleexchangeliquidationmap/internal/core"
 
 type Services interface {
 	OrderBookView(exchange, mode string, limit int) (any, error)

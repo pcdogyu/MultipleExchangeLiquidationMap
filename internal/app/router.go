@@ -3,8 +3,8 @@ package app
 import (
 	"net/http"
 
-	liqmap "multipleexchangeliquidationmap"
 	"multipleexchangeliquidationmap/internal/adapters"
+	liqmap "multipleexchangeliquidationmap/internal/core"
 	"multipleexchangeliquidationmap/internal/modules/monitor"
 	"multipleexchangeliquidationmap/internal/modules/system"
 )
