@@ -2634,6 +2634,7 @@ func (a *App) buildAnalysisSnapshot() (AnalysisSnapshot, error) {
 		CurrentPrice:  dash.CurrentPrice,
 		Overview:      overview,
 		Broadcast:     buildBroadcastSummary(dash.CurrentPrice, overview, shortRiskScore, longRiskScore, keyZones, dash),
+		Indicators:    a.buildAnalysisIndicators(dash.CurrentPrice),
 		RiskScores:    []AnalysisRiskScore{{Label: "空头被挤压风险", Score: shortRiskScore, Tone: scoreTone(shortRiskScore)}, {Label: "多头被踩踏风险", Score: longRiskScore, Tone: scoreTone(longRiskScore)}, {Label: "短线波动放大风险", Score: clamp(recent4h/1_200_000*100, 0, 100), Tone: scoreTone(clamp(recent4h/1_200_000*100, 0, 100))}},
 		KeyZones:      keyZones,
 		Changes:       changes,

@@ -49,6 +49,14 @@ type AnalysisBroadcast struct {
 	Bullets  []string `json:"bullets"`
 }
 
+type AnalysisIndicator struct {
+	Label    string `json:"label"`
+	Value    string `json:"value"`
+	Subvalue string `json:"subvalue,omitempty"`
+	Tone     string `json:"tone"`
+	Note     string `json:"note"`
+}
+
 type ExchangeAnalysisCard struct {
 	Exchange        string  `json:"exchange"`
 	MarkPrice       float64 `json:"mark_price"`
@@ -72,6 +80,7 @@ type AnalysisSnapshot struct {
 	CurrentPrice  float64                `json:"current_price"`
 	Overview      AnalysisOverview       `json:"overview"`
 	Broadcast     AnalysisBroadcast      `json:"broadcast"`
+	Indicators    []AnalysisIndicator    `json:"indicators"`
 	RiskScores    []AnalysisRiskScore    `json:"risk_scores"`
 	KeyZones      []AnalysisKeyZone      `json:"key_zones"`
 	Changes       []AnalysisDelta        `json:"changes"`

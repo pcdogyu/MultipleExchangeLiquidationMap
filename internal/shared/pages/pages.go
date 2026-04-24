@@ -24,7 +24,7 @@ func Analysis() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "analysis",
 		FallbackHTML: liqmap.AnalysisHTMLFallback(),
-		Preferred:    []string{file("analysis_page_fixed.html")},
+		Preferred:    []string{file("analysis_page_utf8.html"), file("analysis_page_fixed.html")},
 	}
 }
 
