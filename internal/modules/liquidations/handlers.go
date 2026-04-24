@@ -55,7 +55,7 @@ func (s *service) handleLiquidations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	offset := (page - 1) * limit
-	rows := s.deps.Core.ListLiquidations(limit, offset, startTS, endTS)
+	rows := s.core.ListLiquidations(limit, offset, startTS, endTS)
 	if minQty > 0 {
 		filtered := rows[:0]
 		for _, it := range rows {

@@ -1,11 +1,17 @@
 package bookmap
 
-import "multipleexchangeliquidationmap/internal/appctx"
+import liqmap "multipleexchangeliquidationmap"
 
-type service struct {
-	deps *appctx.Dependencies
+type bookmapCore interface {
+	OrderBookView(exchange, mode string, limit int) (any, error)
+	ListPriceWallEvents(page, limit, minutes int, side, mode string) (any, error)
+	RecordPriceWallEvent(req liqmap.PriceWallEvent) error
 }
 
-func newService(deps *appctx.Dependencies) *service {
-	return &service{deps: deps}
+type service struct {
+	core bookmapCore
+}
+
+func newService(core bookmapCore) *service {
+	return &service{core: core}
 }

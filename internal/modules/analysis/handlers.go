@@ -20,7 +20,7 @@ func (s *service) handleAnalysis(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := s.deps.Core.AnalysisSnapshot()
+	resp, err := s.core.AnalysisSnapshot()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

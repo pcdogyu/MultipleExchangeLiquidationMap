@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	liqmap "multipleexchangeliquidationmap"
-	"multipleexchangeliquidationmap/internal/appctx"
 	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
 
 	_ "modernc.org/sqlite"
@@ -33,10 +32,7 @@ func newTestService(t *testing.T) (*service, *sql.DB) {
 	}
 
 	core := liqmap.NewApp(db, false)
-	return newService(&appctx.Dependencies{
-		Core:  core,
-		Debug: false,
-	}), db
+	return newService(core), db
 }
 
 func TestHandleLiquidationsRejectsWrongMethod(t *testing.T) {

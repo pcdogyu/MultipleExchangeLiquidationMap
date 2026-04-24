@@ -1,11 +1,21 @@
 package webdatasource
 
-import "multipleexchangeliquidationmap/internal/appctx"
+import liqmap "multipleexchangeliquidationmap"
 
-type service struct {
-	deps *appctx.Dependencies
+type webDataSourceCore interface {
+	WebDataSourceStatus() liqmap.WebDataSourceStatus
+	TriggerWebDataSourceInit() (bool, error)
+	WebDataSourceInitLoginTimeoutSec() int
+	TriggerWebDataSourceRun(windowDays *int) (bool, error)
+	ListRecentWebDataSourceRuns(limit int) []liqmap.WebDataSourceRunRow
+	UpdateWebDataSourceSettings(enabled *bool, intervalMin, timeoutSec int, chromePath, profileDir string) liqmap.WebDataSourceStatus
+	WebDataSourceMap(window string) liqmap.WebDataSourceMapResponse
 }
 
-func newService(deps *appctx.Dependencies) *service {
-	return &service{deps: deps}
+type service struct {
+	core webDataSourceCore
+}
+
+func newService(core webDataSourceCore) *service {
+	return &service{core: core}
 }

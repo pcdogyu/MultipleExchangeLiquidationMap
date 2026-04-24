@@ -1,11 +1,15 @@
 package liquidations
 
-import "multipleexchangeliquidationmap/internal/appctx"
+import liqmap "multipleexchangeliquidationmap"
 
-type service struct {
-	deps *appctx.Dependencies
+type liquidationsCore interface {
+	ListLiquidations(limit, offset int, startTS, endTS int64) []liqmap.EventRow
 }
 
-func newService(deps *appctx.Dependencies) *service {
-	return &service{deps: deps}
+type service struct {
+	core liquidationsCore
+}
+
+func newService(core liquidationsCore) *service {
+	return &service{core: core}
 }

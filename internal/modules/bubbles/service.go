@@ -7,18 +7,22 @@ import (
 	"strings"
 
 	liqmap "multipleexchangeliquidationmap"
-	"multipleexchangeliquidationmap/internal/appctx"
 	"multipleexchangeliquidationmap/internal/platform/httpx"
 	"multipleexchangeliquidationmap/internal/platform/pageview"
 	"multipleexchangeliquidationmap/internal/shared/pages"
 )
 
-type service struct {
-	deps *appctx.Dependencies
+type bubblesCore interface {
+	FetchKlines(interval string, limit int, startTS, endTS int64) (map[string]any, error)
+	LatestOKXClose() (map[string]any, error)
 }
 
-func newService(deps *appctx.Dependencies) *service {
-	return &service{deps: deps}
+type service struct {
+	core bubblesCore
+}
+
+func newService(core bubblesCore) *service {
+	return &service{core: core}
 }
 
 func (s *service) handlePage(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +54,7 @@ func (s *service) handleKlines(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp, err := s.deps.Core.FetchKlines(r.URL.Query().Get("interval"), limit, startTS, endTS)
+	resp, err := s.core.FetchKlines(r.URL.Query().Get("interval"), limit, startTS, endTS)
 	if err != nil {
 		var badRequest liqmap.BadRequestError
 		if errors.As(err, &badRequest) {
@@ -69,7 +73,7 @@ func (s *service) handleOKXLatestClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := s.deps.Core.LatestOKXClose()
+	resp, err := s.core.LatestOKXClose()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

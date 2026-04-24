@@ -19,7 +19,7 @@ func (s *service) handleStatus(w http.ResponseWriter, r *http.Request) {
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, s.deps.Core.WebDataSourceStatus())
+	httpx.WriteJSON(w, http.StatusOK, s.core.WebDataSourceStatus())
 }
 
 func (s *service) handleInit(w http.ResponseWriter, r *http.Request) {
@@ -27,14 +27,14 @@ func (s *service) handleInit(w http.ResponseWriter, r *http.Request) {
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	started, err := s.deps.Core.TriggerWebDataSourceInit()
+	started, err := s.core.TriggerWebDataSourceInit()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"started":     started,
-		"timeout_sec": s.deps.Core.WebDataSourceInitLoginTimeoutSec(),
+		"timeout_sec": s.core.WebDataSourceInitLoginTimeoutSec(),
 	})
 }
 
@@ -52,7 +52,7 @@ func (s *service) handleRun(w http.ResponseWriter, r *http.Request) {
 	if req.WindowDays == 1 || req.WindowDays == 7 || req.WindowDays == 30 {
 		days = &req.WindowDays
 	}
-	started, err := s.deps.Core.TriggerWebDataSourceRun(days)
+	started, err := s.core.TriggerWebDataSourceRun(days)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -66,7 +66,7 @@ func (s *service) handleRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"rows": s.deps.Core.ListRecentWebDataSourceRuns(20),
+		"rows": s.core.ListRecentWebDataSourceRuns(20),
 	})
 }
 
@@ -87,7 +87,7 @@ func (s *service) handleSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status := s.deps.Core.UpdateWebDataSourceSettings(
+	status := s.core.UpdateWebDataSourceSettings(
 		req.Enabled,
 		req.IntervalMin,
 		req.TimeoutSec,
@@ -106,5 +106,5 @@ func (s *service) handleMap(w http.ResponseWriter, r *http.Request) {
 	if window == "" {
 		window = "30d"
 	}
-	httpx.WriteJSON(w, http.StatusOK, s.deps.Core.WebDataSourceMap(window))
+	httpx.WriteJSON(w, http.StatusOK, s.core.WebDataSourceMap(window))
 }

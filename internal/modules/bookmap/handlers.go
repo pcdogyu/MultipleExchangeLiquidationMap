@@ -29,7 +29,7 @@ func (s *service) handleOrderBook(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	resp, err := s.deps.Core.OrderBookView(r.URL.Query().Get("exchange"), r.URL.Query().Get("mode"), limit)
+	resp, err := s.core.OrderBookView(r.URL.Query().Get("exchange"), r.URL.Query().Get("mode"), limit)
 	if err != nil {
 		var badRequest liqmap.BadRequestError
 		if errors.As(err, &badRequest) {
@@ -69,7 +69,7 @@ func (s *service) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		resp, err := s.deps.Core.ListPriceWallEvents(page, limit, minutes, side, mode)
+		resp, err := s.core.ListPriceWallEvents(page, limit, minutes, side, mode)
 		if err != nil {
 			var badRequest liqmap.BadRequestError
 			if errors.As(err, &badRequest) {
@@ -86,7 +86,7 @@ func (s *service) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		if err := s.deps.Core.RecordPriceWallEvent(req); err != nil {
+		if err := s.core.RecordPriceWallEvent(req); err != nil {
 			var badRequest liqmap.BadRequestError
 			if errors.As(err, &badRequest) {
 				http.Error(w, badRequest.Error(), http.StatusBadRequest)

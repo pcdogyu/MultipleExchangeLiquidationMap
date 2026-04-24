@@ -1,11 +1,15 @@
 package analysis
 
-import "multipleexchangeliquidationmap/internal/appctx"
+import liqmap "multipleexchangeliquidationmap"
 
-type service struct {
-	deps *appctx.Dependencies
+type snapshotProvider interface {
+	AnalysisSnapshot() (liqmap.AnalysisSnapshot, error)
 }
 
-func newService(deps *appctx.Dependencies) *service {
-	return &service{deps: deps}
+type service struct {
+	core snapshotProvider
+}
+
+func newService(core snapshotProvider) *service {
+	return &service{core: core}
 }
