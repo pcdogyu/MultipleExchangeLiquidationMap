@@ -45,13 +45,12 @@ func main() {
 	}
 
 	core := liqmap.NewApp(db, debug)
-	deps := app.NewDependencies(core, debug)
 
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	app.StartJobs(rootCtx, deps)
+	app.StartJobs(rootCtx, core)
 
-	mux := app.NewRouter(deps)
+	mux := app.NewRouter(core, debug)
 	srv := &http.Server{Addr: liqmap.DefaultServerAddr, Handler: mux}
 	go func() {
 		<-rootCtx.Done()

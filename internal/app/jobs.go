@@ -1,7 +1,9 @@
 package app
 
+import liqmap "multipleexchangeliquidationmap"
+
 import "context"
 
-func StartJobs(ctx context.Context, deps *Dependencies) {
-	deps.Core.StartBackgroundJobs(ctx)
+func StartJobs(ctx context.Context, core *liqmap.App) {
+	core.StartBackgroundJobs(ctx)
 }

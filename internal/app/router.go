@@ -3,6 +3,7 @@ package app
 import (
 	"net/http"
 
+	liqmap "multipleexchangeliquidationmap"
 	"multipleexchangeliquidationmap/internal/modules/analysis"
 	"multipleexchangeliquidationmap/internal/modules/bookmap"
 	"multipleexchangeliquidationmap/internal/modules/bubbles"
@@ -15,17 +16,17 @@ import (
 	"multipleexchangeliquidationmap/internal/modules/webdatasource"
 )
 
-func NewRouter(deps *Dependencies) *http.ServeMux {
+func NewRouter(core *liqmap.App, debug bool) *http.ServeMux {
 	mux := http.NewServeMux()
-	home.Mount(mux, deps.Core)
-	config.Mount(mux, deps.Core)
+	home.Mount(mux, core)
+	config.Mount(mux, core)
 	monitor.Mount(mux)
-	bookmap.Mount(mux, deps.Core)
-	liquidations.Mount(mux, deps.Core)
-	bubbles.Mount(mux, deps.Core)
-	webdatasource.Mount(mux, deps.Core)
-	channel.Mount(mux, deps.Core)
-	analysis.Mount(mux, deps.Core)
-	system.Mount(mux, deps.Debug)
+	bookmap.Mount(mux, core)
+	liquidations.Mount(mux, core)
+	bubbles.Mount(mux, core)
+	webdatasource.Mount(mux, core)
+	channel.Mount(mux, core)
+	analysis.Mount(mux, core)
+	system.Mount(mux, debug)
 	return mux
 }
