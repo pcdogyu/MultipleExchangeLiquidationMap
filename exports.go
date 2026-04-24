@@ -64,10 +64,6 @@ func (a *App) StartBackgroundJobs(ctx context.Context) {
 
 func (a *App) HandleAnalysisAPI(w http.ResponseWriter, r *http.Request) { a.handleAnalysisAPI(w, r) }
 
-func (a *App) HandleLiquidationsAPI(w http.ResponseWriter, r *http.Request) {
-	a.handleLiquidationsAPI(w, r)
-}
-
 func (a *App) HandleWebDataSourceStatus(w http.ResponseWriter, r *http.Request) {
 	a.handleWebDataSourceStatus(w, r)
 }
@@ -180,6 +176,10 @@ func (a *App) LatestOKXClose() (map[string]any, error) {
 		"close":    closePrice,
 		"ts":       ts,
 	}, nil
+}
+
+func (a *App) ListLiquidations(limit, offset int, startTS, endTS int64) []EventRow {
+	return a.loadLiquidations(defaultSymbol, limit, offset, startTS, endTS)
 }
 
 func AnalysisHTMLFallback() string { return analysisHTMLFallback }
