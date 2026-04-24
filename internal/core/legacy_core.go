@@ -69,6 +69,10 @@ type App struct {
 	errLogNext    map[string]time.Time
 	apiGuardMu    sync.Mutex
 	apiGuards     map[string]*ExchangeAPIGuard
+	liqWSMu       sync.RWMutex
+	liqWS         map[string]*liquidationWSState
+	liqSymbolsMu  sync.RWMutex
+	liqSymbols    map[string]struct{}
 	windowDays    int
 	debug         bool
 	lastNotify    int64
@@ -3652,38 +3656,53 @@ func (a *App) loadRecentEvents(symbol string, cutoff int64) []EventRow {
 	return out
 }
 
-func (a *App) loadLiquidations(symbol string, limit, offset int, startTS, endTS int64) []EventRow {
-	if limit <= 0 {
-		limit = 25
+func (a *App) loadLiquidations(opts LiquidationListOptions) []EventRow {
+	if opts.Limit <= 0 {
+		opts.Limit = 25
 	}
-	if limit > 10000 {
-		limit = 10000
+	if opts.Limit > 10000 {
+		opts.Limit = 10000
 	}
-	if offset < 0 {
-		offset = 0
+	if opts.Offset < 0 {
+		opts.Offset = 0
 	}
-	baseSQL := `SELECT exchange, side, price, qty, notional_usd, event_ts
-		FROM liquidation_events WHERE symbol=?`
-	args := []any{symbol}
-	if startTS > 0 {
+	symbol := normalizeLiquidationSymbolFilter(opts.Symbol)
+	baseSQL := `SELECT exchange, symbol, side, price, qty, notional_usd, event_ts
+		FROM liquidation_events WHERE 1=1`
+	args := []any{}
+	if symbol != "ALL" {
+		baseSQL += ` AND symbol=?`
+		args = append(args, symbol)
+	}
+	if opts.StartTS > 0 {
 		baseSQL += ` AND event_ts >= ?`
-		args = append(args, startTS)
+		args = append(args, opts.StartTS)
 	}
-	if endTS > 0 {
+	if opts.EndTS > 0 {
 		baseSQL += ` AND event_ts <= ?`
-		args = append(args, endTS)
+		args = append(args, opts.EndTS)
+	}
+	if opts.MinValue > 0 {
+		switch strings.ToLower(strings.TrimSpace(opts.FilterField)) {
+		case "qty":
+			baseSQL += ` AND qty >= ?`
+			args = append(args, opts.MinValue)
+		case "amount", "notional", "notional_usd":
+			baseSQL += ` AND notional_usd >= ?`
+			args = append(args, opts.MinValue)
+		}
 	}
 	baseSQL += ` ORDER BY event_ts DESC LIMIT ? OFFSET ?`
-	args = append(args, limit, offset)
+	args = append(args, opts.Limit, opts.Offset)
 	rows, err := a.db.Query(baseSQL, args...)
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
-	out := make([]EventRow, 0, limit)
+	out := make([]EventRow, 0, opts.Limit)
 	for rows.Next() {
 		var e EventRow
-		if err := rows.Scan(&e.Exchange, &e.Side, &e.Price, &e.Qty, &e.NotionalUSD, &e.EventTS); err != nil {
+		if err := rows.Scan(&e.Exchange, &e.Symbol, &e.Side, &e.Price, &e.Qty, &e.NotionalUSD, &e.EventTS); err != nil {
 			continue
 		}
 		out = append(out, e)
@@ -3864,6 +3883,8 @@ func (a *App) insertLiquidationEvent(exchange, symbol, side, rawSide string, pri
 	if price <= 0 || qty <= 0 {
 		return
 	}
+	symbol = normalizeLiquidationEventSymbol(exchange, symbol)
+	a.mergeLiquidationSymbols([]string{symbol})
 	if markPrice <= 0 {
 		// Try to get current mark price from market_state table
 		var currentMarkPrice float64
@@ -3894,9 +3915,9 @@ func (a *App) startLiquidationSync(ctx context.Context) {
 		okxCtVal = 1
 	}
 	go a.backfillOKXLiquidations(ctx, "ETH-USDT-SWAP", okxCtVal, 24)
-	go a.syncBinanceLiquidations(ctx, "ETHUSDT")
-	go a.syncBybitLiquidations(ctx, "ETHUSDT")
-	go a.syncOKXLiquidations(ctx, "ETH-USDT-SWAP", okxCtVal)
+	go a.syncBinanceAllLiquidations(ctx)
+	go a.syncBybitAllLiquidations(ctx)
+	go a.syncOKXAllLiquidations(ctx)
 }
 
 func (a *App) startModelMapSnapshotter(ctx context.Context) {

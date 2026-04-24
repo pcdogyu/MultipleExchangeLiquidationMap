@@ -14,6 +14,8 @@ func NewApp(db *sql.DB, debug bool) *App {
 		},
 		ob:         newOrderBookHub(),
 		apiGuards:  map[string]*ExchangeAPIGuard{},
+		liqWS:      map[string]*liquidationWSState{},
+		liqSymbols: map[string]struct{}{defaultSymbol: {}},
 		windowDays: defaultWindowDays,
 		debug:      debug,
 	}

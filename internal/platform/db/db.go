@@ -74,6 +74,7 @@ func Init(db *sql.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_liquidation_events_uniq
 			ON liquidation_events(exchange, symbol, side, price, qty, event_ts);`,
 		`CREATE INDEX IF NOT EXISTS idx_liquidation_events_symbol_ts ON liquidation_events(symbol, event_ts);`,
+		`CREATE INDEX IF NOT EXISTS idx_liquidation_events_ts ON liquidation_events(event_ts);`,
 		`CREATE TABLE IF NOT EXISTS band_reports (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			report_ts INTEGER NOT NULL,

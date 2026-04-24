@@ -5,10 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>强平清算</title>
 <style>
-body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
-.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
+:root{--bg:#f5f7fb;--ink:#172033;--muted:#64748b;--panel:#fff;--line:#dce3ec;--nav:#0b1220;--nav-border:#243145;--nav-ink:#eef3f9;--accent:#2563eb;--good:#16a34a;--warn:#d97706;--bad:#dc2626}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
+.nav{height:56px;background:var(--nav);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
 .nav-left,.nav-right{display:flex;align-items:center;gap:20px}
-.brand{font-size:18px;font-weight:700;color:#eef3f9}
+.brand{font-size:18px;font-weight:700;color:var(--nav-ink)}
 .menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}
 .menu a.active{color:#fff;font-weight:700}
 .upgrade{color:#fff;font-weight:700;text-decoration:none}
@@ -16,20 +18,39 @@ body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe
 .theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}
 .theme-toggle button.label{cursor:default;opacity:.92}
 .theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}
-.wrap{max-width:1200px;margin:0 auto;padding:22px}
-.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
-table{width:100%;border-collapse:collapse}
-th,td{border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:center;font-size:13px}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.btn{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:8px 12px;border-radius:8px;cursor:pointer}
-.btn.primary{background:#22c55e;color:#fff;border-color:#22c55e}
-.small{font-size:12px;color:#64748b}
-[data-theme="dark"] body{background:#000;color:#e5e7eb}
-[data-theme="dark"] .nav{background:#000;border-bottom-color:#111827}
-[data-theme="dark"] .panel{background:#000;border-color:#1f2937}
-[data-theme="dark"] .small{color:#94a3b8}
-[data-theme="dark"] th,[data-theme="dark"] td{border-bottom-color:#1f2937}
-[data-theme="dark"] .btn{background:#000;color:#e5e7eb;border-color:#334155}
+.wrap{max-width:1360px;margin:0 auto;padding:22px}
+.panel{border:1px solid var(--line);background:var(--panel);margin:14px 0;padding:16px;border-radius:14px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap}
+.title-wrap h2{margin:0;font-size:28px}
+.small{font-size:12px;color:var(--muted)}
+.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.field{display:grid;gap:6px;min-width:150px}
+.field label{font-size:12px;color:var(--muted)}
+.field select,.field input{height:38px;border:1px solid #cbd5e1;border-radius:10px;padding:0 12px;background:#fff;color:var(--ink)}
+.btn{height:38px;background:#fff;color:var(--ink);border:1px solid #cbd5e1;padding:0 14px;border-radius:10px;cursor:pointer}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+.status-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.status-card{border:1px solid var(--line);border-radius:14px;padding:14px;background:linear-gradient(180deg,rgba(255,255,255,.98),rgba(248,250,252,.95))}
+.status-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.status-name{font-size:18px;font-weight:800;text-transform:uppercase}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;font-size:12px;font-weight:700}
+.badge.ok{background:rgba(22,163,74,.12);color:var(--good)}
+.badge.wait{background:rgba(217,119,6,.12);color:var(--warn)}
+.badge.down{background:rgba(220,38,38,.12);color:var(--bad)}
+.status-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.kv{padding:10px 12px;border-radius:12px;background:#fff;border:1px solid var(--line)}
+.kv .k{font-size:12px;color:var(--muted)}
+.kv .v{font-size:18px;font-weight:800;margin-top:4px}
+.status-foot{margin-top:10px;min-height:18px;word-break:break-word}
+.table-wrap{overflow:auto}
+table{width:100%;border-collapse:collapse;min-width:920px}
+th,td{border-bottom:1px solid #e5e7eb;padding:10px 12px;text-align:center;font-size:13px;white-space:nowrap}
+th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.side-long{color:var(--bad);font-weight:700}
+.side-short{color:var(--good);font-weight:700}
+.pager{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:var(--muted);text-align:center}
 .upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}
 .upgrade-modal.show{display:flex}
 .upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}
@@ -38,7 +59,18 @@ th,td{border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:center;font-si
 .upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}
 .upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}
 .upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}
-.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}
+[data-theme="dark"]{--bg:#020617;--ink:#e5e7eb;--muted:#94a3b8;--panel:#020617;--line:#1f2937}
+[data-theme="dark"] .field select,[data-theme="dark"] .field input,[data-theme="dark"] .btn,[data-theme="dark"] .kv,[data-theme="dark"] .status-card{background:#020617;color:#e5e7eb;border-color:#334155}
+[data-theme="dark"] th,[data-theme="dark"] td{border-bottom-color:#1f2937}
+@media (max-width:1080px){
+  .status-grid{grid-template-columns:1fr}
+}
+@media (max-width:880px){
+  .menu{display:none}
+  .topbar{flex-direction:column}
+  .controls{width:100%}
+  .field{min-width:calc(50% - 5px)}
+}
 </style>
 </head>
 <body>
@@ -69,39 +101,200 @@ th,td{border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:center;font-si
 
 <div class="wrap">
   <div class="panel">
-    <div class="row" style="justify-content:space-between">
-      <h2 style="margin:0">ETH 强平清算（Binance / Bybit / OKX）</h2>
-      <div class="row">
-        <button id="filterBtn" class="btn" onclick="toggleFilter()">过滤小单</button>
+    <div class="topbar">
+      <div class="title-wrap">
+        <h2>全市场强平清算</h2>
+        <div class="small">接收 Binance / Bybit / OKX 的清算消息，并支持按币对、数量或金额筛选。</div>
+      </div>
+      <div class="controls">
+        <div class="field">
+          <label for="symbolSel">币对</label>
+          <select id="symbolSel" onchange="applyFilters()">
+            <option value="ALL">全部币对</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="filterField">筛选字段</label>
+          <select id="filterField" onchange="applyFilters()">
+            <option value="notional_usd">金额 USD</option>
+            <option value="qty">数量</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="minValue">最小阈值</label>
+          <input id="minValue" type="number" min="0" step="0.0001" value="0" onkeydown="handleEnter(event)">
+        </div>
         <button class="btn" onclick="prev()">上一页</button>
         <button class="btn" onclick="next()">下一页</button>
         <button class="btn primary" onclick="load()">刷新</button>
       </div>
     </div>
-    <div id="meta" class="small" style="margin:8px 0 10px 0"></div>
-    <div id="table"></div>
+  </div>
+
+  <div class="status-grid" id="wsStatusGrid"></div>
+
+  <div class="panel">
+    <div class="pager">
+      <div id="meta" class="small">加载中...</div>
+      <div class="small">页面每 5 秒自动刷新</div>
+    </div>
+    <div class="table-wrap" style="margin-top:12px">
+      <table>
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>交易所</th>
+            <th>币对</th>
+            <th>方向</th>
+            <th>价格</th>
+            <th>数量</th>
+            <th>金额 USD</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody">
+          <tr><td colspan="7" class="small">加载中...</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 
 <script>
+let page=1;
+let pageSize=50;
+let currentSymbol='ALL';
+let availableSymbols=['ALL'];
+
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
-let page=1,pageSize=25,filterSmall=false;
-function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1});}
-function fmtQty(n){return Number(n).toLocaleString('zh-CN',{maximumFractionDigits:4});}
-function fmtAmt(n){n=Number(n);if(!isFinite(n))return '-';return n.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});}
-function fmtTime(ts){try{return new Date(Number(ts||0)).toLocaleString('zh-CN',{hour12:false});}catch(_){return '-';}}
-function render(rows){if(!rows||!rows.length){document.getElementById('table').innerHTML='<div class="small">暂无数据</div>';return;}let h='<table><thead><tr><th>时间</th><th>交易所</th><th>方向</th><th>价格</th><th>数量</th><th>金额 (USD)</th></tr></thead><tbody>';for(const r of rows){h+='<tr><td>'+fmtTime(r.event_ts)+'</td><td>'+String(r.exchange||'').toUpperCase()+'</td><td>'+r.side+'</td><td>'+fmtPrice(r.price)+'</td><td>'+fmtQty(r.qty)+'</td><td>'+fmtAmt(r.notional_usd)+'</td></tr>';}h+='</tbody></table>';document.getElementById('table').innerHTML=h;}
-function toggleFilter(){filterSmall=!filterSmall;const b=document.getElementById('filterBtn');if(b)b.textContent=filterSmall?'显示全部':'过滤小单';load();}
-async function load(){const r=await fetch('/api/liquidations?page='+page+'&limit='+pageSize);const d=await r.json();let rows=(d.rows||[]);if(filterSmall)rows=rows.filter(x=>Number(x.qty||0)>=1);document.getElementById('meta').textContent='第 '+d.page+' 页 | 每页 '+d.page_size+' 条'+(filterSmall?' | 已过滤小于 1 ETH 的记录':'');render(rows);}
+function esc(s){return String(s==null?'':s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
+function fmtPrice(n){const v=Number(n||0);return isFinite(v)&&v>0?v.toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1}):'-';}
+function fmtQty(n){const v=Number(n||0);return isFinite(v)?v.toLocaleString('zh-CN',{maximumFractionDigits:4}):'-';}
+function fmtAmt(n){const v=Number(n||0);if(!isFinite(v)) return '-';if(Math.abs(v)>=1e6) return (v/1e6).toFixed(2)+'M';return v.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function fmtTime(ts){const v=Number(ts||0);if(!v) return '-';return new Date(v).toLocaleString('zh-CN',{hour12:false});}
+function statusBadge(item){
+  if(item.connected) return ['在线','ok'];
+  if(Number(item.paused_until||0)>Date.now()) return ['暂停','down'];
+  if(Number(item.last_event_ts||0)>0) return ['等待重连','wait'];
+  return ['未连接','down'];
+}
+function renderWSStatus(items){
+  const grid=document.getElementById('wsStatusGrid');
+  if(!Array.isArray(items)||!items.length){
+    grid.innerHTML='<div class="panel small">暂无 ws 状态</div>';
+    return;
+  }
+  grid.innerHTML=items.map(item=>{
+    const badge=statusBadge(item);
+    const lastError=String(item.last_error||'').trim();
+    const pauseReason=String(item.pause_reason||'').trim();
+    const foot=pauseReason?('暂停原因：'+esc(pauseReason)):(lastError?('最近错误：'+esc(lastError)):'最近无错误');
+    const subscribed=Number(item.subscribed_topics);
+    return '<div class="status-card">'+
+      '<div class="status-top"><div class="status-name">'+esc(String(item.exchange||'-').toUpperCase())+'</div><span class="badge '+badge[1]+'">'+badge[0]+'</span></div>'+
+      '<div class="status-meta">'+
+        '<div class="kv"><div class="k">活跃连接</div><div class="v">'+Number(item.active_conns||0)+'</div></div>'+
+        '<div class="kv"><div class="k">订阅主题</div><div class="v">'+(subscribed<0?'ALL':subscribed)+'</div></div>'+
+        '<div class="kv"><div class="k">最近消息</div><div class="v" style="font-size:14px">'+esc(fmtTime(item.last_event_ts))+'</div></div>'+
+        '<div class="kv"><div class="k">模式</div><div class="v" style="font-size:14px">'+esc(item.mode||'-')+'</div></div>'+
+      '</div>'+
+      '<div class="status-foot small">'+foot+'</div>'+
+    '</div>';
+  }).join('');
+}
+function renderRows(rows){
+  const body=document.getElementById('tableBody');
+  if(!Array.isArray(rows)||!rows.length){
+    body.innerHTML='<tr><td colspan="7" class="small">暂无符合条件的清算记录</td></tr>';
+    return;
+  }
+  body.innerHTML=rows.map(row=>{
+    const side=String(row.side||'').toLowerCase();
+    const sideClass=side==='long'?'side-long':'side-short';
+    const sideText=side==='long'?'多头被清算':'空头被清算';
+    return '<tr>'+
+      '<td>'+esc(fmtTime(row.event_ts))+'</td>'+
+      '<td>'+esc(String(row.exchange||'').toUpperCase())+'</td>'+
+      '<td>'+esc(row.symbol||'-')+'</td>'+
+      '<td class="'+sideClass+'">'+esc(sideText)+'</td>'+
+      '<td>'+esc(fmtPrice(row.price))+'</td>'+
+      '<td>'+esc(fmtQty(row.qty))+'</td>'+
+      '<td>'+esc(fmtAmt(row.notional_usd))+'</td>'+
+    '</tr>';
+  }).join('');
+}
+function syncSymbolOptions(symbols){
+  const select=document.getElementById('symbolSel');
+  const normalized=['ALL'].concat((Array.isArray(symbols)?symbols:[]).filter(Boolean));
+  const next=[];
+  const seen=new Set();
+  for(const item of normalized){
+    const value=String(item).trim().toUpperCase();
+    if(!value||seen.has(value)) continue;
+    seen.add(value);
+    next.push(value);
+  }
+  availableSymbols=next;
+  const prev=String(currentSymbol||'ALL').toUpperCase();
+  select.innerHTML=next.map(value=>'<option value="'+esc(value)+'">'+(value==='ALL'?'全部币对':esc(value))+'</option>').join('');
+  currentSymbol=next.includes(prev)?prev:'ALL';
+  select.value=currentSymbol;
+}
+function filterFieldLabel(value){
+  return value==='qty'?'数量':'金额 USD';
+}
+function buildQuery(){
+  const filterField=String(document.getElementById('filterField').value||'notional_usd');
+  const minValue=Math.max(0,Number(document.getElementById('minValue').value||0));
+  const params=new URLSearchParams();
+  params.set('page',String(page));
+  params.set('limit',String(pageSize));
+  params.set('symbol',currentSymbol||'ALL');
+  params.set('filter_field',filterField);
+  params.set('min_value',String(minValue));
+  return {params,filterField,minValue};
+}
+function applyFilters(){
+  currentSymbol=String(document.getElementById('symbolSel').value||'ALL').toUpperCase();
+  page=1;
+  load();
+}
+function handleEnter(event){
+  if(event.key==='Enter'){
+    applyFilters();
+  }
+}
+async function load(){
+  const {params,filterField,minValue}=buildQuery();
+  const resp=await fetch('/api/liquidations?'+params.toString()).catch(()=>null);
+  if(!resp){
+    document.getElementById('meta').textContent='无法连接 /api/liquidations';
+    renderRows([]);
+    renderWSStatus([]);
+    return;
+  }
+  const data=await resp.json().catch(()=>null);
+  if(!data){
+    document.getElementById('meta').textContent='清算接口返回了无效 JSON';
+    renderRows([]);
+    renderWSStatus([]);
+    return;
+  }
+  syncSymbolOptions(data.available_symbols||[]);
+  renderWSStatus(data.ws_status||[]);
+  renderRows(data.rows||[]);
+  const symbolText=currentSymbol==='ALL'?'全部币对':currentSymbol;
+  const filterText=minValue>0?(' | '+filterFieldLabel(filterField)+' ≥ '+minValue):'';
+  document.getElementById('meta').textContent='第 '+Number(data.page||page)+' 页 | 每页 '+Number(data.page_size||pageSize)+' 条 | 币对：'+symbolText+filterText;
+}
 function prev(){if(page>1){page--;load();}}
 function next(){page++;load();}
 async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束，但状态未知，请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 initTheme();
-setInterval(load,5000);
 load();
+setInterval(load,5000);
 (async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();
 </script>
 

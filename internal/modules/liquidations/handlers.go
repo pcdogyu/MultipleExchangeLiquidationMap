@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	liqmap "multipleexchangeliquidationmap/internal/core"
 	"multipleexchangeliquidationmap/internal/platform/httpx"
 	"multipleexchangeliquidationmap/internal/platform/pageview"
 	"multipleexchangeliquidationmap/internal/shared/pages"
@@ -35,6 +36,23 @@ func (s *service) handleLiquidations(w http.ResponseWriter, r *http.Request) {
 			minQty = v
 		}
 	}
+	minValue := 0.0
+	if raw := strings.TrimSpace(r.URL.Query().Get("min_value")); raw != "" {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil && v >= 0 {
+			minValue = v
+		}
+	}
+	filterField := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("filter_field")))
+	if filterField == "" && minQty > 0 {
+		filterField = "qty"
+		minValue = minQty
+	}
+	switch filterField {
+	case "", "qty", "amount", "notional", "notional_usd":
+	default:
+		filterField = ""
+	}
+	symbol := strings.TrimSpace(r.URL.Query().Get("symbol"))
 	page := 1
 	if raw := strings.TrimSpace(r.URL.Query().Get("page")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
@@ -55,20 +73,24 @@ func (s *service) handleLiquidations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	offset := (page - 1) * limit
-	rows := s.core.ListLiquidations(limit, offset, startTS, endTS)
-	if minQty > 0 {
-		filtered := rows[:0]
-		for _, it := range rows {
-			if it.Qty >= minQty {
-				filtered = append(filtered, it)
-			}
-		}
-		rows = filtered
-	}
+	rows := s.core.QueryLiquidations(liqmap.LiquidationListOptions{
+		Limit:       limit,
+		Offset:      offset,
+		StartTS:     startTS,
+		EndTS:       endTS,
+		Symbol:      symbol,
+		FilterField: filterField,
+		MinValue:    minValue,
+	})
 
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"page":      page,
-		"page_size": limit,
-		"rows":      rows,
+		"page":              page,
+		"page_size":         limit,
+		"rows":              rows,
+		"symbol":            symbol,
+		"filter_field":      filterField,
+		"min_value":         minValue,
+		"available_symbols": s.core.LiquidationSymbols(300),
+		"ws_status":         s.core.LiquidationWSStatuses(),
 	})
 }

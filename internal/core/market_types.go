@@ -110,6 +110,7 @@ type Dashboard struct {
 
 type EventRow struct {
 	Exchange    string  `json:"exchange"`
+	Symbol      string  `json:"symbol,omitempty"`
 	Side        string  `json:"side"`
 	Price       float64 `json:"price"`
 	Qty         float64 `json:"qty"`

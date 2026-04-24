@@ -3,7 +3,9 @@ package liquidations
 import liqmap "multipleexchangeliquidationmap/internal/core"
 
 type Services interface {
-	ListLiquidations(limit, offset int, startTS, endTS int64) []liqmap.EventRow
+	QueryLiquidations(opts liqmap.LiquidationListOptions) []liqmap.EventRow
+	LiquidationSymbols(limit int) []string
+	LiquidationWSStatuses() []liqmap.LiquidationWSStatus
 }
 
 type service struct {
