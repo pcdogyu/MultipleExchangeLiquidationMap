@@ -1646,18 +1646,6 @@ func heatBandBySize(bands []HeatReportBand, band int) HeatReportBand {
 	return HeatReportBand{Band: band}
 }
 
-func formatYi1(v float64) string {
-	return fmt.Sprintf("%.1f", v/1e8)
-}
-
-func formatYi2(v float64) string {
-	return fmt.Sprintf("%.2f", v/1e8)
-}
-
-func formatPrice1(v float64) string {
-	return fmt.Sprintf("%.1f", v)
-}
-
 func heatReportBias(up, down float64) string {
 	total := up + down
 	if total <= 0 {
@@ -2059,13 +2047,6 @@ func (a *App) latestOKXClose() (float64, int64, error) {
 	return math.Round(closePrice*10) / 10, ts, nil
 }
 
-func roundDisplayPrice1(v float64) float64 {
-	if v <= 0 {
-		return 0
-	}
-	return math.Round(v*10) / 10
-}
-
 func (a *App) resolveUnifiedDisplayPrice(webMap WebDataSourceMapResponse, fallback float64) float64 {
 	if webMap.CurrentPrice > 0 {
 		return roundDisplayPrice1(webMap.CurrentPrice)
@@ -2094,10 +2075,6 @@ func (a *App) enrichHeatReportForTelegram(monitor HeatReportData, webMap WebData
 		display.ShortPeak.Distance = math.Abs(display.ShortPeak.Price - price)
 	}
 	return display
-}
-
-func formatPointDistance(v float64) string {
-	return fmt.Sprintf("%.1f", math.Abs(v))
 }
 
 func telegramImbalanceLabel(up, down float64) string {
@@ -3568,18 +3545,6 @@ func buildBroadcastSummary(currentPrice float64, overview AnalysisOverview, shor
 			fmt.Sprintf("关注提示：%s。", dash.Analytics.Alert.Suggestion),
 			fmt.Sprintf("结论置信度 %.0f%%。", overview.Confidence),
 		},
-	}
-}
-
-func humanizeCompactUSD(v float64) string {
-	abs := math.Abs(v)
-	switch {
-	case abs >= 1e8:
-		return fmt.Sprintf("%.2f亿", v/1e8)
-	case abs >= 1e4:
-		return fmt.Sprintf("%.1f万", v/1e4)
-	default:
-		return fmt.Sprintf("%.0f", v)
 	}
 }
 
