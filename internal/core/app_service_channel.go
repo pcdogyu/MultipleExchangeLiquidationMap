@@ -21,5 +21,5 @@ func (a *App) ListChannelTimeline(hours int) ([]ChannelTimelineRow, error) {
 }
 
 func (a *App) ListChannelPlannedPushes(hours int) []ChannelPlannedPushRow {
-	return a.listChannelPlannedPushes(hours)
+	return a.listChannelPlannedPushesUTF8(hours)
 }
