@@ -48,7 +48,7 @@ func main() {
 
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	app.StartJobs(rootCtx, core)
+	core.StartBackgroundJobs(rootCtx)
 
 	mux := app.NewRouter(core, debug)
 	srv := &http.Server{Addr: liqmap.DefaultServerAddr, Handler: mux}
