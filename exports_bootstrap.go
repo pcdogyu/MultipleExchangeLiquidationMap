@@ -7,20 +7,6 @@ import (
 	"time"
 )
 
-const (
-	DefaultDBPath     = defaultDBPath
-	DefaultServerAddr = defaultServerAddr
-	DefaultSymbol     = defaultSymbol
-)
-
-func Getenv(key, fallback string) string {
-	return getenv(key, fallback)
-}
-
-func SetupLogging(debug bool) (func(), error) {
-	return setupLogging(debug)
-}
-
 func NewApp(db *sql.DB, debug bool) *App {
 	app := &App{
 		db: db,
