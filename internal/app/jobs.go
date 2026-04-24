@@ -1,11 +1,7 @@
 package app
 
-import (
-	"context"
+import "context"
 
-	"multipleexchangeliquidationmap/internal/appctx"
-)
-
-func StartJobs(ctx context.Context, deps *appctx.Dependencies) {
+func StartJobs(ctx context.Context, deps *Dependencies) {
 	deps.Core.StartBackgroundJobs(ctx)
 }
