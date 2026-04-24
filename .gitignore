@@ -23,3 +23,5 @@ coinglass_profile_inspect/
 *.bak
 *.bak_edit
 *.exe~
+playload/
+webdatasource_exports/
