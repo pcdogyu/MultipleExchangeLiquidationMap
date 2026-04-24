@@ -1628,24 +1628,6 @@ func modelHeatPointsAndAnchor(model map[string]any, anchorPrice float64) (float6
 	return current, points, true
 }
 
-func heatReportBandBySize(r HeatReportData, band int) HeatReportBand {
-	for _, b := range r.Bands {
-		if b.Band == band {
-			return b
-		}
-	}
-	return HeatReportBand{Band: band}
-}
-
-func heatBandBySize(bands []HeatReportBand, band int) HeatReportBand {
-	for _, b := range bands {
-		if b.Band == band {
-			return b
-		}
-	}
-	return HeatReportBand{Band: band}
-}
-
 func (a *App) buildHeatReportCaption(r HeatReportData) string {
 	lines := []string{
 		fmt.Sprintf("ETH heat report | price $%.1f", r.CurrentPrice),
@@ -3001,13 +2983,6 @@ func (a *App) buildDashboard(days int) (Dashboard, error) {
 	}, nil
 }
 
-func nearestZoneDistance(current, price float64) float64 {
-	if current <= 0 || price <= 0 {
-		return 0
-	}
-	return math.Abs(price - current)
-}
-
 func weightedFitForAnalysis(hours, minEvents int, counts map[string]map[string]any, suggestions []modelFitSuggestion) (int, float64) {
 	if len(suggestions) == 0 {
 		return 0, 0
@@ -3692,22 +3667,6 @@ func (a *App) buildHeatFromLiquidationEvents(symbol string, currentPrice float64
 	return out, short, long, nil
 }
 
-func bandRowOrDefault(bands []BandRow, currentPrice float64, band int) BandRow {
-	for _, b := range bands {
-		if b.Band == band {
-			return b
-		}
-	}
-	bandF := float64(band)
-	return BandRow{
-		Band:            band,
-		UpPrice:         math.Round((currentPrice+bandF)*10) / 10,
-		DownPrice:       math.Round((currentPrice-bandF)*10) / 10,
-		UpNotionalUSD:   0,
-		DownNotionalUSD: 0,
-	}
-}
-
 func toFloatAny(v any) float64 {
 	switch t := v.(type) {
 	case float64:
@@ -3724,52 +3683,6 @@ func toFloatAny(v any) float64 {
 	default:
 		f, _ := strconv.ParseFloat(strings.TrimSpace(fmt.Sprint(v)), 64)
 		return f
-	}
-}
-
-func classifyImbalance(up, down float64) (string, float64) {
-	if up <= 0 && down <= 0 {
-		return "暂无明显失衡", 1
-	}
-	if up >= down {
-		ratio := up / math.Max(down, 1e-9)
-		if ratio >= 1.25 {
-			return "上方偏强", ratio
-		}
-		return "基本均衡", ratio
-	}
-	ratio := down / math.Max(up, 1e-9)
-	if ratio >= 1.25 {
-		return "下方偏强", ratio
-	}
-	return "基本均衡", ratio
-}
-
-func inferShortBias(up, down float64) string {
-	total := up + down
-	if total <= 0 {
-		return "暂无数据"
-	}
-	delta := (up - down) / total
-	if delta >= 0.18 {
-		return "偏上杀"
-	}
-	if delta <= -0.18 {
-		return "偏下杀"
-	}
-	return "基本均衡"
-}
-
-func normalizeExchangeName(ex string) string {
-	switch strings.ToLower(strings.TrimSpace(ex)) {
-	case "binance":
-		return "Binance"
-	case "bybit":
-		return "Bybit"
-	case "okx":
-		return "OKX"
-	default:
-		return strings.ToUpper(strings.TrimSpace(ex))
 	}
 }
 
@@ -3944,16 +3857,6 @@ func (a *App) sumLiquidationNotionalByExchangeSince(symbol string, startTS int64
 	return out
 }
 
-func findStateByExchange(states []MarketState, exchange string) *MarketState {
-	exchange = strings.ToLower(strings.TrimSpace(exchange))
-	for i := range states {
-		if strings.ToLower(strings.TrimSpace(states[i].Exchange)) == exchange {
-			return &states[i]
-		}
-	}
-	return nil
-}
-
 func (a *App) computeExchangeContribution(symbol string, currentPrice, band float64, cutoff int64, states []MarketState) []ExchangeContribution {
 	sums := map[string]float64{
 		"binance": 0,
@@ -4005,43 +3908,6 @@ func (a *App) computeExchangeContribution(symbol string, currentPrice, band floa
 		return []ExchangeContribution{}
 	}
 	return out
-}
-
-func fundingDirectionText(v *float64) string {
-	if v == nil {
-		return "-"
-	}
-	if *v > 0 {
-		return "longs pay shorts"
-	}
-	if *v < 0 {
-		return "shorts pay longs"
-	}
-	return "neutral"
-}
-
-func fundingVerdictFromStates(states []MarketState) string {
-	pos := 0
-	neg := 0
-	for _, s := range states {
-		if s.FundingRate == nil {
-			continue
-		}
-		switch {
-		case *s.FundingRate > 0:
-			pos++
-		case *s.FundingRate < 0:
-			neg++
-		}
-	}
-	switch {
-	case pos > neg:
-		return "short side favored"
-	case neg > pos:
-		return "long side favored"
-	default:
-		return "mostly neutral"
-	}
 }
 
 func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states []MarketState, bands []BandRow, longestShort, longestLong []any, events []EventRow, cutoff int64) HeatZoneAnalytics {
@@ -4221,52 +4087,6 @@ func (a *App) loadMarketStates(symbol string) ([]MarketState, error) {
 		out = append(out, s)
 	}
 	return out, nil
-}
-
-func averageMarkPriceWithinAge(states []MarketState, maxAge time.Duration) float64 {
-	nowTS := time.Now().UnixMilli()
-	var sumPrice float64
-	var cnt int
-	for _, s := range states {
-		if s.MarkPrice <= 0 {
-			continue
-		}
-		if maxAge > 0 && s.UpdatedTS > 0 {
-			age := nowTS - s.UpdatedTS
-			if age > int64(maxAge/time.Millisecond) {
-				continue
-			}
-		}
-		sumPrice += s.MarkPrice
-		cnt++
-	}
-	if cnt == 0 {
-		return 0
-	}
-	return sumPrice / float64(cnt)
-}
-
-func averageMarkPrice(states []MarketState) float64 {
-	if fresh := averageMarkPriceWithinAge(states, marketStateFreshAge); fresh > 0 {
-		return fresh
-	}
-	return averageMarkPriceWithinAge(states, 0)
-}
-
-func averageSnapshotPrice(snapshots []Snapshot) float64 {
-	var sum float64
-	var cnt int
-	for _, s := range snapshots {
-		if s.MarkPrice <= 0 {
-			continue
-		}
-		sum += s.MarkPrice
-		cnt++
-	}
-	if cnt == 0 {
-		return 0
-	}
-	return sum / float64(cnt)
 }
 
 func (a *App) buildModelLiquidationMap(symbol string, lookbackMin, bucketMin int, priceStep, priceRange float64, cfg ModelConfig) (map[string]any, error) {
