@@ -58,10 +58,6 @@ func (a *App) StartBackgroundJobs(ctx context.Context) {
 
 func (a *App) HandleDashboard(w http.ResponseWriter, r *http.Request) { a.handleDashboard(w, r) }
 
-func (a *App) HandleWebDataSourcePage(w http.ResponseWriter, r *http.Request) {
-	a.handleWebDataSource(w, r)
-}
-
 func (a *App) HandleAnalysisAPI(w http.ResponseWriter, r *http.Request) { a.handleAnalysisAPI(w, r) }
 
 func (a *App) HandleModelLiquidationMap(w http.ResponseWriter, r *http.Request) {
@@ -148,3 +144,4 @@ func ChannelHTMLV2() string        { return channelHTMLV2 }
 func LiquidationsHTML() string     { return liquidationsHTML }
 func BubblesHTML() string          { return bubblesHTML }
 func ConfigHTML() string           { return configHTML }
+func WebDataSourceHTML() string    { return webDataSourceHTML }

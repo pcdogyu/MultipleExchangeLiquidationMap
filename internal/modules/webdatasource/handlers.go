@@ -3,7 +3,10 @@ package webdatasource
 import (
 	"net/http"
 
+	liqmap "multipleexchangeliquidationmap"
 	"multipleexchangeliquidationmap/internal/appctx"
+	"multipleexchangeliquidationmap/internal/platform/render"
+	sharedtypes "multipleexchangeliquidationmap/internal/shared/types"
 )
 
 type handlers struct {
@@ -15,5 +18,8 @@ func newHandlers(deps *appctx.Dependencies) *handlers {
 }
 
 func (h *handlers) handlePage(w http.ResponseWriter, r *http.Request) {
-	h.deps.Core.HandleWebDataSourcePage(w, r)
+	render.PreferredFileOrFallback(w, sharedtypes.HTMLPage{
+		TemplateName: "webdatasource",
+		FallbackHTML: liqmap.WebDataSourceHTML(),
+	}, nil)
 }

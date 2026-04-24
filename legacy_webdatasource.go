@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"log"
 	"math"
 	"net/http"
@@ -3747,14 +3746,6 @@ func (m *WebDataSourceManager) loadLatestMap(window string) WebDataSourceMapResp
 		Points:        points,
 		Snapshot:      &snap,
 	}
-}
-
-func (a *App) handleWebDataSource(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	tpl := template.Must(template.New("webdatasource").Parse(webDataSourceHTML))
-	_ = tpl.Execute(w, nil)
 }
 
 func (a *App) handleWebDataSourceStatus(w http.ResponseWriter, r *http.Request) {
