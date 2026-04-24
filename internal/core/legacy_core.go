@@ -60,6 +60,11 @@ type App struct {
 	analysisMu    sync.Mutex
 	analysisCache AnalysisSnapshot
 	analysisAt    time.Time
+	fitStatsMu    sync.Mutex
+	fitStatsCount int
+	fitStatsSE    float64
+	fitStatsAt    time.Time
+	fitStatsBusy  bool
 	errLogMu      sync.Mutex
 	errLogNext    map[string]time.Time
 	apiGuardMu    sync.Mutex
@@ -2027,22 +2032,41 @@ func weightedFitForAnalysis(hours, minEvents int, counts map[string]map[string]a
 }
 
 func (a *App) loadGlobalFitStats(hours, minEvents int) (int, float64) {
-	resp, err := a.runModelFit(hours, minEvents, "", "global")
-	if err != nil {
-		return 0, 0
+	a.fitStatsMu.Lock()
+	if !a.fitStatsAt.IsZero() && time.Since(a.fitStatsAt) < 15*time.Minute {
+		count, se := a.fitStatsCount, a.fitStatsSE
+		a.fitStatsMu.Unlock()
+		return count, se
 	}
-	body, err := json.Marshal(resp)
-	if err != nil {
-		return 0, 0
+	if !a.fitStatsBusy {
+		a.fitStatsBusy = true
+		go func() {
+			resp, err := a.runModelFit(hours, minEvents, "", "global")
+			count := 0
+			se := 0.0
+			if err == nil {
+				body, err := json.Marshal(resp)
+				if err == nil {
+					var payload struct {
+						Counts      map[string]map[string]any `json:"counts"`
+						Suggestions []modelFitSuggestion      `json:"suggestions"`
+					}
+					if err := json.Unmarshal(body, &payload); err == nil {
+						count, se = weightedFitForAnalysis(hours, minEvents, payload.Counts, payload.Suggestions)
+					}
+				}
+			}
+			a.fitStatsMu.Lock()
+			a.fitStatsCount = count
+			a.fitStatsSE = se
+			a.fitStatsAt = time.Now()
+			a.fitStatsBusy = false
+			a.fitStatsMu.Unlock()
+		}()
 	}
-	var payload struct {
-		Counts      map[string]map[string]any `json:"counts"`
-		Suggestions []modelFitSuggestion      `json:"suggestions"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return 0, 0
-	}
-	return weightedFitForAnalysis(hours, minEvents, payload.Counts, payload.Suggestions)
+	count, se := a.fitStatsCount, a.fitStatsSE
+	a.fitStatsMu.Unlock()
+	return count, se
 }
 
 type webSnapshotBand struct {
@@ -2095,31 +2119,42 @@ func (a *App) loadWebDataSourceBacktestBands(symbol string, startTS int64) ([]in
 	if err != nil {
 		return nil, nil
 	}
-	defer rows.Close()
 
-	ordered := make([]int64, 0, 128)
-	out := map[int64]webSnapshotBand{}
+	type snapshotMeta struct {
+		id        int64
+		ts        int64
+		rangeLow  float64
+		rangeHigh float64
+		payload   string
+	}
+	metas := make([]snapshotMeta, 0, 128)
+
 	for rows.Next() {
-		var id, ts int64
-		var rangeLow, rangeHigh float64
-		var payloadRaw string
-		if err := rows.Scan(&id, &ts, &rangeLow, &rangeHigh, &payloadRaw); err != nil {
+		var meta snapshotMeta
+		if err := rows.Scan(&meta.id, &meta.ts, &meta.rangeLow, &meta.rangeHigh, &meta.payload); err != nil {
 			continue
 		}
+		metas = append(metas, meta)
+	}
+	_ = rows.Close()
+
+	ordered := make([]int64, 0, len(metas))
+	out := map[int64]webSnapshotBand{}
+	for _, meta := range metas {
 		current := 0.0
-		if strings.TrimSpace(payloadRaw) != "" {
+		if strings.TrimSpace(meta.payload) != "" {
 			var payload map[string]any
-			if err := json.Unmarshal([]byte(payloadRaw), &payload); err == nil {
-				current = webDataSourcePayloadCurrentPrice(payload, rangeLow, rangeHigh)
+			if err := json.Unmarshal([]byte(meta.payload), &payload); err == nil {
+				current = webDataSourcePayloadCurrentPrice(payload, meta.rangeLow, meta.rangeHigh)
 			}
 		}
-		if current <= 0 && rangeHigh > rangeLow {
-			current = math.Round(((rangeHigh+rangeLow)/2)*10) / 10
+		if current <= 0 && meta.rangeHigh > meta.rangeLow {
+			current = math.Round(((meta.rangeHigh+meta.rangeLow)/2)*10) / 10
 		}
 		if current <= 0 {
 			continue
 		}
-		points, err := a.db.Query(`SELECT side, price, liq_value FROM webdatasource_points WHERE snapshot_id=?`, id)
+		points, err := a.db.Query(`SELECT side, price, liq_value FROM webdatasource_points WHERE snapshot_id=?`, meta.id)
 		if err != nil {
 			continue
 		}
@@ -2162,8 +2197,8 @@ func (a *App) loadWebDataSourceBacktestBands(symbol string, startTS int64) ([]in
 		if best.up20 == 0 && best.down20 == 0 && best.up50 == 0 && best.down50 == 0 && best.up100 == 0 && best.down100 == 0 {
 			continue
 		}
-		ordered = append(ordered, ts)
-		out[ts] = best
+		ordered = append(ordered, meta.ts)
+		out[meta.ts] = best
 	}
 	return ordered, out
 }
