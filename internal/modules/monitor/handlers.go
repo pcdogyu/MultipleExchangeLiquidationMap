@@ -3,10 +3,9 @@ package monitor
 import (
 	"net/http"
 
-	liqmap "multipleexchangeliquidationmap"
 	"multipleexchangeliquidationmap/internal/appctx"
 	"multipleexchangeliquidationmap/internal/platform/render"
-	sharedtypes "multipleexchangeliquidationmap/internal/shared/types"
+	"multipleexchangeliquidationmap/internal/shared/pages"
 )
 
 type handlers struct {
@@ -24,8 +23,5 @@ func (h *handlers) handlePage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, r.URL.Path+"?"+q.Encode(), http.StatusFound)
 		return
 	}
-	render.PreferredFileOrFallback(w, sharedtypes.HTMLPage{
-		TemplateName: "monitor",
-		FallbackHTML: liqmap.MonitorHTML(),
-	}, nil)
+	render.PreferredFileOrFallback(w, pages.Monitor(), nil)
 }

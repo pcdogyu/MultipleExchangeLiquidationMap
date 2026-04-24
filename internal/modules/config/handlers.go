@@ -7,7 +7,7 @@ import (
 	"multipleexchangeliquidationmap/internal/appctx"
 	"multipleexchangeliquidationmap/internal/platform/httpx"
 	"multipleexchangeliquidationmap/internal/platform/render"
-	sharedtypes "multipleexchangeliquidationmap/internal/shared/types"
+	"multipleexchangeliquidationmap/internal/shared/pages"
 )
 
 type handlers struct {
@@ -26,9 +26,5 @@ func (h *handlers) handlePage(w http.ResponseWriter, r *http.Request) {
 		ActiveMenu:       "config",
 		ShowAnalysisInfo: false,
 	}
-	render.PreferredFileOrFallback(w, sharedtypes.HTMLPage{
-		TemplateName: "model_config_page",
-		FallbackHTML: liqmap.ConfigHTML(),
-		Preferred:    []string{"config_page_fixed.html"},
-	}, data)
+	render.PreferredFileOrFallback(w, pages.Config(), data)
 }
