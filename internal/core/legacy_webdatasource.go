@@ -141,6 +141,7 @@ type capturedPayloadMeta struct {
 type webDataSourceSession struct {
 	taskCtx context.Context
 	cancel  context.CancelFunc
+	closeOnce sync.Once
 }
 
 type webDataSourceProgress struct {
@@ -1569,7 +1570,7 @@ func (m *WebDataSourceManager) newCaptureSession(ctx context.Context, chromePath
 
 func (s *webDataSourceSession) close() {
 	if s != nil && s.cancel != nil {
-		s.cancel()
+		s.closeOnce.Do(s.cancel)
 	}
 }
 

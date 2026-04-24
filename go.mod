@@ -2,6 +2,8 @@ module multipleexchangeliquidationmap
 
 go 1.21
 
+replace github.com/chromedp/chromedp => ./third_party/chromedp
+
 require (
 	github.com/chromedp/cdproto v0.0.0-20240801214329-3f85d328b335
 	github.com/chromedp/chromedp v0.10.0
