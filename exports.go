@@ -14,8 +14,6 @@ type ModelConfigPageData struct {
 	ShowAnalysisInfo bool
 }
 
-type modelConfigPageData = ModelConfigPageData
-
 const (
 	DefaultDBPath     = defaultDBPath
 	DefaultServerAddr = defaultServerAddr

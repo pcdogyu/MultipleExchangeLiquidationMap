@@ -487,23 +487,6 @@ func requestedWindowDays(r *http.Request) (int, bool, error) {
 	return 0, true, fmt.Errorf("invalid days")
 }
 
-func (a *App) renderModelConfigPage(w http.ResponseWriter, activeMenu string) {
-	data := modelConfigPageData{
-		ModelConfig:      a.loadModelConfig(),
-		ActiveMenu:       activeMenu,
-		ShowAnalysisInfo: activeMenu == "analysis",
-		PageTitle:        "模型配置",
-	}
-	if activeMenu == "analysis" {
-		data.PageTitle = "日内分析"
-	}
-	if body, err := os.ReadFile("config_page_fixed.html"); err == nil {
-		renderHTMLPage(w, "model_config_page", string(body), data)
-		return
-	}
-	renderHTMLPage(w, "model_config_page", configHTML, data)
-}
-
 func (a *App) handleWindow(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
@@ -8945,27 +8928,6 @@ window.addEventListener('load',async()=>{await loadFooter();await loadHistory();
 <div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
 </body>
 </html>`
-
-const configHTMLLegacy = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>模型配置</title>
-<style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{max-width:900px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}label{display:block;margin-top:12px;font-size:13px;color:#334155}input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}.small{font-size:12px;color:#64748b}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config" class="active">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><h2 style="margin-top:0">模型配置</h2><div class="small">淇敼妯″瀷鍙傛暟浠ヨ皟鏁存竻绠楃儹鍖轰笌寮哄钩娓呯畻璁＄畻銆?/div>
-<label>lookback_min<input id="lookback_min" type="number" min="60" max="1440" step="1"></label>
-<label>bucket_min<input id="bucket_min" type="number" min="1" max="30" step="1"></label>
-<label>price_step<input id="price_step" type="number" min="1" max="50" step="0.1"></label>
-<label>price_range<input id="price_range" type="number" min="100" max="1000" step="1"></label>
-<div class="row" style="margin-top:16px"><button class="btn" onclick="save()">保存</button><span id="msg" class="small"></span></div>
-</div></div>
-<script>
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
-function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
-async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
-function val(id){return Number((document.getElementById(id).value||'').trim())}
-async function load(){const r=await fetch('/api/model-config');const d=await r.json();document.getElementById('lookback_min').value=d.lookback_min;document.getElementById('bucket_min').value=d.bucket_min;document.getElementById('price_step').value=d.price_step;document.getElementById('price_range').value=d.price_range;}
-async function save(){const body={lookback_min:val('lookback_min'),bucket_min:val('bucket_min'),price_step:val('price_step'),price_range:val('price_range')};const r=await fetch('/api/model-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('msg').textContent=r.ok?'保存成功':'保存失败';if(r.ok)load();}
-(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();load();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
 const liquidationsHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>强平清算</title>
