@@ -7,6 +7,5 @@ import (
 )
 
 func Mount(mux *http.ServeMux, deps *appctx.Dependencies) {
-	h := newHandlers(deps)
-	mux.HandleFunc("/monitor", h.handlePage)
+	mux.HandleFunc("/monitor", handlePage)
 }

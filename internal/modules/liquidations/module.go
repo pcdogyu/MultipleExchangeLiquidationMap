@@ -7,7 +7,6 @@ import (
 )
 
 func Mount(mux *http.ServeMux, deps *appctx.Dependencies) {
-	h := newHandlers(deps)
-	mux.HandleFunc("/liquidations", h.handlePage)
+	mux.HandleFunc("/liquidations", handlePage)
 	mux.HandleFunc("/api/liquidations", deps.Core.HandleLiquidationsAPI)
 }

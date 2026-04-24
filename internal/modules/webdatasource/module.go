@@ -7,8 +7,7 @@ import (
 )
 
 func Mount(mux *http.ServeMux, deps *appctx.Dependencies) {
-	h := newHandlers(deps)
-	mux.HandleFunc("/webdatasource", h.handlePage)
+	mux.HandleFunc("/webdatasource", handlePage)
 	mux.HandleFunc("/api/webdatasource/status", deps.Core.HandleWebDataSourceStatus)
 	mux.HandleFunc("/api/webdatasource/init", deps.Core.HandleWebDataSourceInit)
 	mux.HandleFunc("/api/webdatasource/run", deps.Core.HandleWebDataSourceRun)
