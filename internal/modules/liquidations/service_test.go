@@ -32,7 +32,7 @@ func newTestService(t *testing.T) (*service, *sql.DB) {
 	}
 
 	core := liqmap.NewApp(db, false)
-	return newService(core), db
+	return newService(liqmap.NewLiquidationsModuleServices(core)), db
 }
 
 func TestHandleLiquidationsRejectsWrongMethod(t *testing.T) {

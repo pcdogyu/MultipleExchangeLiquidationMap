@@ -3,11 +3,12 @@ package webdatasource
 import (
 	"net/http"
 
+	liqmap "multipleexchangeliquidationmap"
 	"multipleexchangeliquidationmap/internal/appctx"
 )
 
 func Mount(mux *http.ServeMux, deps *appctx.Dependencies) {
-	svc := newService(deps.Core)
+	svc := newService(liqmap.NewWebDataSourceModuleServices(deps.Core))
 	mux.HandleFunc("/webdatasource", svc.handlePage)
 	mux.HandleFunc("/api/webdatasource/status", svc.handleStatus)
 	mux.HandleFunc("/api/webdatasource/init", svc.handleInit)
