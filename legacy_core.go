@@ -486,47 +486,6 @@ func requestedWindowDays(r *http.Request) (int, bool, error) {
 	return 0, true, fmt.Errorf("invalid days")
 }
 
-func (a *App) handleWindow(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		Days int `json:"days"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if days, ok := normalizeWindowDays(req.Days); ok {
-		a.setWindow(days)
-	} else {
-		http.Error(w, "invalid days", http.StatusBadRequest)
-	}
-}
-
-func (a *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	days := a.window()
-	if requestedDays, hasRequestedDays, err := requestedWindowDays(r); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	} else if hasRequestedDays {
-		days = requestedDays
-	}
-	dash, err := a.buildDashboard(days)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	_ = json.NewEncoder(w).Encode(dash)
-}
-
 func (a *App) handleAnalysisAPI(w http.ResponseWriter, r *http.Request) {
 	if a.debug {
 		log.Printf("%s %s", r.Method, r.URL.Path)
@@ -543,93 +502,56 @@ func (a *App) handleAnalysisAPI(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func (a *App) handleModelLiquidationMap(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func (a *App) modelLiquidationMap(windowDays, lookbackMin, bucketMin int, priceStep, priceRange float64) (map[string]any, error) {
 	cfg := a.loadModelConfig()
-	windowDays := a.window()
-	if requestedDays, hasRequestedDays, err := requestedWindowDays(r); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	} else if hasRequestedDays {
-		windowDays = requestedDays
+	if windowDays <= 0 {
+		windowDays = a.window()
 	}
 	defaultLookbackMin := lookbackMinForWindow(time.Now(), windowDays)
-	lookbackMin := defaultLookbackMin
-	lookbackOverridden := false
-	if raw := strings.TrimSpace(r.URL.Query().Get("lookback_min")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n >= 60 && n <= 43200 {
-			lookbackMin = n
-			lookbackOverridden = true
-		}
+	lookbackOverridden := lookbackMin > 0
+	if !lookbackOverridden {
+		lookbackMin = defaultLookbackMin
 	}
-	bucketMin := cfg.BucketMin
-	bucketOverridden := false
-	if raw := strings.TrimSpace(r.URL.Query().Get("bucket_min")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 30 {
-			bucketMin = n
-			bucketOverridden = true
-		}
+	bucketOverridden := bucketMin > 0
+	if !bucketOverridden {
+		bucketMin = cfg.BucketMin
 	}
-	priceStep := cfg.PriceStep
-	stepOverridden := false
-	if raw := strings.TrimSpace(r.URL.Query().Get("price_step")); raw != "" {
-		if v, err := strconv.ParseFloat(raw, 64); err == nil && v >= 1 && v <= 50 {
-			priceStep = v
-			stepOverridden = true
-		}
+	stepOverridden := priceStep > 0
+	if !stepOverridden {
+		priceStep = cfg.PriceStep
 	}
-	priceRange := cfg.PriceRange
-	rangeOverridden := false
-	if raw := strings.TrimSpace(r.URL.Query().Get("price_range")); raw != "" {
-		if v, err := strconv.ParseFloat(raw, 64); err == nil && v >= 100 && v <= 1000 {
-			priceRange = v
-			rangeOverridden = true
-		}
+	rangeOverridden := priceRange > 0
+	if !rangeOverridden {
+		priceRange = cfg.PriceRange
 	}
 	configRev := a.getSettingInt64("model_config_rev", 0) + modelAlgoRev*1_000_000
 	useCache := !lookbackOverridden && !bucketOverridden && !stepOverridden && !rangeOverridden && lookbackMin == defaultLookbackMin
 	if useCache {
 		if snap, ok := a.loadModelMapSnapshot(defaultSymbol, windowDays, configRev); ok {
-			_ = json.NewEncoder(w).Encode(snap)
-			return
+			return snap, nil
 		}
 	}
 	resp, err := a.buildModelLiquidationMap(defaultSymbol, lookbackMin, bucketMin, priceStep, priceRange, cfg)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 	if useCache {
 		a.saveModelMapSnapshot(defaultSymbol, windowDays, configRev, resp)
 	}
-	_ = json.NewEncoder(w).Encode(resp)
+	return resp, nil
 }
 
-func (a *App) handleCoinGlassMap(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func (a *App) fetchCoinGlassMap(symbol, window string) ([]byte, error) {
 	apiKey := strings.TrimSpace(os.Getenv("CG_API_KEY"))
 	if apiKey == "" {
-		http.Error(w, "CG_API_KEY is not set", http.StatusBadRequest)
-		return
+		return nil, BadRequestError{Message: "CG_API_KEY is not set"}
 	}
 
-	symbol := strings.TrimSpace(r.URL.Query().Get("symbol"))
+	symbol = strings.TrimSpace(symbol)
 	if symbol == "" {
 		symbol = "ETH"
 	}
-	window := strings.TrimSpace(r.URL.Query().Get("window"))
+	window = strings.TrimSpace(window)
 	if window == "" {
 		window = "1d"
 	}
@@ -637,25 +559,20 @@ func (a *App) handleCoinGlassMap(w http.ResponseWriter, r *http.Request) {
 	url := fmt.Sprintf("https://open-api-v4.coinglass.com/api/futures/liquidation/aggregated-map?symbol=%s&interval=%s", symbol, window)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 	req.Header.Set("CG-API-KEY", apiKey)
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+		return nil, err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write(body)
-		return
+		return nil, fmt.Errorf("coinglass returned %s", resp.Status)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(body)
+	return body, nil
 }
 
 func (a *App) getSetting(key string) string {

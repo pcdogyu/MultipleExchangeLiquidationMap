@@ -7,9 +7,10 @@ import (
 )
 
 func Mount(mux *http.ServeMux, deps *appctx.Dependencies) {
-	mux.HandleFunc("/", handlePage)
-	mux.HandleFunc("/api/dashboard", deps.Core.HandleDashboard)
-	mux.HandleFunc("/api/window", deps.Core.HandleWindow)
-	mux.HandleFunc("/api/model/liquidation-map", deps.Core.HandleModelLiquidationMap)
-	mux.HandleFunc("/api/coinglass/map", deps.Core.HandleCoinGlassMap)
+	svc := newService(deps)
+	mux.HandleFunc("/", svc.handlePage)
+	mux.HandleFunc("/api/dashboard", svc.handleDashboard)
+	mux.HandleFunc("/api/window", svc.handleWindow)
+	mux.HandleFunc("/api/model/liquidation-map", svc.handleModelLiquidationMap)
+	mux.HandleFunc("/api/coinglass/map", svc.handleCoinGlassMap)
 }

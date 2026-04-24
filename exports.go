@@ -62,20 +62,11 @@ func (a *App) StartBackgroundJobs(ctx context.Context) {
 	}
 }
 
-func (a *App) HandleDashboard(w http.ResponseWriter, r *http.Request) { a.handleDashboard(w, r) }
-
 func (a *App) HandleAnalysisAPI(w http.ResponseWriter, r *http.Request) { a.handleAnalysisAPI(w, r) }
-
-func (a *App) HandleModelLiquidationMap(w http.ResponseWriter, r *http.Request) {
-	a.handleModelLiquidationMap(w, r)
-}
 
 func (a *App) HandleLiquidationsAPI(w http.ResponseWriter, r *http.Request) {
 	a.handleLiquidationsAPI(w, r)
 }
-
-func (a *App) HandleCoinGlassMap(w http.ResponseWriter, r *http.Request) { a.handleCoinGlassMap(w, r) }
-func (a *App) HandleWindow(w http.ResponseWriter, r *http.Request)       { a.handleWindow(w, r) }
 
 func (a *App) HandleWebDataSourceStatus(w http.ResponseWriter, r *http.Request) {
 	a.handleWebDataSourceStatus(w, r)
@@ -107,6 +98,30 @@ func (a *App) LoadSettings() ChannelSettings {
 
 func (a *App) SaveSettings(req ChannelSettings) error {
 	return a.saveSettings(req)
+}
+
+func (a *App) WindowDays() int {
+	return a.window()
+}
+
+func (a *App) SetWindowDays(days int) error {
+	if normalized, ok := normalizeWindowDays(days); ok {
+		a.setWindow(normalized)
+		return nil
+	}
+	return BadRequestError{Message: "invalid days"}
+}
+
+func (a *App) Dashboard(days int) (Dashboard, error) {
+	return a.buildDashboard(days)
+}
+
+func (a *App) ModelLiquidationMap(windowDays, lookbackMin, bucketMin int, priceStep, priceRange float64) (map[string]any, error) {
+	return a.modelLiquidationMap(windowDays, lookbackMin, bucketMin, priceStep, priceRange)
+}
+
+func (a *App) FetchCoinGlassMap(symbol, window string) ([]byte, error) {
+	return a.fetchCoinGlassMap(symbol, window)
 }
 
 func (a *App) TriggerChannelTestSend() (string, bool) {
