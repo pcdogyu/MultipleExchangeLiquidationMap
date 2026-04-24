@@ -5852,32 +5852,10 @@ func (a *App) handleLiquidationsAPI(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *App) handleKlinesAPI(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	interval := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("interval")))
-	limit := 300
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n >= 50 && n <= 1000 {
-			limit = n
-		}
-	}
-	startTS := int64(0)
-	if raw := strings.TrimSpace(r.URL.Query().Get("start_ts")); raw != "" {
-		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
-			startTS = n
-		}
-	}
-	endTS := int64(0)
-	if raw := strings.TrimSpace(r.URL.Query().Get("end_ts")); raw != "" {
-		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
-			endTS = n
-		}
+func (a *App) fetchKlines(interval string, limit int, startTS, endTS int64) (map[string]any, error) {
+	interval = strings.ToLower(strings.TrimSpace(interval))
+	if limit <= 0 {
+		limit = 300
 	}
 	allowed := map[string]bool{"1m": true, "5m": true, "15m": true, "30m": true, "1h": true, "4h": true, "8h": true, "12h": true, "1d": true, "3d": true, "1w": true}
 	binInterval := interval
@@ -5894,8 +5872,7 @@ func (a *App) handleKlinesAPI(w http.ResponseWriter, r *http.Request) {
 		binInterval = "1w"
 	}
 	if !allowed[binInterval] {
-		http.Error(w, "unsupported interval", http.StatusBadRequest)
-		return
+		return nil, BadRequestError{Message: "unsupported interval"}
 	}
 	var rows [][]any
 	url := fmt.Sprintf("https://api.binance.com/api/v3/klines?symbol=ETHUSDT&interval=%s&limit=%d", binInterval, limit)
@@ -5909,17 +5886,16 @@ func (a *App) handleKlinesAPI(w http.ResponseWriter, r *http.Request) {
 	if err := a.fetchJSON(url, &rows); err != nil {
 		okxRows, okxSource, okxErr := a.fetchOKXKlines(binInterval, limit, startTS, endTS)
 		if okxErr != nil {
-			http.Error(w, "binance klines failed: "+err.Error()+"; okx fallback failed: "+okxErr.Error(), http.StatusBadGateway)
-			return
+			return nil, fmt.Errorf("binance klines failed: %w; okx fallback failed: %v", err, okxErr)
 		}
 		rows = okxRows
 		source = okxSource
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	return map[string]any{
 		"interval": interval,
 		"source":   source,
 		"rows":     rows,
-	})
+	}, nil
 }
 
 func (a *App) fetchOKXKlines(interval string, limit int, startTS, endTS int64) ([][]any, string, error) {
@@ -5983,28 +5959,6 @@ func okxKlineBar(interval string) string {
 	default:
 		return ""
 	}
-}
-
-func (a *App) handleOKXLatestCloseAPI(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	closePrice, ts, err := a.latestOKXClose()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"exchange": "okx",
-		"inst_id":  "ETH-USDT-SWAP",
-		"interval": "1m",
-		"close":    closePrice,
-		"ts":       ts,
-	})
 }
 
 func newOrderBookHub() *OrderBookHub {

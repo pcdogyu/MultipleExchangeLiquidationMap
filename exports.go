@@ -74,12 +74,6 @@ func (a *App) HandleLiquidationsAPI(w http.ResponseWriter, r *http.Request) {
 	a.handleLiquidationsAPI(w, r)
 }
 
-func (a *App) HandleKlinesAPI(w http.ResponseWriter, r *http.Request) { a.handleKlinesAPI(w, r) }
-
-func (a *App) HandleOKXLatestCloseAPI(w http.ResponseWriter, r *http.Request) {
-	a.handleOKXLatestCloseAPI(w, r)
-}
-
 func (a *App) HandleCoinGlassMap(w http.ResponseWriter, r *http.Request) { a.handleCoinGlassMap(w, r) }
 func (a *App) HandleWindow(w http.ResponseWriter, r *http.Request)       { a.handleWindow(w, r) }
 
@@ -153,6 +147,24 @@ func (a *App) ListPriceWallEvents(page, limit, minutes int, side, mode string) (
 
 func (a *App) RecordPriceWallEvent(req PriceWallEvent) error {
 	return a.recordPriceWallEvent(req)
+}
+
+func (a *App) FetchKlines(interval string, limit int, startTS, endTS int64) (map[string]any, error) {
+	return a.fetchKlines(interval, limit, startTS, endTS)
+}
+
+func (a *App) LatestOKXClose() (map[string]any, error) {
+	closePrice, ts, err := a.latestOKXClose()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"exchange": "okx",
+		"inst_id":  "ETH-USDT-SWAP",
+		"interval": "1m",
+		"close":    closePrice,
+		"ts":       ts,
+	}, nil
 }
 
 func AnalysisHTMLFallback() string { return analysisHTMLFallback }
