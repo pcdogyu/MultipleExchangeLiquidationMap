@@ -8,7 +8,7 @@ import (
 )
 
 func Mount(mux *http.ServeMux, deps *appctx.Dependencies) {
-	rt := platformruntime.New(deps.Core)
+	rt := platformruntime.New(deps.Debug)
 	mux.HandleFunc("/api/upgrade/pull", rt.HandleUpgradePull)
 	mux.HandleFunc("/api/upgrade/progress", rt.HandleUpgradeProgress)
 	mux.HandleFunc("/api/version", rt.HandleVersion)

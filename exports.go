@@ -93,13 +93,6 @@ func (a *App) HandleChannelSchedule(w http.ResponseWriter, r *http.Request) {
 	a.handleChannelSchedule(w, r)
 }
 
-func (a *App) HandleUpgradePull(w http.ResponseWriter, r *http.Request) { a.handleUpgradePull(w, r) }
-
-func (a *App) HandleUpgradeProgress(w http.ResponseWriter, r *http.Request) {
-	a.handleUpgradeProgress(w, r)
-}
-
-func (a *App) HandleVersion(w http.ResponseWriter, r *http.Request)     { a.handleVersion(w, r) }
 func (a *App) HandlePriceEvents(w http.ResponseWriter, r *http.Request) { a.handlePriceEvents(w, r) }
 
 func (a *App) HandleWebDataSourceStatus(w http.ResponseWriter, r *http.Request) {
