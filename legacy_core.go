@@ -486,22 +486,6 @@ func requestedWindowDays(r *http.Request) (int, bool, error) {
 	return 0, true, fmt.Errorf("invalid days")
 }
 
-func (a *App) handleAnalysisAPI(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	resp, err := a.buildAnalysisSnapshot()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	_ = json.NewEncoder(w).Encode(resp)
-}
-
 func (a *App) modelLiquidationMap(windowDays, lookbackMin, bucketMin int, priceStep, priceRange float64) (map[string]any, error) {
 	cfg := a.loadModelConfig()
 	if windowDays <= 0 {
