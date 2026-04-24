@@ -70,89 +70,12 @@ type App struct {
 	bundleSending bool
 }
 
-type HTTPStatusError struct {
-	URL        string
-	Status     string
-	StatusCode int
-	Body       string
-}
-
-func (e *HTTPStatusError) Error() string {
-	if e == nil {
-		return ""
-	}
-	if strings.TrimSpace(e.Body) == "" {
-		return fmt.Sprintf("http %s", e.Status)
-	}
-	return fmt.Sprintf("http %s: %s", e.Status, strings.TrimSpace(e.Body))
-}
-
-type ExchangePausedError struct {
-	Exchange string
-	Until    time.Time
-	Reason   string
-}
-
-func (e *ExchangePausedError) Error() string {
-	if e == nil {
-		return ""
-	}
-	untilText := e.Until.Local().Format("2006-01-02 15:04:05")
-	if reason := strings.TrimSpace(e.Reason); reason != "" {
-		return fmt.Sprintf("%s access paused until %s after repeated identical access errors: %s",
-			e.Exchange, untilText, reason)
-	}
-	return fmt.Sprintf("%s access paused until %s after repeated identical access errors",
-		e.Exchange, untilText)
-}
-
-type ExchangeAPIGuard struct {
-	ConsecutiveHTTPError int
-	LastHTTPErrorKey     string
-	LastHTTPErrorText    string
-	PausedUntil          time.Time
-	PauseReason          string
-}
-
-type Level struct {
-	Price float64 `json:"price"`
-	Qty   float64 `json:"qty"`
-}
-
-type OrderBook struct {
-	mu            sync.RWMutex
-	Exchange      string
-	Symbol        string
-	Bids          map[string]float64
-	Asks          map[string]float64
-	LastUpdateID  int64
-	LastSeq       int64
-	UpdatedTS     int64
-	LastSnapshot  int64
-	LastWSEventTS int64
-}
-
-type OrderBookHub struct {
-	books map[string]*OrderBook
-}
-
 var errResnapshot = errors.New("periodic resnapshot")
 
 const (
 	exchangeErrorTripThreshold = 3
 	exchangePauseDuration      = 180 * time.Minute
 )
-
-type Snapshot struct {
-	Exchange       string
-	Symbol         string
-	MarkPrice      float64
-	OIQty          float64
-	OIValueUSD     float64
-	FundingRate    float64
-	LongShortRatio float64
-	UpdatedTS      int64
-}
 
 func getenv(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
@@ -187,30 +110,6 @@ func (a *App) setWindow(days int) {
 	a.mu.Lock()
 	a.windowDays = days
 	a.mu.Unlock()
-}
-
-func normalizeWindowDays(days int) (int, bool) {
-	switch days {
-	case windowIntraday, 1, 7, 30:
-		return days, true
-	default:
-		return 0, false
-	}
-}
-
-func requestedWindowDays(r *http.Request) (int, bool, error) {
-	raw := strings.TrimSpace(r.URL.Query().Get("days"))
-	if raw == "" {
-		return 0, false, nil
-	}
-	days, err := strconv.Atoi(raw)
-	if err != nil {
-		return 0, true, fmt.Errorf("invalid days")
-	}
-	if normalized, ok := normalizeWindowDays(days); ok {
-		return normalized, true, nil
-	}
-	return 0, true, fmt.Errorf("invalid days")
 }
 
 func (a *App) modelLiquidationMap(windowDays, lookbackMin, bucketMin int, priceStep, priceRange float64) (map[string]any, error) {
