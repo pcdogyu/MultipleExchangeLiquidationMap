@@ -2,16 +2,16 @@ package bookmap
 
 import liqmap "multipleexchangeliquidationmap"
 
-type bookmapCore interface {
+type Services interface {
 	OrderBookView(exchange, mode string, limit int) (any, error)
 	ListPriceWallEvents(page, limit, minutes int, side, mode string) (any, error)
 	RecordPriceWallEvent(req liqmap.PriceWallEvent) error
 }
 
 type service struct {
-	core bookmapCore
+	core Services
 }
 
-func newService(core bookmapCore) *service {
+func newService(core Services) *service {
 	return &service{core: core}
 }

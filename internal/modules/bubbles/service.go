@@ -12,16 +12,16 @@ import (
 	"multipleexchangeliquidationmap/internal/shared/pages"
 )
 
-type bubblesCore interface {
+type Services interface {
 	FetchKlines(interval string, limit int, startTS, endTS int64) (map[string]any, error)
 	LatestOKXClose() (map[string]any, error)
 }
 
 type service struct {
-	core bubblesCore
+	core Services
 }
 
-func newService(core bubblesCore) *service {
+func newService(core Services) *service {
 	return &service{core: core}
 }
 

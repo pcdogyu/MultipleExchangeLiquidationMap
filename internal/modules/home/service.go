@@ -2,7 +2,7 @@ package home
 
 import liqmap "multipleexchangeliquidationmap"
 
-type homeCore interface {
+type Services interface {
 	WindowDays() int
 	SetWindowDays(days int) error
 	Dashboard(days int) (liqmap.Dashboard, error)
@@ -11,9 +11,9 @@ type homeCore interface {
 }
 
 type service struct {
-	core homeCore
+	core Services
 }
 
-func newService(core homeCore) *service {
+func newService(core Services) *service {
 	return &service{core: core}
 }

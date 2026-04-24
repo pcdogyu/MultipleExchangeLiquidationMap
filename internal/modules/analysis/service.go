@@ -2,14 +2,14 @@ package analysis
 
 import liqmap "multipleexchangeliquidationmap"
 
-type snapshotProvider interface {
+type Services interface {
 	AnalysisSnapshot() (liqmap.AnalysisSnapshot, error)
 }
 
 type service struct {
-	core snapshotProvider
+	core Services
 }
 
-func newService(core snapshotProvider) *service {
+func newService(core Services) *service {
 	return &service{core: core}
 }

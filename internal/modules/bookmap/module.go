@@ -1,13 +1,9 @@
 package bookmap
 
-import (
-	"net/http"
+import "net/http"
 
-	liqmap "multipleexchangeliquidationmap"
-)
-
-func Mount(mux *http.ServeMux, core *liqmap.App) {
-	svc := newService(liqmap.NewBookmapModuleServices(core))
+func Mount(mux *http.ServeMux, core Services) {
+	svc := newService(core)
 	mux.HandleFunc("/map", svc.handlePage)
 	mux.HandleFunc("/api/orderbook", svc.handleOrderBook)
 	mux.HandleFunc("/api/price-events", svc.handlePriceEvents)

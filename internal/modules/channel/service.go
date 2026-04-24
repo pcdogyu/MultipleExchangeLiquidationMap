@@ -12,7 +12,7 @@ import (
 	"multipleexchangeliquidationmap/internal/shared/pages"
 )
 
-type channelCore interface {
+type Services interface {
 	LoadSettings() liqmap.ChannelSettings
 	SaveSettings(req liqmap.ChannelSettings) error
 	TriggerChannelTestSend() (string, bool)
@@ -22,10 +22,10 @@ type channelCore interface {
 }
 
 type service struct {
-	core channelCore
+	core Services
 }
 
-func newService(core channelCore) *service {
+func newService(core Services) *service {
 	return &service{core: core}
 }
 

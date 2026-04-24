@@ -1,13 +1,9 @@
 package webdatasource
 
-import (
-	"net/http"
+import "net/http"
 
-	liqmap "multipleexchangeliquidationmap"
-)
-
-func Mount(mux *http.ServeMux, core *liqmap.App) {
-	svc := newService(liqmap.NewWebDataSourceModuleServices(core))
+func Mount(mux *http.ServeMux, core Services) {
+	svc := newService(core)
 	mux.HandleFunc("/webdatasource", svc.handlePage)
 	mux.HandleFunc("/api/webdatasource/status", svc.handleStatus)
 	mux.HandleFunc("/api/webdatasource/init", svc.handleInit)

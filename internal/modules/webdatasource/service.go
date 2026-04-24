@@ -2,7 +2,7 @@ package webdatasource
 
 import liqmap "multipleexchangeliquidationmap"
 
-type webDataSourceCore interface {
+type Services interface {
 	WebDataSourceStatus() liqmap.WebDataSourceStatus
 	TriggerWebDataSourceInit() (bool, error)
 	WebDataSourceInitLoginTimeoutSec() int
@@ -13,9 +13,9 @@ type webDataSourceCore interface {
 }
 
 type service struct {
-	core webDataSourceCore
+	core Services
 }
 
-func newService(core webDataSourceCore) *service {
+func newService(core Services) *service {
 	return &service{core: core}
 }

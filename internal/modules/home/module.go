@@ -1,13 +1,9 @@
 package home
 
-import (
-	"net/http"
+import "net/http"
 
-	liqmap "multipleexchangeliquidationmap"
-)
-
-func Mount(mux *http.ServeMux, core *liqmap.App) {
-	svc := newService(liqmap.NewHomeModuleServices(core))
+func Mount(mux *http.ServeMux, core Services) {
+	svc := newService(core)
 	mux.HandleFunc("/", svc.handlePage)
 	mux.HandleFunc("/api/dashboard", svc.handleDashboard)
 	mux.HandleFunc("/api/window", svc.handleWindow)

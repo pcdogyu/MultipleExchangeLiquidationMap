@@ -13,17 +13,17 @@ import (
 	"multipleexchangeliquidationmap/internal/shared/pages"
 )
 
-type configCore interface {
+type Services interface {
 	LoadModelConfig() liqmap.ModelConfig
 	SaveModelConfig(req liqmap.ModelConfig) error
 	RunModelFit(hours, minEvents int, exchange, mode string) (map[string]any, error)
 }
 
 type service struct {
-	core configCore
+	core Services
 }
 
-func newService(core configCore) *service {
+func newService(core Services) *service {
 	return &service{core: core}
 }
 

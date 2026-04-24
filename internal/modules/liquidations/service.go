@@ -2,14 +2,14 @@ package liquidations
 
 import liqmap "multipleexchangeliquidationmap"
 
-type liquidationsCore interface {
+type Services interface {
 	ListLiquidations(limit, offset int, startTS, endTS int64) []liqmap.EventRow
 }
 
 type service struct {
-	core liquidationsCore
+	core Services
 }
 
-func newService(core liquidationsCore) *service {
+func newService(core Services) *service {
 	return &service{core: core}
 }
