@@ -13,6 +13,7 @@ import (
 
 	liqmap "multipleexchangeliquidationmap"
 	"multipleexchangeliquidationmap/internal/app"
+	"multipleexchangeliquidationmap/internal/appctx"
 	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
 
 	_ "modernc.org/sqlite"
@@ -45,7 +46,7 @@ func main() {
 	}
 
 	core := liqmap.NewApp(db, debug)
-	deps := app.NewDependencies(core, debug)
+	deps := appctx.NewDependencies(core, debug)
 
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

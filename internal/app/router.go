@@ -3,6 +3,7 @@ package app
 import (
 	"net/http"
 
+	"multipleexchangeliquidationmap/internal/appctx"
 	"multipleexchangeliquidationmap/internal/modules/analysis"
 	"multipleexchangeliquidationmap/internal/modules/bookmap"
 	"multipleexchangeliquidationmap/internal/modules/bubbles"
@@ -15,7 +16,7 @@ import (
 	"multipleexchangeliquidationmap/internal/modules/webdatasource"
 )
 
-func NewRouter(deps *Dependencies) *http.ServeMux {
+func NewRouter(deps *appctx.Dependencies) *http.ServeMux {
 	mux := http.NewServeMux()
 	home.Mount(mux, deps)
 	config.Mount(mux, deps)
