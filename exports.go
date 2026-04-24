@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -60,30 +62,6 @@ func (a *App) StartBackgroundJobs(ctx context.Context) {
 	if a.webds != nil {
 		a.webds.start(ctx)
 	}
-}
-
-func (a *App) HandleWebDataSourceStatus(w http.ResponseWriter, r *http.Request) {
-	a.handleWebDataSourceStatus(w, r)
-}
-
-func (a *App) HandleWebDataSourceInit(w http.ResponseWriter, r *http.Request) {
-	a.handleWebDataSourceInit(w, r)
-}
-
-func (a *App) HandleWebDataSourceRun(w http.ResponseWriter, r *http.Request) {
-	a.handleWebDataSourceRun(w, r)
-}
-
-func (a *App) HandleWebDataSourceMap(w http.ResponseWriter, r *http.Request) {
-	a.handleWebDataSourceMap(w, r)
-}
-
-func (a *App) HandleWebDataSourceRuns(w http.ResponseWriter, r *http.Request) {
-	a.handleWebDataSourceRuns(w, r)
-}
-
-func (a *App) HandleWebDataSourceSettings(w http.ResponseWriter, r *http.Request) {
-	a.handleWebDataSourceSettings(w, r)
 }
 
 func (a *App) LoadSettings() ChannelSettings {
@@ -182,6 +160,47 @@ func (a *App) ListLiquidations(limit, offset int, startTS, endTS int64) []EventR
 
 func (a *App) AnalysisSnapshot() (AnalysisSnapshot, error) {
 	return a.buildAnalysisSnapshot()
+}
+
+func (a *App) WebDataSourceStatus() WebDataSourceStatus {
+	return a.webds.loadStatus()
+}
+
+func (a *App) TriggerWebDataSourceInit() (bool, error) {
+	return a.webds.triggerInit(context.Background())
+}
+
+func (a *App) TriggerWebDataSourceRun(windowDays *int) (bool, error) {
+	return a.webds.triggerRun(context.Background(), windowDays)
+}
+
+func (a *App) ListRecentWebDataSourceRuns(limit int) []WebDataSourceRunRow {
+	return a.webds.loadRecentRuns(limit)
+}
+
+func (a *App) UpdateWebDataSourceSettings(enabled *bool, intervalMin, timeoutSec int, chromePath, profileDir string) WebDataSourceStatus {
+	if enabled != nil {
+		_ = a.webds.setSetting("enabled", strconv.FormatBool(*enabled))
+	}
+	if intervalMin > 0 {
+		_ = a.webds.setSetting("interval_min", strconv.Itoa(intervalMin))
+	}
+	if timeoutSec > 0 {
+		_ = a.webds.setSetting("timeout_sec", strconv.Itoa(timeoutSec))
+	}
+	_ = a.webds.setSetting("chrome_path", strings.TrimSpace(chromePath))
+	if strings.TrimSpace(profileDir) != "" {
+		_ = a.webds.setSetting("profile_dir", strings.TrimSpace(profileDir))
+	}
+	return a.webds.loadStatus()
+}
+
+func (a *App) WebDataSourceMap(window string) WebDataSourceMapResponse {
+	return a.webds.loadLatestMap(window)
+}
+
+func (a *App) WebDataSourceInitLoginTimeoutSec() int {
+	return defaultWebDataSourceInitLoginSec
 }
 
 func AnalysisHTMLFallback() string { return analysisHTMLFallback }

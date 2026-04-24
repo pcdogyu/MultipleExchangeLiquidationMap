@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -3746,100 +3745,6 @@ func (m *WebDataSourceManager) loadLatestMap(window string) WebDataSourceMapResp
 		Points:        points,
 		Snapshot:      &snap,
 	}
-}
-
-func (a *App) handleWebDataSourceStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	_ = json.NewEncoder(w).Encode(a.webds.loadStatus())
-}
-
-func (a *App) handleWebDataSourceInit(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	started, err := a.webds.triggerInit(context.Background())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"started": started, "timeout_sec": defaultWebDataSourceInitLoginSec})
-}
-
-func (a *App) handleWebDataSourceRun(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		WindowDays int `json:"window_days"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	var days *int
-	if req.WindowDays == 1 || req.WindowDays == 7 || req.WindowDays == 30 {
-		days = &req.WindowDays
-	}
-	started, err := a.webds.triggerRun(context.Background(), days)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"started": started})
-}
-
-func (a *App) handleWebDataSourceRuns(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"rows": a.webds.loadRecentRuns(20)})
-}
-
-func (a *App) handleWebDataSourceSettings(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		Enabled     *bool  `json:"enabled"`
-		IntervalMin int    `json:"interval_min"`
-		TimeoutSec  int    `json:"timeout_sec"`
-		ChromePath  string `json:"chrome_path"`
-		ProfileDir  string `json:"profile_dir"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if req.Enabled != nil {
-		_ = a.webds.setSetting("enabled", strconv.FormatBool(*req.Enabled))
-	}
-	if req.IntervalMin > 0 {
-		_ = a.webds.setSetting("interval_min", strconv.Itoa(req.IntervalMin))
-	}
-	if req.TimeoutSec > 0 {
-		_ = a.webds.setSetting("timeout_sec", strconv.Itoa(req.TimeoutSec))
-	}
-	_ = a.webds.setSetting("chrome_path", strings.TrimSpace(req.ChromePath))
-	if strings.TrimSpace(req.ProfileDir) != "" {
-		_ = a.webds.setSetting("profile_dir", strings.TrimSpace(req.ProfileDir))
-	}
-	_ = json.NewEncoder(w).Encode(a.webds.loadStatus())
-}
-
-func (a *App) handleWebDataSourceMap(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	window := strings.TrimSpace(r.URL.Query().Get("window"))
-	if window == "" {
-		window = "30d"
-	}
-	_ = json.NewEncoder(w).Encode(a.webds.loadLatestMap(window))
 }
 
 const webDataSourceHookJS = `(() => {

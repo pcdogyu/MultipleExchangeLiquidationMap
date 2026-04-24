@@ -7,11 +7,12 @@ import (
 )
 
 func Mount(mux *http.ServeMux, deps *appctx.Dependencies) {
-	mux.HandleFunc("/webdatasource", handlePage)
-	mux.HandleFunc("/api/webdatasource/status", deps.Core.HandleWebDataSourceStatus)
-	mux.HandleFunc("/api/webdatasource/init", deps.Core.HandleWebDataSourceInit)
-	mux.HandleFunc("/api/webdatasource/run", deps.Core.HandleWebDataSourceRun)
-	mux.HandleFunc("/api/webdatasource/map", deps.Core.HandleWebDataSourceMap)
-	mux.HandleFunc("/api/webdatasource/runs", deps.Core.HandleWebDataSourceRuns)
-	mux.HandleFunc("/api/webdatasource/settings", deps.Core.HandleWebDataSourceSettings)
+	svc := newService(deps)
+	mux.HandleFunc("/webdatasource", svc.handlePage)
+	mux.HandleFunc("/api/webdatasource/status", svc.handleStatus)
+	mux.HandleFunc("/api/webdatasource/init", svc.handleInit)
+	mux.HandleFunc("/api/webdatasource/run", svc.handleRun)
+	mux.HandleFunc("/api/webdatasource/map", svc.handleMap)
+	mux.HandleFunc("/api/webdatasource/runs", svc.handleRuns)
+	mux.HandleFunc("/api/webdatasource/settings", svc.handleSettings)
 }
