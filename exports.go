@@ -78,20 +78,6 @@ func (a *App) HandleOKXLatestCloseAPI(w http.ResponseWriter, r *http.Request) {
 func (a *App) HandleOrderBook(w http.ResponseWriter, r *http.Request)    { a.handleOrderBook(w, r) }
 func (a *App) HandleCoinGlassMap(w http.ResponseWriter, r *http.Request) { a.handleCoinGlassMap(w, r) }
 func (a *App) HandleWindow(w http.ResponseWriter, r *http.Request)       { a.handleWindow(w, r) }
-func (a *App) HandleSettings(w http.ResponseWriter, r *http.Request)     { a.handleSettings(w, r) }
-func (a *App) HandleChannelTest(w http.ResponseWriter, r *http.Request)  { a.handleChannelTest(w, r) }
-
-func (a *App) HandleChannelHistory(w http.ResponseWriter, r *http.Request) {
-	a.handleChannelHistory(w, r)
-}
-
-func (a *App) HandleChannelTimeline(w http.ResponseWriter, r *http.Request) {
-	a.handleChannelTimeline(w, r)
-}
-
-func (a *App) HandleChannelSchedule(w http.ResponseWriter, r *http.Request) {
-	a.handleChannelSchedule(w, r)
-}
 
 func (a *App) HandlePriceEvents(w http.ResponseWriter, r *http.Request) { a.handlePriceEvents(w, r) }
 
@@ -121,6 +107,26 @@ func (a *App) HandleWebDataSourceSettings(w http.ResponseWriter, r *http.Request
 
 func (a *App) LoadSettings() ChannelSettings {
 	return a.loadSettings()
+}
+
+func (a *App) SaveSettings(req ChannelSettings) error {
+	return a.saveSettings(req)
+}
+
+func (a *App) TriggerChannelTestSend() (string, bool) {
+	return a.triggerTelegramTestSend()
+}
+
+func (a *App) ListTelegramSendHistory(limit int) ([]TelegramSendHistoryRow, error) {
+	return a.listTelegramSendHistory(limit)
+}
+
+func (a *App) ListChannelTimeline(hours int) ([]ChannelTimelineRow, error) {
+	return a.listChannelTimeline(hours)
+}
+
+func (a *App) ListChannelPlannedPushes(hours int) []ChannelPlannedPushRow {
+	return a.listChannelPlannedPushes(hours)
 }
 
 func (a *App) LoadModelConfig() ModelConfig {

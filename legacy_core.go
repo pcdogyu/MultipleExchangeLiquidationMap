@@ -1602,167 +1602,51 @@ func (a *App) handleModelFit(w http.ResponseWriter, r *http.Request) {
 }
 
 func isFinite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
-func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	switch r.Method {
-	case http.MethodGet:
-		_ = json.NewEncoder(w).Encode(a.loadSettings())
-	case http.MethodPost:
-		var req ChannelSettings
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-		token := normalizeQuotedInput(req.TelegramBotToken)
-		channel := normalizeQuotedInput(req.TelegramChannel)
-		if err := a.setSetting("telegram_bot_token", token); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := a.setSetting("telegram_channel", channel); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		workInterval := req.NotifyWorkIntervalMin
-		if workInterval <= 0 {
-			workInterval = req.NotifyIntervalMin
-		}
-		if workInterval <= 0 {
-			workInterval = 15
-		}
-		offInterval := req.NotifyOffIntervalMin
-		if offInterval <= 0 {
-			if req.NotifyIntervalMin > 0 {
-				offInterval = req.NotifyIntervalMin
-			} else {
-				offInterval = workInterval
-			}
-		}
-		workTimeExpr := strings.TrimSpace(req.WorkTimeExpr)
-		if err := validateWorkTimeExpr(workTimeExpr); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if err := a.setSetting("notify_interval_min", strconv.Itoa(workInterval)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := a.setSetting("notify_work_interval_min", strconv.Itoa(workInterval)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := a.setSetting("notify_off_interval_min", strconv.Itoa(offInterval)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := a.setSetting("notify_work_time_expr", workTimeExpr); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := a.setSetting("notify_enabled", strconv.FormatBool(req.NotifyEnabled)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
 
-func (a *App) handleChannelTest(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
+func (a *App) saveSettings(req ChannelSettings) error {
+	token := normalizeQuotedInput(req.TelegramBotToken)
+	channel := normalizeQuotedInput(req.TelegramChannel)
+	if err := a.setSetting("telegram_bot_token", token); err != nil {
+		return err
 	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+	if err := a.setSetting("telegram_channel", channel); err != nil {
+		return err
 	}
-	token := normalizeQuotedInput(a.getSetting("telegram_bot_token"))
-	channel := normalizeQuotedInput(a.getSetting("telegram_channel"))
-	if token == "" || channel == "" {
-		http.Error(w, "telegram bot token or channel is empty", http.StatusBadRequest)
-		return
+	workInterval := req.NotifyWorkIntervalMin
+	if workInterval <= 0 {
+		workInterval = req.NotifyIntervalMin
 	}
-	msg, _ := a.triggerTelegramTestSend()
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusAccepted)
-	_, _ = w.Write([]byte(msg))
-}
-
-func (a *App) handleChannelHistory(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
+	if workInterval <= 0 {
+		workInterval = 15
 	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	limit := 15
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 200 {
-			limit = n
+	offInterval := req.NotifyOffIntervalMin
+	if offInterval <= 0 {
+		if req.NotifyIntervalMin > 0 {
+			offInterval = req.NotifyIntervalMin
+		} else {
+			offInterval = workInterval
 		}
 	}
-	rows, err := a.listTelegramSendHistory(limit)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	workTimeExpr := strings.TrimSpace(req.WorkTimeExpr)
+	if err := validateWorkTimeExpr(workTimeExpr); err != nil {
+		return err
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(rows)
-}
-
-func (a *App) handleChannelTimeline(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
+	if err := a.setSetting("notify_interval_min", strconv.Itoa(workInterval)); err != nil {
+		return err
 	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+	if err := a.setSetting("notify_work_interval_min", strconv.Itoa(workInterval)); err != nil {
+		return err
 	}
-	hours := 24
-	limit := 24
-	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 168 {
-			hours = n
-		}
+	if err := a.setSetting("notify_off_interval_min", strconv.Itoa(offInterval)); err != nil {
+		return err
 	}
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 200 {
-			limit = n
-		}
+	if err := a.setSetting("notify_work_time_expr", workTimeExpr); err != nil {
+		return err
 	}
-	rows, err := a.listChannelTimeline(hours)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if err := a.setSetting("notify_enabled", strconv.FormatBool(req.NotifyEnabled)); err != nil {
+		return err
 	}
-	if len(rows) > limit {
-		rows = rows[:limit]
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(rows)
-}
-
-func (a *App) handleChannelSchedule(w http.ResponseWriter, r *http.Request) {
-	if a.debug {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	hours := 24
-	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 72 {
-			hours = n
-		}
-	}
-	rows := a.listChannelPlannedPushes(hours)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(rows)
+	return nil
 }
 
 func (a *App) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
