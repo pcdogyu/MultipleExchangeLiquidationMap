@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -593,14 +594,7 @@ func (m *WebDataSourceManager) runInitSession(ctx context.Context) error {
 	stopProgressLogger := m.startProgressLogger(ctx, progress)
 	defer stopProgressLogger()
 
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(chromePath),
-		chromedp.Flag("headless", false),
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
-		chromedp.UserDataDir(cfg.ProfileDir),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.WindowSize(1440, 900),
-	)
+	opts := webDataSourceChromeOptions(chromePath, cfg.ProfileDir, false)
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
 	taskCtx, cancelTask := chromedp.NewContext(allocCtx)
 	session := &webDataSourceSession{
@@ -747,6 +741,34 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func webDataSourceChromeOptions(chromePath, profileDir string, startMinimized bool) []chromedp.ExecAllocatorOption {
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath(chromePath),
+		chromedp.Flag("headless", false),
+		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+		chromedp.UserDataDir(profileDir),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.WindowSize(1440, 900),
+	)
+	if startMinimized {
+		opts = append(opts,
+			chromedp.Flag("start-minimized", true),
+			chromedp.Flag("window-position", "-32000,-32000"),
+		)
+	}
+	return opts
+}
+
+func minimizeBrowserWindow(ctx context.Context) error {
+	return chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		windowID, _, err := browser.GetWindowForTarget().Do(ctx)
+		if err != nil {
+			return err
+		}
+		return browser.SetWindowBounds(windowID, &browser.Bounds{WindowState: browser.WindowStateMinimized}).Do(ctx)
+	}))
 }
 
 func dispatchMouseClick(ctx context.Context, x, y float64) error {
@@ -1159,14 +1181,7 @@ func (m *WebDataSourceManager) newCaptureSession(ctx context.Context, chromePath
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
 		return nil, err
 	}
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(chromePath),
-		chromedp.Flag("headless", false),
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
-		chromedp.UserDataDir(profileDir),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.WindowSize(1440, 900),
-	)
+	opts := webDataSourceChromeOptions(chromePath, profileDir, true)
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
 	taskCtx, cancelTask := chromedp.NewContext(allocCtx)
 	session := &webDataSourceSession{
@@ -2426,6 +2441,12 @@ func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePa
 			cancelTask()
 			cancelAlloc()
 		},
+	}
+
+	if err := minimizeBrowserWindow(session.taskCtx); err != nil {
+		m.appendStepLog("Minimize Chrome Window", "info", fmt.Sprintf("best effort skipped: %v", err))
+	} else {
+		m.appendStepLog("Minimize Chrome Window", "success", "browser launched in minimized mode")
 	}
 
 	findTargetPanelJS := webDataSourceFindTargetPanelJS()
