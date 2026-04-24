@@ -805,8 +805,6 @@ func (a *App) runModelFit(hours, minEvents int, exFilter, mode string) (map[stri
 	}, nil
 }
 
-func isFinite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
-
 func (a *App) saveSettings(req ChannelSettings) error {
 	token := normalizeQuotedInput(req.TelegramBotToken)
 	channel := normalizeQuotedInput(req.TelegramChannel)
@@ -2416,77 +2414,6 @@ func maskSensitive(s string) string {
 	return s[:4] + strings.Repeat("*", len(s)-8) + s[len(s)-4:]
 }
 
-func windowCutoff(now time.Time, window int) int64 {
-	if window == windowIntraday {
-		return intradayCutoff(now).UnixMilli()
-	}
-	if window <= 0 {
-		window = 1
-	}
-	return now.Add(-time.Duration(window) * 24 * time.Hour).UnixMilli()
-}
-
-func intradayCutoff(now time.Time) time.Time {
-	loc := now.Location()
-	ny, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		// fallback: use fixed summer open time in local zone
-		t := now.In(loc)
-		return time.Date(t.Year(), t.Month(), t.Day(), 8, 0, 0, 0, loc)
-	}
-	t := now.In(loc)
-	today8 := time.Date(t.Year(), t.Month(), t.Day(), 8, 0, 0, 0, loc)
-	yesterday8 := today8.Add(-24 * time.Hour)
-
-	nowNY := now.In(ny)
-	// US market open anchor (per UI requirement): 9:00 ET -> 21:00 (DST) / 22:00 (standard) in China time.
-	todayOpenLocal := time.Date(nowNY.Year(), nowNY.Month(), nowNY.Day(), 9, 0, 0, 0, ny).In(loc)
-	yesterdayOpenLocal := time.Date(nowNY.Year(), nowNY.Month(), nowNY.Day()-1, 9, 0, 0, 0, ny).In(loc)
-
-	candidates := []time.Time{today8, yesterday8, todayOpenLocal, yesterdayOpenLocal}
-	best := time.Time{}
-	for _, c := range candidates {
-		if c.After(now) {
-			continue
-		}
-		if best.IsZero() || c.After(best) {
-			best = c
-		}
-	}
-	if best.IsZero() || best.After(now) {
-		return yesterday8
-	}
-	return best
-}
-
-func lookbackMinForWindow(now time.Time, windowDays int) int {
-	if windowDays == windowIntraday {
-		start := intradayCutoff(now)
-		if start.After(now) {
-			start = now.Add(-1 * time.Hour)
-		}
-		mins := int(math.Ceil(now.Sub(start).Minutes()))
-		if mins < 60 {
-			mins = 60
-		}
-		if mins > 43200 {
-			mins = 43200
-		}
-		return mins
-	}
-	if windowDays <= 0 {
-		windowDays = 1
-	}
-	mins := windowDays * 1440
-	if mins < 60 {
-		mins = 60
-	}
-	if mins > 43200 {
-		mins = 43200
-	}
-	return mins
-}
-
 func (a *App) startCollector(ctx context.Context) {
 	intervalSec := 30
 	if raw := strings.TrimSpace(os.Getenv("COLLECT_INTERVAL_SEC")); raw != "" {
@@ -2590,23 +2517,6 @@ func (a *App) upsertMarketState(s Snapshot) error {
 			updated_ts=excluded.updated_ts`,
 		s.Exchange, s.Symbol, s.MarkPrice, s.OIQty, s.OIValueUSD, s.FundingRate, nullableFloat(s.LongShortRatio), s.UpdatedTS)
 	return err
-}
-
-func nullableFloat(v float64) any {
-	if !(v > 0) {
-		return nil
-	}
-	return v
-}
-
-func clamp(v, lo, hi float64) float64 {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
 }
 
 func (a *App) insertBandAndLongest(symbol string, snapshots []Snapshot, nowTS int64) error {
@@ -2727,11 +2637,6 @@ func (a *App) insertBandAndLongest(symbol string, snapshots []Snapshot, nowTS in
 		return err
 	}
 	return tx.Commit()
-}
-
-func parseFloat(raw string) float64 {
-	v, _ := strconv.ParseFloat(strings.TrimSpace(raw), 64)
-	return v
 }
 
 func exchangeFromEndpoint(rawURL string) string {
