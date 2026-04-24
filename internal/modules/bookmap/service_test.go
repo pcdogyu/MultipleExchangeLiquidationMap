@@ -1,42 +1,50 @@
 package bookmap
 
 import (
-	"database/sql"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	liqmap "multipleexchangeliquidationmap"
-	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
-
-	_ "modernc.org/sqlite"
 )
 
-func newTestService(t *testing.T) *service {
-	t.Helper()
+type stubServices struct {
+	events []liqmap.PriceWallEvent
+}
 
-	dbPath := filepath.Join(t.TempDir(), "bookmap-service.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+func (s *stubServices) OrderBookView(exchange, mode string, limit int) (any, error) {
+	if mode == "bad" {
+		return nil, liqmap.BadRequestError{Message: "unknown mode"}
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	return map[string]any{"mode": mode, "limit": limit}, nil
+}
 
-	if err := dbplatform.Configure(db); err != nil {
-		t.Fatalf("configure db: %v", err)
+func (s *stubServices) ListPriceWallEvents(page, limit, minutes int, side, mode string) (any, error) {
+	rows := make([]map[string]any, 0, len(s.events))
+	for _, event := range s.events {
+		if side != "" && event.Side != side {
+			continue
+		}
+		rows = append(rows, map[string]any{
+			"side": event.Side,
+			"mode": event.Mode,
+		})
 	}
-	if err := dbplatform.Init(db); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
+	return map[string]any{"rows": rows}, nil
+}
 
-	core := liqmap.NewApp(db, false)
-	return newService(liqmap.NewBookmapModuleAdapter(core))
+func (s *stubServices) RecordPriceWallEvent(req liqmap.PriceWallEvent) error {
+	s.events = append(s.events, req)
+	return nil
+}
+
+func newTestService() *service {
+	return newService(&stubServices{})
 }
 
 func TestHandlePriceEventsPersistsAndListsRows(t *testing.T) {
-	svc := newTestService(t)
+	svc := newTestService()
 
 	postReq := httptest.NewRequest(http.MethodPost, "/api/price-events", strings.NewReader(`{
 		"side":"bid",
@@ -64,7 +72,7 @@ func TestHandlePriceEventsPersistsAndListsRows(t *testing.T) {
 }
 
 func TestHandleOrderBookRejectsUnknownMode(t *testing.T) {
-	svc := newTestService(t)
+	svc := newTestService()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/orderbook?mode=bad", nil)
 	rec := httptest.NewRecorder()

@@ -1,42 +1,45 @@
 package liquidations
 
 import (
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 
 	liqmap "multipleexchangeliquidationmap"
-	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
-
-	_ "modernc.org/sqlite"
 )
 
-func newTestService(t *testing.T) (*service, *sql.DB) {
-	t.Helper()
+type stubServices struct {
+	rows []liqmap.EventRow
+}
 
-	dbPath := filepath.Join(t.TempDir(), "liquidations-service.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+func (s stubServices) ListLiquidations(limit, offset int, startTS, endTS int64) []liqmap.EventRow {
+	if offset >= len(s.rows) {
+		return nil
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	end := offset + limit
+	if end > len(s.rows) {
+		end = len(s.rows)
+	}
+	out := make([]liqmap.EventRow, 0, end-offset)
+	for _, row := range s.rows[offset:end] {
+		if startTS > 0 && row.EventTS < startTS {
+			continue
+		}
+		if endTS > 0 && row.EventTS > endTS {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
 
-	if err := dbplatform.Configure(db); err != nil {
-		t.Fatalf("configure db: %v", err)
-	}
-	if err := dbplatform.Init(db); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-
-	core := liqmap.NewApp(db, false)
-	return newService(liqmap.NewLiquidationsModuleAdapter(core)), db
+func newTestService(rows []liqmap.EventRow) *service {
+	return newService(stubServices{rows: rows})
 }
 
 func TestHandleLiquidationsRejectsWrongMethod(t *testing.T) {
-	svc, _ := newTestService(t)
+	svc := newTestService(nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/liquidations", nil)
 	rec := httptest.NewRecorder()
@@ -48,23 +51,10 @@ func TestHandleLiquidationsRejectsWrongMethod(t *testing.T) {
 }
 
 func TestHandleLiquidationsAppliesMinQtyFilter(t *testing.T) {
-	svc, db := newTestService(t)
-
-	rows := []struct {
-		side string
-		qty  float64
-		ts   int64
-	}{
-		{side: "sell", qty: 0.5, ts: 1710000000000},
-		{side: "buy", qty: 1.5, ts: 1710000001000},
-	}
-	for _, row := range rows {
-		if _, err := db.Exec(`INSERT INTO liquidation_events(exchange, symbol, side, raw_side, qty, price, mark_price, notional_usd, event_ts, inserted_ts)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			"binance", liqmap.DefaultSymbol, row.side, row.side, row.qty, 3000.0, 3000.0, row.qty*3000.0, row.ts, row.ts); err != nil {
-			t.Fatalf("insert liquidation event: %v", err)
-		}
-	}
+	svc := newTestService([]liqmap.EventRow{
+		{Side: "sell", Qty: 0.5, EventTS: 1710000000000},
+		{Side: "buy", Qty: 1.5, EventTS: 1710000001000},
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/liquidations?limit=10&min_qty=1", nil)
 	rec := httptest.NewRecorder()

@@ -1,41 +1,25 @@
 package analysis
 
 import (
-	"database/sql"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 
 	liqmap "multipleexchangeliquidationmap"
-	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
-
-	_ "modernc.org/sqlite"
 )
 
-func newTestService(t *testing.T) *service {
-	t.Helper()
+type stubServices struct{}
 
-	dbPath := filepath.Join(t.TempDir(), "analysis-service.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+func (stubServices) AnalysisSnapshot() (liqmap.AnalysisSnapshot, error) {
+	return liqmap.AnalysisSnapshot{}, nil
+}
 
-	if err := dbplatform.Configure(db); err != nil {
-		t.Fatalf("configure db: %v", err)
-	}
-	if err := dbplatform.Init(db); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-
-	core := liqmap.NewApp(db, false)
-	return newService(liqmap.NewAnalysisModuleAdapter(core))
+func newTestService() *service {
+	return newService(stubServices{})
 }
 
 func TestHandleAnalysisRejectsWrongMethod(t *testing.T) {
-	svc := newTestService(t)
+	svc := newTestService()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/analysis", nil)
 	rec := httptest.NewRecorder()
