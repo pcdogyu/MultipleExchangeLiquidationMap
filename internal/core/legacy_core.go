@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,7 +34,7 @@ import (
 )
 
 const (
-	defaultDBPath       = "liqmap.db"
+	defaultDBPath       = "data/liqmap.db"
 	defaultSymbol       = "ETHUSDT"
 	defaultServerAddr   = ":8888"
 	defaultWindowDays   = 1
@@ -88,7 +89,12 @@ func setupLogging(debug bool) (func(), error) {
 	if !debug {
 		return func() {}, nil
 	}
-	logPath := getenv("DEBUG_LOG", "server.log")
+	logPath := getenv("DEBUG_LOG", "log/server.log")
+	if dir := filepath.Dir(logPath); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("create debug log dir %s: %w", dir, err)
+		}
+	}
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open debug log %s: %w", logPath, err)

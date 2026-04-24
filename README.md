@@ -86,7 +86,7 @@ liqmap_single_okx_fixed.py
 Optional generated database:
 
 ```bash
-liqmap.db
+data/liqmap.db
 ```
 
 ---
@@ -101,14 +101,14 @@ go run .
 Run with debug logging:
 
 ```bash
-DEBUG=1 DEBUG_LOG=server.log go run .
+DEBUG=1 DEBUG_LOG=log/server.log go run .
 ```
 
 Run with custom environment variables:
 
 ```bash
 SYMBOL=ETHUSDT \
-DB_PATH=liqmap.db \
+DB_PATH=data/liqmap.db \
 REPORT_INTERVAL=5 \
 RETENTION_MINUTES=240 \
 OKX_REST_BASE=https://www.okx.com \
@@ -121,9 +121,9 @@ Windows PowerShell example:
 
 ```powershell
 $env:SYMBOL="ETHUSDT"
-$env:DB_PATH="liqmap.db"
+$env:DB_PATH="data/liqmap.db"
 $env:DEBUG="1"
-$env:DEBUG_LOG="server.log"
+$env:DEBUG_LOG="log/server.log"
 $env:REPORT_INTERVAL="5"
 $env:RETENTION_MINUTES="240"
 $env:OKX_REST_BASE="https://www.okx.com"
@@ -138,9 +138,9 @@ go run .
 | Variable | Default | Description |
 |---|---|---|
 | `SYMBOL` | `ETHUSDT` | Symbol displayed in the dashboard |
-| `DB_PATH` | `liqmap.db` | SQLite database path |
+| `DB_PATH` | `data/liqmap.db` | SQLite database path |
 | `DEBUG` | unset | Set to `1` or `true` to enable debug logging |
-| `DEBUG_LOG` | `server.log` | Debug log output file when `DEBUG` is enabled |
+| `DEBUG_LOG` | `log/server.log` | Debug log output file when `DEBUG` is enabled |
 | `REPORT_INTERVAL` | `5` | Dashboard refresh interval in seconds |
 | `RETENTION_MINUTES` | `240` | Retention window for `liquidation_events` cleanup |
 | `OKX_REST_BASE` | `https://www.okx.com` | OKX REST base URL |
@@ -289,7 +289,7 @@ liqmap_single_okx_fixed.py
 运行后可能生成数据库文件：
 
 ```bash
-liqmap.db
+data/liqmap.db
 ```
 
 ---
@@ -305,7 +305,7 @@ go run .
 
 ```bash
 SYMBOL=ETHUSDT \
-DB_PATH=liqmap.db \
+DB_PATH=data/liqmap.db \
 REPORT_INTERVAL=5 \
 RETENTION_MINUTES=240 \
 OKX_REST_BASE=https://www.okx.com \
@@ -318,7 +318,7 @@ Windows PowerShell 示例：
 
 ```powershell
 $env:SYMBOL="ETHUSDT"
-$env:DB_PATH="liqmap.db"
+$env:DB_PATH="data/liqmap.db"
 $env:REPORT_INTERVAL="5"
 $env:RETENTION_MINUTES="240"
 $env:OKX_REST_BASE="https://www.okx.com"
@@ -333,7 +333,7 @@ python .\liqmap_single_okx_fixed.py
 | 变量名 | 默认值 | 说明 |
 |---|---|---|
 | `SYMBOL` | `ETHUSDT` | 终端展示的交易对 |
-| `DB_PATH` | `liqmap.db` | SQLite 数据库路径 |
+| `DB_PATH` | `data/liqmap.db` | SQLite 数据库路径 |
 | `REPORT_INTERVAL` | `5` | 面板刷新间隔，单位秒 |
 | `RETENTION_MINUTES` | `240` | `liquidation_events` 清理保留时长，单位分钟 |
 | `OKX_REST_BASE` | `https://www.okx.com` | OKX REST 地址 |

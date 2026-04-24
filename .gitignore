@@ -1,7 +1,11 @@
 liqmap.db
 liqmap.db-shm
 liqmap.db-wal
+data/*.db
+data/*.db-shm
+data/*.db-wal
 multipleexchangeliquidationmap.exe
+server.exe
 .gocache/
 debug*
 server.log
