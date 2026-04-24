@@ -85,6 +85,7 @@ func Init(db *sql.DB) error {
 			down_price REAL NOT NULL,
 			down_notional_usd REAL NOT NULL
 		);`,
+		`CREATE INDEX IF NOT EXISTS idx_band_reports_symbol_ts_band ON band_reports(symbol, report_ts, band);`,
 		`CREATE TABLE IF NOT EXISTS longest_bar_reports (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			report_ts INTEGER NOT NULL,

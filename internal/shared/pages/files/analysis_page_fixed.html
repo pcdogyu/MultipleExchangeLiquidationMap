@@ -138,9 +138,37 @@ function fmtTime(ts){
 function esc(s){
   return String(s==null?'':s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
 }
+function showLoadError(message){
+  const text=message||'分析接口加载失败';
+  document.getElementById('title').textContent='加载失败';
+  document.getElementById('summary').textContent=text;
+  document.getElementById('broadcastHeadline').textContent='加载失败';
+  document.getElementById('broadcastText').textContent=text;
+  document.getElementById('broadcastBullets').innerHTML='';
+  document.getElementById('scores').innerHTML='<div class="panel card small">'+esc(text)+'</div>';
+  document.getElementById('zones').innerHTML='<div class="panel card small">'+esc(text)+'</div>';
+  document.getElementById('changes').innerHTML='<div class="panel card small">'+esc(text)+'</div>';
+  document.getElementById('exchangeCards').innerHTML='<div class="panel card small">'+esc(text)+'</div>';
+  document.getElementById('backtestSummary').textContent=text;
+  document.getElementById('backtestMeta').textContent='请检查 /api/analysis 响应';
+  document.getElementById('rates').innerHTML='';
+  document.getElementById('footer').textContent=text;
+}
 async function load(){
-  const r=await fetch('/api/analysis');
-  const d=await r.json();
+  const r=await fetch('/api/analysis').catch(()=>null);
+  if(!r){
+    showLoadError('无法连接 /api/analysis');
+    return;
+  }
+  if(!r.ok){
+    showLoadError((await r.text().catch(()=>''))||('HTTP '+r.status));
+    return;
+  }
+  const d=await r.json().catch(()=>null);
+  if(!d){
+    showLoadError('分析接口返回了无法解析的 JSON');
+    return;
+  }
   document.getElementById('title').textContent=d.overview?.title||'-';
   document.getElementById('summary').textContent=(d.overview?.bias||'')+'。'+(d.overview?.summary||'');
   document.getElementById('currentPrice').textContent=fmtPrice(d.current_price);

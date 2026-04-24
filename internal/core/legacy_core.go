@@ -57,6 +57,9 @@ type App struct {
 	ob            *OrderBookHub
 	webds         *WebDataSourceManager
 	mu            sync.RWMutex
+	analysisMu    sync.Mutex
+	analysisCache AnalysisSnapshot
+	analysisAt    time.Time
 	errLogMu      sync.Mutex
 	errLogNext    map[string]time.Time
 	apiGuardMu    sync.Mutex
