@@ -20,9 +20,15 @@ func newHandlers(deps *appctx.Dependencies) *handlers {
 
 func (h *handlers) handlePage(w http.ResponseWriter, r *http.Request) {
 	httpx.NoStore(w)
+	data := &liqmap.ModelConfigPageData{
+		ModelConfig:      h.deps.Core.LoadModelConfig(),
+		PageTitle:        "\u6a21\u578b\u914d\u7f6e",
+		ActiveMenu:       "config",
+		ShowAnalysisInfo: false,
+	}
 	render.PreferredFileOrFallback(w, sharedtypes.HTMLPage{
 		TemplateName: "model_config_page",
 		FallbackHTML: liqmap.ConfigHTML(),
 		Preferred:    []string{"config_page_fixed.html"},
-	}, h.deps.Core.BuildModelConfigPageData("config"))
+	}, data)
 }

@@ -487,13 +487,6 @@ func requestedWindowDays(r *http.Request) (int, bool, error) {
 	return 0, true, fmt.Errorf("invalid days")
 }
 
-type modelConfigPageData struct {
-	ModelConfig
-	PageTitle        string
-	ActiveMenu       string
-	ShowAnalysisInfo bool
-}
-
 func (a *App) renderModelConfigPage(w http.ResponseWriter, activeMenu string) {
 	data := modelConfigPageData{
 		ModelConfig:      a.loadModelConfig(),
