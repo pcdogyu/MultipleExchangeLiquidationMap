@@ -13,25 +13,55 @@ import (
 )
 
 type Set struct {
-	Home          home.Services
+	Core   CoreSet
+	Market MarketSet
+	Admin  AdminSet
+}
+
+type CoreSet struct {
+	Home     home.Services
+	Analysis analysis.Services
+}
+
+type MarketSet struct {
+	Bookmap      bookmap.Services
+	Liquidations liquidations.Services
+	Bubbles      bubbles.Services
+}
+
+type AdminSet struct {
 	Config        config.Services
-	Bookmap       bookmap.Services
-	Liquidations  liquidations.Services
-	Bubbles       bubbles.Services
 	WebDataSource webdatasource.Services
 	Channel       channel.Services
-	Analysis      analysis.Services
+}
+
+func NewCore(app *liqmap.App) CoreSet {
+	return CoreSet{
+		Home:     NewHome(app),
+		Analysis: NewAnalysis(app),
+	}
+}
+
+func NewMarket(app *liqmap.App) MarketSet {
+	return MarketSet{
+		Bookmap:      NewBookmap(app),
+		Liquidations: NewLiquidations(app),
+		Bubbles:      NewBubbles(app),
+	}
+}
+
+func NewAdmin(app *liqmap.App) AdminSet {
+	return AdminSet{
+		Config:        NewConfig(app),
+		WebDataSource: NewWebDataSource(app),
+		Channel:       NewChannel(app),
+	}
 }
 
 func NewSet(app *liqmap.App) Set {
 	return Set{
-		Home:          NewHome(app),
-		Config:        NewConfig(app),
-		Bookmap:       NewBookmap(app),
-		Liquidations:  NewLiquidations(app),
-		Bubbles:       NewBubbles(app),
-		WebDataSource: NewWebDataSource(app),
-		Channel:       NewChannel(app),
-		Analysis:      NewAnalysis(app),
+		Core:   NewCore(app),
+		Market: NewMarket(app),
+		Admin:  NewAdmin(app),
 	}
 }
