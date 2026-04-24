@@ -48,7 +48,7 @@ func (s *service) handleWindow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if err := s.deps.Core.SetWindowDays(req.Days); err != nil {
+	if err := s.core.SetWindowDays(req.Days); err != nil {
 		var badRequest liqmap.BadRequestError
 		if errors.As(err, &badRequest) {
 			http.Error(w, badRequest.Error(), http.StatusBadRequest)
@@ -64,7 +64,7 @@ func (s *service) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	days := s.deps.Core.WindowDays()
+	days := s.core.WindowDays()
 	if requestedDays, hasRequestedDays, err := parseRequestedDays(r); err != nil {
 		var badRequest liqmap.BadRequestError
 		if errors.As(err, &badRequest) {
@@ -76,7 +76,7 @@ func (s *service) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	} else if hasRequestedDays {
 		days = requestedDays
 	}
-	dash, err := s.deps.Core.Dashboard(days)
+	dash, err := s.core.Dashboard(days)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -89,7 +89,7 @@ func (s *service) handleModelLiquidationMap(w http.ResponseWriter, r *http.Reque
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	windowDays := s.deps.Core.WindowDays()
+	windowDays := s.core.WindowDays()
 	if requestedDays, hasRequestedDays, err := parseRequestedDays(r); err != nil {
 		var badRequest liqmap.BadRequestError
 		if errors.As(err, &badRequest) {
@@ -125,7 +125,7 @@ func (s *service) handleModelLiquidationMap(w http.ResponseWriter, r *http.Reque
 			priceRange = v
 		}
 	}
-	resp, err := s.deps.Core.ModelLiquidationMap(windowDays, lookbackMin, bucketMin, priceStep, priceRange)
+	resp, err := s.core.ModelLiquidationMap(windowDays, lookbackMin, bucketMin, priceStep, priceRange)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -138,7 +138,7 @@ func (s *service) handleCoinGlassMap(w http.ResponseWriter, r *http.Request) {
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	body, err := s.deps.Core.FetchCoinGlassMap(r.URL.Query().Get("symbol"), r.URL.Query().Get("window"))
+	body, err := s.core.FetchCoinGlassMap(r.URL.Query().Get("symbol"), r.URL.Query().Get("window"))
 	if err != nil {
 		var badRequest liqmap.BadRequestError
 		if errors.As(err, &badRequest) {

@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	liqmap "multipleexchangeliquidationmap"
-	"multipleexchangeliquidationmap/internal/appctx"
 	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
 
 	_ "modernc.org/sqlite"
@@ -34,10 +33,7 @@ func newTestService(t *testing.T) *service {
 	}
 
 	core := liqmap.NewApp(db, false)
-	return newService(&appctx.Dependencies{
-		Core:  core,
-		Debug: false,
-	})
+	return newService(core)
 }
 
 func TestHandleWindowRejectsInvalidDays(t *testing.T) {

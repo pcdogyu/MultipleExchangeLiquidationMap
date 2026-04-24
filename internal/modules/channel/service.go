@@ -7,35 +7,43 @@ import (
 	"strings"
 
 	liqmap "multipleexchangeliquidationmap"
-	"multipleexchangeliquidationmap/internal/appctx"
 	"multipleexchangeliquidationmap/internal/platform/httpx"
 	"multipleexchangeliquidationmap/internal/platform/pageview"
 	"multipleexchangeliquidationmap/internal/shared/pages"
 )
 
-type service struct {
-	deps *appctx.Dependencies
+type channelCore interface {
+	LoadSettings() liqmap.ChannelSettings
+	SaveSettings(req liqmap.ChannelSettings) error
+	TriggerChannelTestSend() (string, bool)
+	ListTelegramSendHistory(limit int) ([]liqmap.TelegramSendHistoryRow, error)
+	ListChannelTimeline(hours int) ([]liqmap.ChannelTimelineRow, error)
+	ListChannelPlannedPushes(hours int) []liqmap.ChannelPlannedPushRow
 }
 
-func newService(deps *appctx.Dependencies) *service {
-	return &service{deps: deps}
+type service struct {
+	core channelCore
+}
+
+func newService(core channelCore) *service {
+	return &service{core: core}
 }
 
 func (s *service) handlePage(w http.ResponseWriter, r *http.Request) {
-	pageview.Serve(w, r, pages.Channel(), s.deps.Core.LoadSettings(), pageview.Options{})
+	pageview.Serve(w, r, pages.Channel(), s.core.LoadSettings(), pageview.Options{})
 }
 
 func (s *service) handleSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		httpx.WriteJSON(w, http.StatusOK, s.deps.Core.LoadSettings())
+		httpx.WriteJSON(w, http.StatusOK, s.core.LoadSettings())
 	case http.MethodPost:
 		var req liqmap.ChannelSettings
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		if err := s.deps.Core.SaveSettings(req); err != nil {
+		if err := s.core.SaveSettings(req); err != nil {
 			if strings.Contains(err.Error(), "work time range must") {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
@@ -54,12 +62,12 @@ func (s *service) handleChannelTest(w http.ResponseWriter, r *http.Request) {
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	settings := s.deps.Core.LoadSettings()
+	settings := s.core.LoadSettings()
 	if settings.TelegramBotToken == "" || settings.TelegramChannel == "" {
 		http.Error(w, "telegram bot token or channel is empty", http.StatusBadRequest)
 		return
 	}
-	msg, _ := s.deps.Core.TriggerChannelTestSend()
+	msg, _ := s.core.TriggerChannelTestSend()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
 	_, _ = w.Write([]byte(msg))
@@ -76,7 +84,7 @@ func (s *service) handleChannelHistory(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	rows, err := s.deps.Core.ListTelegramSendHistory(limit)
+	rows, err := s.core.ListTelegramSendHistory(limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -101,7 +109,7 @@ func (s *service) handleChannelTimeline(w http.ResponseWriter, r *http.Request) 
 			limit = n
 		}
 	}
-	rows, err := s.deps.Core.ListChannelTimeline(hours)
+	rows, err := s.core.ListChannelTimeline(hours)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -123,5 +131,5 @@ func (s *service) handleChannelSchedule(w http.ResponseWriter, r *http.Request) 
 			hours = n
 		}
 	}
-	httpx.WriteJSON(w, http.StatusOK, s.deps.Core.ListChannelPlannedPushes(hours))
+	httpx.WriteJSON(w, http.StatusOK, s.core.ListChannelPlannedPushes(hours))
 }
