@@ -166,6 +166,86 @@ type Dashboard struct {
 	Analytics    HeatZoneAnalytics `json:"analytics"`
 }
 
+type AnalysisOverview struct {
+	Title      string  `json:"title"`
+	Bias       string  `json:"bias"`
+	Confidence float64 `json:"confidence"`
+	Summary    string  `json:"summary"`
+}
+
+type AnalysisRiskScore struct {
+	Label string  `json:"label"`
+	Score float64 `json:"score"`
+	Tone  string  `json:"tone"`
+}
+
+type AnalysisKeyZone struct {
+	Name        string  `json:"name"`
+	Side        string  `json:"side"`
+	Price       float64 `json:"price"`
+	Distance    float64 `json:"distance"`
+	NotionalUSD float64 `json:"notional_usd"`
+	Note        string  `json:"note"`
+}
+
+type AnalysisDelta struct {
+	Label string  `json:"label"`
+	Value float64 `json:"value"`
+	Unit  string  `json:"unit"`
+	Tone  string  `json:"tone"`
+	Note  string  `json:"note"`
+}
+
+type AnalysisBacktest struct {
+	SampleCount   int     `json:"sample_count"`
+	HorizonMin    int     `json:"horizon_min"`
+	Hit20Rate     float64 `json:"hit_20_rate"`
+	Hit50Rate     float64 `json:"hit_50_rate"`
+	Hit100Rate    float64 `json:"hit_100_rate"`
+	AvgMaxMove    float64 `json:"avg_max_move"`
+	FitEventCount int     `json:"fit_event_count"`
+	FitWeightedSE float64 `json:"fit_weighted_se"`
+	Source        string  `json:"source"`
+	Summary       string  `json:"summary"`
+}
+
+type AnalysisBroadcast struct {
+	Headline string   `json:"headline"`
+	Text     string   `json:"text"`
+	Bullets  []string `json:"bullets"`
+}
+
+type ExchangeAnalysisCard struct {
+	Exchange        string  `json:"exchange"`
+	MarkPrice       float64 `json:"mark_price"`
+	OIValueUSD      float64 `json:"oi_value_usd"`
+	FundingRate     float64 `json:"funding_rate"`
+	LongShortRatio  float64 `json:"long_short_ratio"`
+	UpperRiskUSD    float64 `json:"upper_risk_usd"`
+	LowerRiskUSD    float64 `json:"lower_risk_usd"`
+	ShortRiskScore  float64 `json:"short_risk_score"`
+	LongRiskScore   float64 `json:"long_risk_score"`
+	Bias            string  `json:"bias"`
+	RecentLiquidUSD float64 `json:"recent_liquid_usd"`
+	FocusPrice      float64 `json:"focus_price"`
+	FocusSide       string  `json:"focus_side"`
+	Summary         string  `json:"summary"`
+}
+
+type AnalysisSnapshot struct {
+	Symbol        string                 `json:"symbol"`
+	GeneratedAt   int64                  `json:"generated_at"`
+	CurrentPrice  float64                `json:"current_price"`
+	Overview      AnalysisOverview       `json:"overview"`
+	Broadcast     AnalysisBroadcast      `json:"broadcast"`
+	RiskScores    []AnalysisRiskScore    `json:"risk_scores"`
+	KeyZones      []AnalysisKeyZone      `json:"key_zones"`
+	Changes       []AnalysisDelta        `json:"changes"`
+	ExchangeCards []ExchangeAnalysisCard `json:"exchange_cards"`
+	Backtest      AnalysisBacktest       `json:"backtest"`
+	Dashboard     Dashboard              `json:"dashboard"`
+}
+
 type HeatReportBand struct {
 	Band            int
 	UpPrice         float64
@@ -212,20 +292,22 @@ type PriceWallEvent struct {
 }
 
 type App struct {
-	db          *sql.DB
-	httpClient  *http.Client
-	ob          *OrderBookHub
-	webds       *WebDataSourceManager
-	mu          sync.RWMutex
-	errLogMu    sync.Mutex
-	errLogNext  map[string]time.Time
-	apiGuardMu  sync.Mutex
-	apiGuards   map[string]*ExchangeAPIGuard
-	windowDays  int
-	debug       bool
-	lastNotify  int64
-	testSendMu  sync.Mutex
-	testSending bool
+	db            *sql.DB
+	httpClient    *http.Client
+	ob            *OrderBookHub
+	webds         *WebDataSourceManager
+	mu            sync.RWMutex
+	errLogMu      sync.Mutex
+	errLogNext    map[string]time.Time
+	apiGuardMu    sync.Mutex
+	apiGuards     map[string]*ExchangeAPIGuard
+	windowDays    int
+	debug         bool
+	lastNotify    int64
+	testSendMu    sync.Mutex
+	testSending   bool
+	bundleSendMu  sync.Mutex
+	bundleSending bool
 }
 
 type HTTPStatusError struct {
@@ -668,6 +750,7 @@ func main() {
 	mux.HandleFunc("/webdatasource", app.handleWebDataSource)
 	mux.HandleFunc("/channel", app.handleChannel)
 	mux.HandleFunc("/api/dashboard", app.handleDashboard)
+	mux.HandleFunc("/api/analysis", app.handleAnalysisAPI)
 	mux.HandleFunc("/api/model/liquidation-map", app.handleModelLiquidationMap)
 	mux.HandleFunc("/api/model-config", app.handleModelConfig)
 	mux.HandleFunc("/api/model-fit", app.handleModelFit)
@@ -802,7 +885,12 @@ func (a *App) handleAnalysis(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
-	a.renderModelConfigPage(w, "analysis")
+	if body, err := os.ReadFile("analysis_page_fixed.html"); err == nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(body)
+		return
+	}
+	renderHTMLPage(w, "analysis", analysisHTMLFallback, nil)
 }
 
 func (a *App) handleLiquidations(w http.ResponseWriter, r *http.Request) {
@@ -904,6 +992,22 @@ func (a *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(dash)
+}
+
+func (a *App) handleAnalysisAPI(w http.ResponseWriter, r *http.Request) {
+	if a.debug {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	resp, err := a.buildAnalysisSnapshot()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (a *App) handleModelLiquidationMap(w http.ResponseWriter, r *http.Request) {
@@ -1258,11 +1362,11 @@ func (a *App) setLastNotifyTS(ts int64) {
 	a.lastNotify = ts
 }
 
-func (a *App) latestSuccessfulAutoNotifyTS() int64 {
+func (a *App) latestSuccessfulNotifyTS() int64 {
 	var sentAt int64
 	err := a.db.QueryRow(`SELECT sent_at
 		FROM telegram_send_history
-		WHERE send_mode='auto' AND group_name='monitor-30d-text' AND status='success'
+		WHERE group_name='monitor-30d-text' AND status='success'
 		ORDER BY sent_at DESC
 		LIMIT 1`).Scan(&sentAt)
 	if err != nil {
@@ -1281,11 +1385,11 @@ func (a *App) nextTelegramAutoNotifyTS(now time.Time) (int64, bool) {
 		intervalMin = 15
 	}
 	baseTS := a.getLastNotifyTS()
-	if historyTS := a.latestSuccessfulAutoNotifyTS(); historyTS > baseTS {
+	if historyTS := a.latestSuccessfulNotifyTS(); historyTS > baseTS {
 		baseTS = historyTS
 	}
 	if baseTS <= 0 {
-		return now.UnixMilli(), true
+		return now.Add(time.Duration(intervalMin) * time.Minute).UnixMilli(), true
 	}
 	return baseTS + int64(intervalMin)*60*1000, true
 }
@@ -2335,9 +2439,29 @@ func (a *App) sendTelegramTestMessage() error {
 	return a.sendTelegramThirtyDayBundle(true)
 }
 
+func (a *App) beginTelegramBundleSend() bool {
+	a.bundleSendMu.Lock()
+	defer a.bundleSendMu.Unlock()
+	if a.bundleSending {
+		return false
+	}
+	a.bundleSending = true
+	return true
+}
+
+func (a *App) endTelegramBundleSend() {
+	a.bundleSendMu.Lock()
+	a.bundleSending = false
+	a.bundleSendMu.Unlock()
+}
+
 func (a *App) triggerTelegramTestSend() (string, bool) {
 	a.testSendMu.Lock()
 	if a.testSending {
+		a.testSendMu.Unlock()
+		return "already running", false
+	}
+	if !a.beginTelegramBundleSend() {
 		a.testSendMu.Unlock()
 		return "already running", false
 	}
@@ -2346,11 +2470,12 @@ func (a *App) triggerTelegramTestSend() (string, bool) {
 
 	go func() {
 		defer func() {
+			a.endTelegramBundleSend()
 			a.testSendMu.Lock()
 			a.testSending = false
 			a.testSendMu.Unlock()
 		}()
-		if err := a.sendTelegramTestMessage(); err != nil && a.debug {
+		if err := a.sendTelegramThirtyDayBundleLocked(true); err != nil && a.debug {
 			log.Printf("telegram test send failed: %v", err)
 		}
 	}()
@@ -2558,11 +2683,15 @@ func (a *App) nextTelegramAutoNotifyAfter(settings ChannelSettings, baseTS int64
 		if intervalMin <= 0 {
 			intervalMin = 15
 		}
+		pushAt := start.Add(time.Duration(intervalMin) * time.Minute)
+		if pushAt.After(limit) {
+			return time.Time{}, 0, "", false
+		}
 		period := "off-hours"
 		if isWorkTime(start, settings.WorkTimeExpr) {
 			period = "work-hours"
 		}
-		return start, intervalMin, period, true
+		return pushAt, intervalMin, period, true
 	}
 	cursor := start
 	for !cursor.After(limit) {
@@ -2593,7 +2722,7 @@ func (a *App) listChannelPlannedPushes(hours int) []ChannelPlannedPushRow {
 	now := time.Now().Truncate(time.Minute)
 	limit := now.Add(time.Duration(hours) * time.Hour)
 	baseTS := a.getLastNotifyTS()
-	if historyTS := a.latestSuccessfulAutoNotifyTS(); historyTS > baseTS {
+	if historyTS := a.latestSuccessfulNotifyTS(); historyTS > baseTS {
 		baseTS = historyTS
 	}
 	out := make([]ChannelPlannedPushRow, 0, 64)
@@ -2622,6 +2751,14 @@ func (a *App) listChannelPlannedPushes(hours int) []ChannelPlannedPushRow {
 }
 
 func (a *App) sendTelegramThirtyDayBundle(isTest bool) error {
+	if !a.beginTelegramBundleSend() {
+		return errors.New("telegram bundle send already running")
+	}
+	defer a.endTelegramBundleSend()
+	return a.sendTelegramThirtyDayBundleLocked(isTest)
+}
+
+func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 	const windowDays = 30
 	sendMode := "auto"
 	if isTest {
@@ -2710,13 +2847,18 @@ func (a *App) startTelegramNotifier(ctx context.Context) {
 				if nextTS > now {
 					continue
 				}
-				if err := a.sendTelegramThirtyDayBundle(false); err != nil {
+				if !a.beginTelegramBundleSend() {
+					continue
+				}
+				err := a.sendTelegramThirtyDayBundleLocked(false)
+				a.endTelegramBundleSend()
+				if err != nil {
 					if a.debug {
 						log.Printf("telegram auto bundle send failed: %v", err)
 					}
 					continue
 				}
-				a.setLastNotifyTS(now)
+				a.setLastNotifyTS(time.Now().UnixMilli())
 			}
 		}
 	}()
@@ -3726,15 +3868,15 @@ func (a *App) buildTelegramThirtyDayTextV4(monitor HeatReportData, monitorBands 
 		return heatReportBandBySize(monitor, band)
 	}
 	lines := []string{
-		fmt.Sprintf("<b>ETH 雷区速报 | 现价$%s</b>", formatPrice2(monitor.CurrentPrice)),
+		fmt.Sprintf("<b>ETH 雷区速报 | 现价$%s</b>", formatPrice1(monitor.CurrentPrice)),
 		fmt.Sprintf("总多单<b>%s亿</b>|总空单<b>%s亿</b>", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
 		"",
 		"<b>多单最长柱</b>",
-		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice2(monitor.LongPeak.Price), formatPointDistance(monitor.LongPeak.Distance)),
+		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice1(monitor.LongPeak.Price), formatPointDistance(monitor.LongPeak.Distance)),
 		fmt.Sprintf("单柱%s亿 | 累计<b>%s亿</b>", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
 		"",
 		"<b>空单最长柱</b>",
-		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice2(monitor.ShortPeak.Price), formatPointDistance(monitor.ShortPeak.Distance)),
+		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice1(monitor.ShortPeak.Price), formatPointDistance(monitor.ShortPeak.Distance)),
 		fmt.Sprintf("单柱%s亿 | 累计<b>%s亿</b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
 		"",
 		"多空失衡概览",
@@ -4516,6 +4658,705 @@ func (a *App) buildDashboard(days int) (Dashboard, error) {
 	}, nil
 }
 
+func scoreTone(score float64) string {
+	switch {
+	case score >= 75:
+		return "high"
+	case score >= 55:
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+func signedTone(v float64) string {
+	switch {
+	case v > 0:
+		return "up"
+	case v < 0:
+		return "down"
+	default:
+		return "flat"
+	}
+}
+
+func riskLabel(score float64) string {
+	switch {
+	case score >= 80:
+		return "高风险"
+	case score >= 65:
+		return "偏高"
+	case score >= 50:
+		return "中性偏高"
+	case score >= 35:
+		return "中性"
+	default:
+		return "偏低"
+	}
+}
+
+func nearestZoneDistance(current, price float64) float64 {
+	if current <= 0 || price <= 0 {
+		return 0
+	}
+	return math.Abs(price - current)
+}
+
+func weightedFitForAnalysis(hours, minEvents int, counts map[string]map[string]any, suggestions []modelFitSuggestion) (int, float64) {
+	if len(suggestions) == 0 {
+		return 0, 0
+	}
+	totalNotional := 0.0
+	weightedSE := 0.0
+	totalCount := 0
+	for _, sug := range suggestions {
+		totalNotional += sug.Notional
+		weightedSE += sug.WeightedSE * sug.Notional
+		totalCount += sug.Count
+	}
+	if totalCount == 0 {
+		for _, raw := range counts {
+			if raw == nil {
+				continue
+			}
+			if v, ok := raw["count"].(int); ok {
+				totalCount += v
+			}
+		}
+	}
+	if totalNotional <= 0 {
+		return totalCount, 0
+	}
+	_ = hours
+	_ = minEvents
+	return totalCount, weightedSE / totalNotional
+}
+
+func (a *App) loadGlobalFitStats(hours, minEvents int) (int, float64) {
+	req, err := http.NewRequest(http.MethodGet, "/api/model-fit", nil)
+	if err != nil {
+		return 0, 0
+	}
+	q := req.URL.Query()
+	q.Set("hours", strconv.Itoa(hours))
+	q.Set("min_events", strconv.Itoa(minEvents))
+	q.Set("mode", "global")
+	req.URL.RawQuery = q.Encode()
+
+	rec := &responseRecorder{header: make(http.Header)}
+	a.handleModelFit(rec, req)
+	if rec.status >= 400 {
+		return 0, 0
+	}
+	var payload struct {
+		Counts      map[string]map[string]any `json:"counts"`
+		Suggestions []modelFitSuggestion      `json:"suggestions"`
+	}
+	if err := json.Unmarshal(rec.buf.Bytes(), &payload); err != nil {
+		return 0, 0
+	}
+	return weightedFitForAnalysis(hours, minEvents, payload.Counts, payload.Suggestions)
+}
+
+type responseRecorder struct {
+	header http.Header
+	buf    bytes.Buffer
+	status int
+}
+
+type webSnapshotBand struct {
+	current float64
+	up20    float64
+	down20  float64
+	up50    float64
+	down50  float64
+	up100   float64
+	down100 float64
+}
+
+func (r *responseRecorder) Header() http.Header {
+	return r.header
+}
+
+func (r *responseRecorder) Write(b []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.buf.Write(b)
+}
+
+func (r *responseRecorder) WriteHeader(statusCode int) {
+	r.status = statusCode
+}
+
+func hitBandFromEvents(events []EventRow, startIdx int, endTS int64, current, up, down float64) (bool, float64) {
+	hit := false
+	maxMove := 0.0
+	for i := startIdx; i < len(events); i++ {
+		e := events[i]
+		if e.EventTS >= endTS {
+			break
+		}
+		move := math.Abs(e.Price - current)
+		if move > maxMove {
+			maxMove = move
+		}
+		side := strings.ToLower(strings.TrimSpace(e.Side))
+		switch side {
+		case "short":
+			if up > 0 && e.Price >= current && e.Price <= up {
+				hit = true
+			}
+		case "long":
+			if down > 0 && e.Price <= current && e.Price >= down {
+				hit = true
+			}
+		default:
+			if (up > 0 && e.Price >= current && e.Price <= up) || (down > 0 && e.Price <= current && e.Price >= down) {
+				hit = true
+			}
+		}
+	}
+	return hit, maxMove
+}
+
+func (a *App) loadWebDataSourceBacktestBands(symbol string, startTS int64) ([]int64, map[int64]webSnapshotBand) {
+	rows, err := a.db.Query(`SELECT id, captured_at, range_low, range_high, payload_json
+		FROM webdatasource_snapshots
+		WHERE symbol IN (?, 'ETH') AND window_days=1 AND captured_at>=?
+			AND EXISTS (SELECT 1 FROM webdatasource_points WHERE snapshot_id=webdatasource_snapshots.id LIMIT 1)
+		ORDER BY captured_at`, symbol, startTS)
+	if err != nil {
+		return nil, nil
+	}
+	defer rows.Close()
+
+	ordered := make([]int64, 0, 128)
+	out := map[int64]webSnapshotBand{}
+	for rows.Next() {
+		var id, ts int64
+		var rangeLow, rangeHigh float64
+		var payloadRaw string
+		if err := rows.Scan(&id, &ts, &rangeLow, &rangeHigh, &payloadRaw); err != nil {
+			continue
+		}
+		current := 0.0
+		if strings.TrimSpace(payloadRaw) != "" {
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(payloadRaw), &payload); err == nil {
+				current = webDataSourcePayloadCurrentPrice(payload, rangeLow, rangeHigh)
+			}
+		}
+		if current <= 0 && rangeHigh > rangeLow {
+			current = math.Round(((rangeHigh+rangeLow)/2)*10) / 10
+		}
+		if current <= 0 {
+			continue
+		}
+		points, err := a.db.Query(`SELECT side, price, liq_value FROM webdatasource_points WHERE snapshot_id=?`, id)
+		if err != nil {
+			continue
+		}
+		best := webSnapshotBand{current: current}
+		bestVal := map[string]float64{}
+		for points.Next() {
+			var side string
+			var price, liq float64
+			if err := points.Scan(&side, &price, &liq); err != nil {
+				continue
+			}
+			if price <= 0 || liq <= 0 {
+				continue
+			}
+			side = strings.ToLower(strings.TrimSpace(side))
+			if side == "short" && price >= current {
+				dist := price - current
+				switch {
+				case dist <= 20 && liq > bestVal["up20"]:
+					best.up20, bestVal["up20"] = price, liq
+				case dist <= 50 && liq > bestVal["up50"]:
+					best.up50, bestVal["up50"] = price, liq
+				case dist <= 100 && liq > bestVal["up100"]:
+					best.up100, bestVal["up100"] = price, liq
+				}
+			}
+			if side == "long" && price <= current {
+				dist := current - price
+				switch {
+				case dist <= 20 && liq > bestVal["down20"]:
+					best.down20, bestVal["down20"] = price, liq
+				case dist <= 50 && liq > bestVal["down50"]:
+					best.down50, bestVal["down50"] = price, liq
+				case dist <= 100 && liq > bestVal["down100"]:
+					best.down100, bestVal["down100"] = price, liq
+				}
+			}
+		}
+		_ = points.Close()
+		if best.up20 == 0 && best.down20 == 0 && best.up50 == 0 && best.down50 == 0 && best.up100 == 0 && best.down100 == 0 {
+			continue
+		}
+		ordered = append(ordered, ts)
+		out[ts] = best
+	}
+	return ordered, out
+}
+
+func (a *App) buildWebDataSourceBacktestSummary(symbol string, horizonMin int, fitHours, fitMinEvents int) AnalysisBacktest {
+	out := AnalysisBacktest{
+		HorizonMin: horizonMin,
+		Source:     "?????(Coinglass)",
+		Summary:    "页面数据源近 24 小时样本不足，暂时无法形成可靠回测。",
+	}
+	now := time.Now()
+	startTS := now.Add(-24 * time.Hour).UnixMilli()
+	orderedTS, snaps := a.loadWebDataSourceBacktestBands(symbol, startTS)
+	if len(orderedTS) == 0 || len(snaps) == 0 {
+		return out
+	}
+
+	eventRows, err := a.db.Query(`SELECT exchange, side, price, qty, notional_usd, event_ts
+		FROM liquidation_events
+		WHERE symbol=? AND event_ts>=? AND event_ts<?
+		ORDER BY event_ts`, symbol, startTS, now.Add(time.Duration(horizonMin)*time.Minute).UnixMilli())
+	if err != nil {
+		return out
+	}
+	defer eventRows.Close()
+	events := make([]EventRow, 0, 4096)
+	for eventRows.Next() {
+		var e EventRow
+		if err := eventRows.Scan(&e.Exchange, &e.Side, &e.Price, &e.Qty, &e.NotionalUSD, &e.EventTS); err != nil {
+			continue
+		}
+		e.Side = strings.ToLower(strings.TrimSpace(e.Side))
+		if e.Price <= 0 || e.EventTS <= 0 {
+			continue
+		}
+		events = append(events, e)
+	}
+	if len(events) == 0 {
+		return out
+	}
+
+	hit20 := 0
+	hit50 := 0
+	hit100 := 0
+	maxMoveSum := 0.0
+	samples := 0
+	horizonMS := int64(horizonMin) * 60 * 1000
+	startIdx := 0
+	for _, ts := range orderedTS {
+		snap := snaps[ts]
+		endTS := ts + horizonMS
+		for startIdx < len(events) && events[startIdx].EventTS < ts {
+			startIdx++
+		}
+		local20, max20 := hitBandFromEvents(events, startIdx, endTS, snap.current, snap.up20, snap.down20)
+		local50, max50 := hitBandFromEvents(events, startIdx, endTS, snap.current, snap.up50, snap.down50)
+		local100, max100 := hitBandFromEvents(events, startIdx, endTS, snap.current, snap.up100, snap.down100)
+		if local20 {
+			hit20++
+		}
+		if local50 {
+			hit50++
+		}
+		if local100 {
+			hit100++
+		}
+		maxMove := math.Max(max20, math.Max(max50, max100))
+		maxMoveSum += maxMove
+		samples++
+	}
+	if samples == 0 {
+		return out
+	}
+	out.SampleCount = samples
+	out.Hit20Rate = float64(hit20) / float64(samples)
+	out.Hit50Rate = float64(hit50) / float64(samples)
+	out.Hit100Rate = float64(hit100) / float64(samples)
+	out.AvgMaxMove = maxMoveSum / float64(samples)
+	out.FitEventCount, out.FitWeightedSE = a.loadGlobalFitStats(fitHours, fitMinEvents)
+	out.Summary = fmt.Sprintf(
+		"页面数据源过去 24 小时共抽取 %d 个 Coinglass 快照，未来 %d 分钟内命中 ±20/50/100 关键区间的比例分别为 %.0f%% / %.0f%% / %.0f%%。",
+		samples, horizonMin, out.Hit20Rate*100, out.Hit50Rate*100, out.Hit100Rate*100,
+	)
+	return out
+}
+
+func (a *App) buildBacktestSummary(symbol string, horizonMin int, fitHours, fitMinEvents int) AnalysisBacktest {
+	out := AnalysisBacktest{
+		HorizonMin: horizonMin,
+		Source:     "????",
+		Summary:    "近 24 小时样本不足，暂时无法形成可靠回测。",
+	}
+	now := time.Now()
+	startTS := now.Add(-24 * time.Hour).UnixMilli()
+
+	rows, err := a.db.Query(`SELECT report_ts, band, AVG(current_price), AVG(up_price), AVG(down_price)
+		FROM band_reports
+		WHERE symbol=? AND report_ts>=?
+		GROUP BY report_ts, band
+		ORDER BY report_ts, band`, symbol, startTS)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+
+	type bandSnap struct {
+		current float64
+		up      float64
+		down    float64
+	}
+	snapshots := map[int64]map[int]bandSnap{}
+	orderedTS := make([]int64, 0, 256)
+	for rows.Next() {
+		var ts int64
+		var band int
+		var current, up, down float64
+		if err := rows.Scan(&ts, &band, &current, &up, &down); err != nil {
+			continue
+		}
+		if _, ok := snapshots[ts]; !ok {
+			snapshots[ts] = map[int]bandSnap{}
+			orderedTS = append(orderedTS, ts)
+		}
+		snapshots[ts][band] = bandSnap{current: current, up: up, down: down}
+	}
+	if len(orderedTS) == 0 {
+		return a.buildWebDataSourceBacktestSummary(symbol, horizonMin, fitHours, fitMinEvents)
+	}
+
+	eventRows, err := a.db.Query(`SELECT side, price, event_ts
+		FROM liquidation_events
+		WHERE symbol=? AND event_ts>=? AND event_ts<?
+		ORDER BY event_ts`, symbol, startTS, now.Add(time.Duration(horizonMin)*time.Minute).UnixMilli())
+	if err != nil {
+		return out
+	}
+	defer eventRows.Close()
+
+	type evt struct {
+		side  string
+		price float64
+		ts    int64
+	}
+	events := make([]evt, 0, 2048)
+	for eventRows.Next() {
+		var e evt
+		if err := eventRows.Scan(&e.side, &e.price, &e.ts); err != nil {
+			continue
+		}
+		e.side = strings.ToLower(strings.TrimSpace(e.side))
+		if e.price <= 0 || e.ts <= 0 {
+			continue
+		}
+		events = append(events, e)
+	}
+
+	hit20 := 0
+	hit50 := 0
+	hit100 := 0
+	maxMoveSum := 0.0
+	samples := 0
+	horizonMS := int64(horizonMin) * 60 * 1000
+	startIdx := 0
+	for _, ts := range orderedTS {
+		bands := snapshots[ts]
+		s20, ok20 := bands[20]
+		s50, ok50 := bands[50]
+		s100, ok100 := bands[100]
+		if !ok20 || !ok50 || !ok100 || s20.current <= 0 {
+			continue
+		}
+		endTS := ts + horizonMS
+		for startIdx < len(events) && events[startIdx].ts < ts {
+			startIdx++
+		}
+		local20 := false
+		local50 := false
+		local100 := false
+		localMaxMove := 0.0
+		for i := startIdx; i < len(events); i++ {
+			e := events[i]
+			if e.ts >= endTS {
+				break
+			}
+			move := math.Abs(e.price - s20.current)
+			if move > localMaxMove {
+				localMaxMove = move
+			}
+			switch e.side {
+			case "short":
+				if e.price >= s20.current && e.price <= s20.up {
+					local20 = true
+				}
+				if e.price >= s50.current && e.price <= s50.up {
+					local50 = true
+				}
+				if e.price >= s100.current && e.price <= s100.up {
+					local100 = true
+				}
+			case "long":
+				if e.price <= s20.current && e.price >= s20.down {
+					local20 = true
+				}
+				if e.price <= s50.current && e.price >= s50.down {
+					local50 = true
+				}
+				if e.price <= s100.current && e.price >= s100.down {
+					local100 = true
+				}
+			default:
+				if math.Abs(e.price-s20.current) <= math.Abs(s20.up-s20.current) {
+					local20 = true
+				}
+				if math.Abs(e.price-s50.current) <= math.Abs(s50.up-s50.current) {
+					local50 = true
+				}
+				if math.Abs(e.price-s100.current) <= math.Abs(s100.up-s100.current) {
+					local100 = true
+				}
+			}
+		}
+		if local20 {
+			hit20++
+		}
+		if local50 {
+			hit50++
+		}
+		if local100 {
+			hit100++
+		}
+		maxMoveSum += localMaxMove
+		samples++
+	}
+	if samples == 0 {
+		return out
+	}
+
+	out.SampleCount = samples
+	out.Hit20Rate = float64(hit20) / float64(samples)
+	out.Hit50Rate = float64(hit50) / float64(samples)
+	out.Hit100Rate = float64(hit100) / float64(samples)
+	out.AvgMaxMove = maxMoveSum / float64(samples)
+	out.FitEventCount, out.FitWeightedSE = a.loadGlobalFitStats(fitHours, fitMinEvents)
+	out.Summary = fmt.Sprintf(
+		"过去 24 小时共抽取 %d 个热区快照，未来 %d 分钟内命中 ±20/50/100 区间的比例分别为 %.0f%% / %.0f%% / %.0f%%。",
+		samples, horizonMin, out.Hit20Rate*100, out.Hit50Rate*100, out.Hit100Rate*100,
+	)
+	if samples < 5 {
+		if fallback := a.buildWebDataSourceBacktestSummary(symbol, horizonMin, fitHours, fitMinEvents); fallback.SampleCount > samples {
+			return fallback
+		}
+	}
+	return out
+}
+
+func buildBroadcastSummary(currentPrice float64, overview AnalysisOverview, shortRiskScore, longRiskScore float64, keyZones []AnalysisKeyZone, dash Dashboard) AnalysisBroadcast {
+	headline := overview.Title
+	lines := []string{
+		fmt.Sprintf("当前 ETH 价格 %.1f。", currentPrice),
+		fmt.Sprintf("空头被挤压风险 %.0f 分，多头被踩踏风险 %.0f 分。", shortRiskScore, longRiskScore),
+	}
+	if len(keyZones) >= 2 {
+		lines = append(lines, fmt.Sprintf("上方关键价位 %.1f，下方关键价位 %.1f。", keyZones[0].Price, keyZones[1].Price))
+	}
+	if dash.Analytics.DominantExchange != "" {
+		lines = append(lines, fmt.Sprintf("主导交易所为 %s，当前预警等级 %s。", dash.Analytics.DominantExchange, dash.Analytics.Alert.Level))
+	}
+	return AnalysisBroadcast{
+		Headline: headline,
+		Text:     strings.Join(lines, ""),
+		Bullets: []string{
+			overview.Bias,
+			fmt.Sprintf("关注提示：%s。", dash.Analytics.Alert.Suggestion),
+			fmt.Sprintf("结论置信度 %.0f%%。", overview.Confidence),
+		},
+	}
+}
+
+func humanizeCompactUSD(v float64) string {
+	abs := math.Abs(v)
+	switch {
+	case abs >= 1e8:
+		return fmt.Sprintf("%.2f亿", v/1e8)
+	case abs >= 1e4:
+		return fmt.Sprintf("%.1f万", v/1e4)
+	default:
+		return fmt.Sprintf("%.0f", v)
+	}
+}
+
+func (a *App) buildExchangeCards(symbol string, states []MarketState, nowTS int64) []ExchangeAnalysisCard {
+	exchanges := []string{"binance", "okx", "bybit"}
+	recentByEx := a.sumLiquidationNotionalByExchangeSince(symbol, nowTS-int64(time.Hour/time.Millisecond))
+	out := make([]ExchangeAnalysisCard, 0, len(exchanges))
+	for _, ex := range exchanges {
+		card := ExchangeAnalysisCard{Exchange: normalizeExchangeName(ex)}
+		state := findStateByExchange(states, ex)
+		if state != nil {
+			card.MarkPrice = state.MarkPrice
+			if state.OIValueUSD != nil {
+				card.OIValueUSD = *state.OIValueUSD
+			}
+			if state.FundingRate != nil {
+				card.FundingRate = *state.FundingRate
+			}
+			if state.LongShortRatio != nil {
+				card.LongShortRatio = *state.LongShortRatio
+			}
+		}
+		up, down := a.sumBandNotionalInRangeByExchange(symbol, ex, card.MarkPrice, 50, nowTS-int64(time.Hour/time.Millisecond), nowTS)
+		card.UpperRiskUSD = up
+		card.LowerRiskUSD = down
+		total := up + down
+		card.ShortRiskScore = 42
+		card.LongRiskScore = 42
+		if total > 0 {
+			card.ShortRiskScore += 38 * (up / total)
+			card.LongRiskScore += 38 * (down / total)
+		}
+		if card.FundingRate > 0 {
+			card.ShortRiskScore += clamp(card.FundingRate*120000, 0, 10)
+		} else if card.FundingRate < 0 {
+			card.LongRiskScore += clamp(-card.FundingRate*120000, 0, 10)
+		}
+		card.ShortRiskScore = clamp(card.ShortRiskScore, 0, 100)
+		card.LongRiskScore = clamp(card.LongRiskScore, 0, 100)
+		card.RecentLiquidUSD = recentByEx[ex]
+		switch {
+		case card.ShortRiskScore-card.LongRiskScore >= 8:
+			card.Bias = "偏上冲挤空"
+			card.FocusSide = "up"
+			card.FocusPrice = card.MarkPrice + 20
+		case card.LongRiskScore-card.ShortRiskScore >= 8:
+			card.Bias = "偏下探踩踏"
+			card.FocusSide = "down"
+			card.FocusPrice = math.Max(0, card.MarkPrice-20)
+		default:
+			card.Bias = "相对均衡"
+			card.FocusSide = "flat"
+			card.FocusPrice = card.MarkPrice
+		}
+		card.Summary = fmt.Sprintf("%s 近 1 小时上方风险 %s USD，下方风险 %s USD，近 1 小时实际清算 %s USD。",
+			card.Exchange, humanizeCompactUSD(card.UpperRiskUSD), humanizeCompactUSD(card.LowerRiskUSD), humanizeCompactUSD(card.RecentLiquidUSD))
+		out = append(out, card)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		li := math.Max(out[i].ShortRiskScore, out[i].LongRiskScore)
+		lj := math.Max(out[j].ShortRiskScore, out[j].LongRiskScore)
+		if li == lj {
+			return out[i].Exchange < out[j].Exchange
+		}
+		return li > lj
+	})
+	return out
+}
+
+func (a *App) buildAnalysisSnapshot() (AnalysisSnapshot, error) {
+	dash, err := a.buildDashboard(windowIntraday)
+	if err != nil {
+		return AnalysisSnapshot{}, err
+	}
+
+	b20 := bandRowOrDefault(dash.Bands, dash.CurrentPrice, 20)
+	b50 := bandRowOrDefault(dash.Bands, dash.CurrentPrice, 50)
+	b100 := bandRowOrDefault(dash.Bands, dash.CurrentPrice, 100)
+
+	upWeighted := b20.UpNotionalUSD*0.5 + math.Max(0, b50.UpNotionalUSD-b20.UpNotionalUSD)*0.3 + math.Max(0, b100.UpNotionalUSD-b50.UpNotionalUSD)*0.2
+	downWeighted := b20.DownNotionalUSD*0.5 + math.Max(0, b50.DownNotionalUSD-b20.DownNotionalUSD)*0.3 + math.Max(0, b100.DownNotionalUSD-b50.DownNotionalUSD)*0.2
+	totalWeighted := upWeighted + downWeighted
+
+	fundingBias := 0.0
+	if dash.Analytics.Market.AvgFunding > 0 {
+		fundingBias = clamp(dash.Analytics.Market.AvgFunding*120000, 0, 8)
+	} else if dash.Analytics.Market.AvgFunding < 0 {
+		fundingBias = clamp(-dash.Analytics.Market.AvgFunding*120000, 0, 8)
+	}
+	nearUpBonus := 0.0
+	nearDownBonus := 0.0
+	if dash.Analytics.CoreZone.UpPrice > 0 {
+		nearUpBonus = clamp((120-nearestZoneDistance(dash.CurrentPrice, dash.Analytics.CoreZone.UpPrice))/12, 0, 10)
+	}
+	if dash.Analytics.CoreZone.DownPrice > 0 {
+		nearDownBonus = clamp((120-nearestZoneDistance(dash.CurrentPrice, dash.Analytics.CoreZone.DownPrice))/12, 0, 10)
+	}
+
+	shortRiskScore := 45.0
+	longRiskScore := 45.0
+	if totalWeighted > 0 {
+		shortRiskScore += 35 * (upWeighted / totalWeighted)
+		longRiskScore += 35 * (downWeighted / totalWeighted)
+	}
+	if dash.Analytics.Market.AvgFunding > 0 {
+		shortRiskScore += fundingBias
+	} else if dash.Analytics.Market.AvgFunding < 0 {
+		longRiskScore += fundingBias
+	}
+	shortRiskScore = clamp(shortRiskScore+nearUpBonus, 0, 100)
+	longRiskScore = clamp(longRiskScore+nearDownBonus, 0, 100)
+
+	bias := "区间内多空风险相对均衡"
+	title := "当前市场更像震荡蓄能"
+	if shortRiskScore-longRiskScore >= 8 {
+		bias = "上方空头清算风险更高，短线更容易被向上挤压"
+		title = "当前市场偏向上冲挤空结构"
+	} else if longRiskScore-shortRiskScore >= 8 {
+		bias = "下方多头清算风险更高，短线更容易出现向下踩踏"
+		title = "当前市场偏向下探踩踏结构"
+	}
+	confidence := clamp(math.Abs(shortRiskScore-longRiskScore)*4.5, 18, 92)
+
+	nowTS := time.Now().UnixMilli()
+	oneHour := int64(time.Hour / time.Millisecond)
+	fourHour := int64((4 * time.Hour) / time.Millisecond)
+	up1h, down1h := a.sumBandNotionalInRange(defaultSymbol, dash.CurrentPrice, 50, nowTS-oneHour, nowTS)
+	upPrev1h, downPrev1h := a.sumBandNotionalInRange(defaultSymbol, dash.CurrentPrice, 50, nowTS-2*oneHour, nowTS-oneHour)
+	recent4h := a.sumLiquidationNotionalSince(defaultSymbol, nowTS-fourHour)
+	funding1h := a.avgFundingInRange(defaultSymbol, nowTS-oneHour, nowTS)
+	fundingPrev1h := a.avgFundingInRange(defaultSymbol, nowTS-2*oneHour, nowTS-oneHour)
+
+	changes := []AnalysisDelta{
+		{Label: "上方 50 点风险变化", Value: up1h - upPrev1h, Unit: "USD", Tone: signedTone(up1h - upPrev1h), Note: "比较最近 1 小时与前 1 小时的上方清算累计额。"},
+		{Label: "下方 50 点风险变化", Value: down1h - downPrev1h, Unit: "USD", Tone: signedTone(down1h - downPrev1h), Note: "比较最近 1 小时与前 1 小时的下方清算累计额。"},
+		{Label: "近 4 小时实际清算量", Value: recent4h, Unit: "USD", Tone: scoreTone(clamp(recent4h/1_500_000*100, 0, 100)), Note: "用于判断波动是否正在放大。"},
+		{Label: "资金费率变化", Value: funding1h - fundingPrev1h, Unit: "rate", Tone: signedTone(funding1h - fundingPrev1h), Note: "最近 1 小时平均资金费率相对前 1 小时的变化。"},
+	}
+
+	keyZones := []AnalysisKeyZone{
+		{Name: "上方最近强清算区", Side: "up", Price: dash.Analytics.CoreZone.UpPrice, Distance: nearestZoneDistance(dash.CurrentPrice, dash.Analytics.CoreZone.UpPrice), NotionalUSD: dash.Analytics.CoreZone.UpNotionalUSD, Note: "更适合观察短线挤空触发点。"},
+		{Name: "下方最近强清算区", Side: "down", Price: dash.Analytics.CoreZone.DownPrice, Distance: nearestZoneDistance(dash.CurrentPrice, dash.Analytics.CoreZone.DownPrice), NotionalUSD: dash.Analytics.CoreZone.DownNotionalUSD, Note: "更适合观察短线踩踏触发点。"},
+		{Name: "上方即时压力带", Side: "up", Price: b20.UpPrice, Distance: nearestZoneDistance(dash.CurrentPrice, b20.UpPrice), NotionalUSD: b20.UpNotionalUSD, Note: "离现价最近，适合盯短线突破。"},
+		{Name: "下方即时支撑带", Side: "down", Price: b20.DownPrice, Distance: nearestZoneDistance(dash.CurrentPrice, b20.DownPrice), NotionalUSD: b20.DownNotionalUSD, Note: "离现价最近，适合盯短线跌破。"},
+	}
+
+	overview := AnalysisOverview{
+		Title:      title,
+		Bias:       bias,
+		Confidence: confidence,
+		Summary: fmt.Sprintf(
+			"当前价格 %.1f，近端上方风险 %.0f 分、下方风险 %.0f 分；主导交易所为 %s，提示 %s。",
+			dash.CurrentPrice, shortRiskScore, longRiskScore, dash.Analytics.DominantExchange, dash.Analytics.Alert.Level,
+		),
+	}
+	backtest := a.buildBacktestSummary(defaultSymbol, 60, 24, 25)
+
+	return AnalysisSnapshot{
+		Symbol:        dash.Symbol,
+		GeneratedAt:   time.Now().UnixMilli(),
+		CurrentPrice:  dash.CurrentPrice,
+		Overview:      overview,
+		Broadcast:     buildBroadcastSummary(dash.CurrentPrice, overview, shortRiskScore, longRiskScore, keyZones, dash),
+		RiskScores:    []AnalysisRiskScore{{Label: "空头被挤压风险", Score: shortRiskScore, Tone: scoreTone(shortRiskScore)}, {Label: "多头被踩踏风险", Score: longRiskScore, Tone: scoreTone(longRiskScore)}, {Label: "短线波动放大风险", Score: clamp(recent4h/1_200_000*100, 0, 100), Tone: scoreTone(clamp(recent4h/1_200_000*100, 0, 100))}},
+		KeyZones:      keyZones,
+		Changes:       changes,
+		ExchangeCards: a.buildExchangeCards(defaultSymbol, dash.States, nowTS),
+		Backtest:      backtest,
+		Dashboard:     dash,
+	}, nil
+}
+
 func (a *App) buildHeatFromLiquidationEvents(symbol string, currentPrice float64, cutoff int64) ([]BandRow, []any, []any, error) {
 	if currentPrice <= 0 {
 		return []BandRow{}, []any{"-", 0}, []any{"-", 0}, nil
@@ -4735,6 +5576,49 @@ func (a *App) sumBandNotionalInRange(symbol string, currentPrice, band float64, 
 	return up, down
 }
 
+func (a *App) sumBandNotionalInRangeByExchange(symbol, exchange string, currentPrice, band float64, startTS, endTS int64) (float64, float64) {
+	if currentPrice <= 0 || band <= 0 || endTS <= startTS {
+		return 0, 0
+	}
+	rows, err := a.db.Query(`SELECT side, price, notional_usd FROM liquidation_events
+		WHERE symbol=? AND LOWER(exchange)=? AND event_ts>=? AND event_ts<?`, symbol, strings.ToLower(strings.TrimSpace(exchange)), startTS, endTS)
+	if err != nil {
+		return 0, 0
+	}
+	defer rows.Close()
+	up := 0.0
+	down := 0.0
+	for rows.Next() {
+		var side string
+		var price, notional float64
+		if err := rows.Scan(&side, &price, &notional); err != nil {
+			continue
+		}
+		if price <= 0 || notional <= 0 || math.Abs(price-currentPrice) > band {
+			continue
+		}
+		side = strings.ToLower(strings.TrimSpace(side))
+		switch side {
+		case "short":
+			if price >= currentPrice {
+				up += notional
+			}
+		case "long":
+			if price <= currentPrice {
+				down += notional
+			}
+		default:
+			if price >= currentPrice {
+				up += notional
+			}
+			if price <= currentPrice {
+				down += notional
+			}
+		}
+	}
+	return up, down
+}
+
 func (a *App) maxBandNotionalInRange(symbol string, currentPrice, band float64, startTS, endTS int64) float64 {
 	if currentPrice <= 0 || band <= 0 || endTS <= startTS {
 		return 0
@@ -4815,6 +5699,16 @@ func (a *App) sumLiquidationNotionalByExchangeSince(symbol string, startTS int64
 		out[ex] = total.Float64
 	}
 	return out
+}
+
+func findStateByExchange(states []MarketState, exchange string) *MarketState {
+	exchange = strings.ToLower(strings.TrimSpace(exchange))
+	for i := range states {
+		if strings.ToLower(strings.TrimSpace(states[i].Exchange)) == exchange {
+			return &states[i]
+		}
+	}
+	return nil
 }
 
 func (a *App) computeExchangeContribution(symbol string, currentPrice, band float64, cutoff int64, states []MarketState) []ExchangeContribution {
@@ -6928,6 +7822,8 @@ func (a *App) runOKXWS(ctx context.Context, instID string) error {
 		book.applyDelta(bids, asks, ts)
 	}
 }
+
+const analysisHTMLFallback = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>日内分析</title></head><body style="font-family:Segoe UI,Microsoft YaHei,sans-serif;padding:24px"><h2>日内分析页面文件缺失</h2><p>请确认 <code>analysis_page_fixed.html</code> 存在，然后刷新页面。</p></body></html>`
 
 const indexHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">

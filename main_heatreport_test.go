@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildHeatReportDataFromModelAtPriceReanchorsBandsAndCumulative(t *testing.T) {
@@ -119,5 +120,46 @@ func TestBuildHeatReportTableHTMLOrdersLowerLongsBeforeUpperShorts(t *testing.T)
 		if strings.Contains(html, unwanted) {
 			t.Fatalf("expected heat report html not to contain %q, got:\n%s", unwanted, html)
 		}
+	}
+}
+
+func TestNextTelegramAutoNotifyAfterWithoutBaselineWaitsFullInterval(t *testing.T) {
+	app := &App{}
+	start := time.Date(2026, 4, 24, 10, 0, 0, 0, time.Local)
+	settings := ChannelSettings{
+		NotifyIntervalMin:     15,
+		NotifyWorkIntervalMin: 15,
+		NotifyOffIntervalMin:  30,
+	}
+
+	pushAt, intervalMin, period, ok := app.nextTelegramAutoNotifyAfter(settings, 0, start, start.Add(2*time.Hour))
+	if !ok {
+		t.Fatal("expected next push to be scheduled")
+	}
+	if intervalMin != 15 {
+		t.Fatalf("expected 15-minute interval, got %d", intervalMin)
+	}
+	if period != "work-hours" {
+		t.Fatalf("expected work-hours period, got %q", period)
+	}
+	want := start.Add(15 * time.Minute)
+	if !pushAt.Equal(want) {
+		t.Fatalf("expected first push at %v, got %v", want, pushAt)
+	}
+}
+
+func TestTriggerTelegramTestSendBlockedWhenBundleAlreadyRunning(t *testing.T) {
+	app := &App{}
+	if !app.beginTelegramBundleSend() {
+		t.Fatal("expected to acquire bundle send lock")
+	}
+	defer app.endTelegramBundleSend()
+
+	msg, started := app.triggerTelegramTestSend()
+	if started {
+		t.Fatal("expected test send to be blocked while bundle send is running")
+	}
+	if msg != "already running" {
+		t.Fatalf("expected already running message, got %q", msg)
 	}
 }
