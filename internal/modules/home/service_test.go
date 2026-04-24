@@ -1,43 +1,50 @@
 package home
 
 import (
-	"database/sql"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	liqmap "multipleexchangeliquidationmap"
-	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
-
-	_ "modernc.org/sqlite"
 )
 
-func newTestService(t *testing.T) *service {
-	t.Helper()
+type stubServices struct {
+	windowDays int
+}
 
-	dbPath := filepath.Join(t.TempDir(), "home-service.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+func (s *stubServices) WindowDays() int {
+	return s.windowDays
+}
 
-	if err := dbplatform.Configure(db); err != nil {
-		t.Fatalf("configure db: %v", err)
+func (s *stubServices) SetWindowDays(days int) error {
+	switch days {
+	case 0, 1, 7, 30:
+		s.windowDays = days
+		return nil
+	default:
+		return liqmap.BadRequestError{Message: "invalid days"}
 	}
-	if err := dbplatform.Init(db); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
+}
 
-	core := liqmap.NewApp(db, false)
-	return newService(liqmap.NewHomeModuleAdapter(core))
+func (s *stubServices) Dashboard(days int) (liqmap.Dashboard, error) {
+	return liqmap.Dashboard{}, nil
+}
+
+func (s *stubServices) ModelLiquidationMap(windowDays, lookbackMin, bucketMin int, priceStep, priceRange float64) (map[string]any, error) {
+	return map[string]any{"window_days": windowDays}, nil
+}
+
+func (s *stubServices) FetchCoinGlassMap(symbol, window string) ([]byte, error) {
+	return nil, liqmap.BadRequestError{Message: "CG_API_KEY is not set"}
+}
+
+func newTestService() *service {
+	return newService(&stubServices{windowDays: 30})
 }
 
 func TestHandleWindowRejectsInvalidDays(t *testing.T) {
-	svc := newTestService(t)
+	svc := newTestService()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/window", strings.NewReader(`{"days":2}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -53,17 +60,7 @@ func TestHandleWindowRejectsInvalidDays(t *testing.T) {
 }
 
 func TestHandleCoinGlassMapRequiresAPIKey(t *testing.T) {
-	svc := newTestService(t)
-
-	prev, had := os.LookupEnv("CG_API_KEY")
-	_ = os.Unsetenv("CG_API_KEY")
-	t.Cleanup(func() {
-		if had {
-			_ = os.Setenv("CG_API_KEY", prev)
-		} else {
-			_ = os.Unsetenv("CG_API_KEY")
-		}
-	})
+	svc := newTestService()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/coinglass/map", nil)
 	rec := httptest.NewRecorder()

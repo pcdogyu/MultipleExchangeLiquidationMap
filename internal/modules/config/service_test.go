@@ -1,43 +1,38 @@
 package config
 
 import (
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	liqmap "multipleexchangeliquidationmap"
-	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
-
-	_ "modernc.org/sqlite"
 )
 
-func newTestService(t *testing.T) *service {
-	t.Helper()
+type stubServices struct {
+	cfg liqmap.ModelConfig
+}
 
-	dbPath := filepath.Join(t.TempDir(), "config-service.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+func (s *stubServices) LoadModelConfig() liqmap.ModelConfig {
+	return s.cfg
+}
 
-	if err := dbplatform.Configure(db); err != nil {
-		t.Fatalf("configure db: %v", err)
-	}
-	if err := dbplatform.Init(db); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
+func (s *stubServices) SaveModelConfig(req liqmap.ModelConfig) error {
+	s.cfg = req
+	return nil
+}
 
-	core := liqmap.NewApp(db, false)
-	return newService(liqmap.NewConfigModuleAdapter(core))
+func (s *stubServices) RunModelFit(hours, minEvents int, exchange, mode string) (map[string]any, error) {
+	return map[string]any{"symbol": "ETHUSDT"}, nil
+}
+
+func newTestService() *service {
+	return newService(&stubServices{})
 }
 
 func TestHandleModelConfigPersistsSettings(t *testing.T) {
-	svc := newTestService(t)
+	svc := newTestService()
 
 	getReq := httptest.NewRequest(http.MethodGet, "/api/model-config", nil)
 	getRec := httptest.NewRecorder()
@@ -90,7 +85,7 @@ func TestHandleModelConfigPersistsSettings(t *testing.T) {
 }
 
 func TestHandleModelFitReturnsSnapshot(t *testing.T) {
-	svc := newTestService(t)
+	svc := newTestService()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/model-fit?hours=24&min_events=25", nil)
 	rec := httptest.NewRecorder()

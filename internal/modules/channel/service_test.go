@@ -1,42 +1,49 @@
 package channel
 
 import (
-	"database/sql"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	liqmap "multipleexchangeliquidationmap"
-	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
-
-	_ "modernc.org/sqlite"
 )
 
-func newTestService(t *testing.T) *service {
-	t.Helper()
+type stubServices struct {
+	settings liqmap.ChannelSettings
+}
 
-	dbPath := filepath.Join(t.TempDir(), "channel-service.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+func (s *stubServices) LoadSettings() liqmap.ChannelSettings {
+	return s.settings
+}
 
-	if err := dbplatform.Configure(db); err != nil {
-		t.Fatalf("configure db: %v", err)
-	}
-	if err := dbplatform.Init(db); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
+func (s *stubServices) SaveSettings(req liqmap.ChannelSettings) error {
+	s.settings = req
+	return nil
+}
 
-	core := liqmap.NewApp(db, false)
-	return newService(liqmap.NewChannelModuleAdapter(core))
+func (s *stubServices) TriggerChannelTestSend() (string, bool) {
+	return "queued", true
+}
+
+func (s *stubServices) ListTelegramSendHistory(limit int) ([]liqmap.TelegramSendHistoryRow, error) {
+	return nil, nil
+}
+
+func (s *stubServices) ListChannelTimeline(hours int) ([]liqmap.ChannelTimelineRow, error) {
+	return nil, nil
+}
+
+func (s *stubServices) ListChannelPlannedPushes(hours int) []liqmap.ChannelPlannedPushRow {
+	return nil
+}
+
+func newTestService() *service {
+	return newService(&stubServices{})
 }
 
 func TestHandleSettingsPersistsAndReturnsSettings(t *testing.T) {
-	svc := newTestService(t)
+	svc := newTestService()
 
 	postReq := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(`{
 		"telegram_bot_token":"bot-token",
@@ -69,7 +76,7 @@ func TestHandleSettingsPersistsAndReturnsSettings(t *testing.T) {
 }
 
 func TestHandleChannelTestRequiresConfiguredDestination(t *testing.T) {
-	svc := newTestService(t)
+	svc := newTestService()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/channel/test", nil)
 	rec := httptest.NewRecorder()

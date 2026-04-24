@@ -1,42 +1,50 @@
 package webdatasource
 
 import (
-	"database/sql"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	liqmap "multipleexchangeliquidationmap"
-	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
-
-	_ "modernc.org/sqlite"
 )
 
-func newTestService(t *testing.T) *service {
-	t.Helper()
+type stubServices struct{}
 
-	dbPath := filepath.Join(t.TempDir(), "webdatasource-service.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+func (stubServices) WebDataSourceStatus() liqmap.WebDataSourceStatus {
+	return liqmap.WebDataSourceStatus{}
+}
 
-	if err := dbplatform.Configure(db); err != nil {
-		t.Fatalf("configure db: %v", err)
-	}
-	if err := dbplatform.Init(db); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
+func (stubServices) TriggerWebDataSourceInit() (bool, error) {
+	return true, nil
+}
 
-	core := liqmap.NewApp(db, false)
-	return newService(liqmap.NewWebDataSourceModuleAdapter(core))
+func (stubServices) WebDataSourceInitLoginTimeoutSec() int {
+	return 90
+}
+
+func (stubServices) TriggerWebDataSourceRun(windowDays *int) (bool, error) {
+	return true, nil
+}
+
+func (stubServices) ListRecentWebDataSourceRuns(limit int) []liqmap.WebDataSourceRunRow {
+	return nil
+}
+
+func (stubServices) UpdateWebDataSourceSettings(enabled *bool, intervalMin, timeoutSec int, chromePath, profileDir string) liqmap.WebDataSourceStatus {
+	return liqmap.WebDataSourceStatus{}
+}
+
+func (stubServices) WebDataSourceMap(window string) liqmap.WebDataSourceMapResponse {
+	return liqmap.WebDataSourceMapResponse{}
+}
+
+func newTestService() *service {
+	return newService(stubServices{})
 }
 
 func TestHandleStatusRejectsWrongMethod(t *testing.T) {
-	svc := newTestService(t)
+	svc := newTestService()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/webdatasource/status", nil)
 	rec := httptest.NewRecorder()
@@ -48,7 +56,7 @@ func TestHandleStatusRejectsWrongMethod(t *testing.T) {
 }
 
 func TestHandleSettingsRejectsBadJSON(t *testing.T) {
-	svc := newTestService(t)
+	svc := newTestService()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/webdatasource/settings", strings.NewReader("{"))
 	rec := httptest.NewRecorder()
