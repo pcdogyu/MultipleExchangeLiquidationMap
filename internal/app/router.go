@@ -19,15 +19,16 @@ import (
 
 func NewRouter(core *liqmap.App, debug bool) *http.ServeMux {
 	mux := http.NewServeMux()
-	home.Mount(mux, adapters.NewHome(core))
-	config.Mount(mux, adapters.NewConfig(core))
+	set := adapters.NewSet(core)
+	home.Mount(mux, set.Home)
+	config.Mount(mux, set.Config)
 	monitor.Mount(mux)
-	bookmap.Mount(mux, adapters.NewBookmap(core))
-	liquidations.Mount(mux, adapters.NewLiquidations(core))
-	bubbles.Mount(mux, adapters.NewBubbles(core))
-	webdatasource.Mount(mux, adapters.NewWebDataSource(core))
-	channel.Mount(mux, adapters.NewChannel(core))
-	analysis.Mount(mux, adapters.NewAnalysis(core))
+	bookmap.Mount(mux, set.Bookmap)
+	liquidations.Mount(mux, set.Liquidations)
+	bubbles.Mount(mux, set.Bubbles)
+	webdatasource.Mount(mux, set.WebDataSource)
+	channel.Mount(mux, set.Channel)
+	analysis.Mount(mux, set.Analysis)
 	system.Mount(mux, debug)
 	return mux
 }
