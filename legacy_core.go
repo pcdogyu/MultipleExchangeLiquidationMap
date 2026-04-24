@@ -371,13 +371,6 @@ func (a *App) saveModelMapSnapshot(symbol string, windowDays int, configRev int6
 		WHERE symbol=? AND window_days=? AND config_rev=? AND generated_at<?`, symbol, windowDays, configRev, cutoff)
 }
 
-func parsePositiveIntSetting(raw string, fallback int) int {
-	if n, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && n > 0 {
-		return n
-	}
-	return fallback
-}
-
 func parseClockMinutes(raw string) (int, bool) {
 	parts := strings.Split(strings.TrimSpace(raw), ":")
 	if len(parts) != 2 {
@@ -579,14 +572,6 @@ func (a *App) loadSettings() ChannelSettings {
 	}
 }
 
-func parseBoolSetting(raw string, fallback bool) bool {
-	s := strings.ToLower(strings.TrimSpace(raw))
-	if s == "" {
-		return fallback
-	}
-	return s == "1" || s == "true" || s == "yes" || s == "on"
-}
-
 func (a *App) loadModelConfig() ModelConfig {
 	cfg := ModelConfig{
 		LookbackMin:           a.getSettingInt("model_lookback_min", defaultLookbackMin),
@@ -625,56 +610,6 @@ func (a *App) loadModelConfig() ModelConfig {
 		cfg.IntensityScale = 1.0
 	}
 	return cfg
-}
-
-func parseCSVFloats(raw string) []float64 {
-	parts := strings.Split(raw, ",")
-	out := make([]float64, 0, len(parts))
-	for _, p := range parts {
-		v, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
-		if err != nil || v <= 0 {
-			continue
-		}
-		out = append(out, v)
-	}
-	return out
-}
-
-func parseCSVNonNegFloats(raw string) []float64 {
-	parts := strings.Split(raw, ",")
-	out := make([]float64, 0, len(parts))
-	for _, p := range parts {
-		v, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
-		if err != nil || v < 0 {
-			continue
-		}
-		out = append(out, v)
-	}
-	return out
-}
-
-func autoMaintMarginForLeverage(lev, mmDefault float64) float64 {
-	if !(lev > 0) {
-		return mmDefault
-	}
-	// Empirical tweak: raise MM for mid leverage so 20x short liq sits closer to
-	// ~+4% band (e.g. 2271 when mark~2185).
-	mm := mmDefault + 0.11/lev
-	if mm < mmDefault {
-		mm = mmDefault
-	}
-	if mm > 0.02 {
-		mm = 0.02
-	}
-	return math.Round(mm*10000) / 10000
-}
-
-func autoMaintMarginCSV(levs []float64, mmDefault float64) string {
-	parts := make([]string, 0, len(levs))
-	for _, lev := range levs {
-		parts = append(parts, fmt.Sprintf("%.4f", autoMaintMarginForLeverage(lev, mmDefault)))
-	}
-	return strings.Join(parts, ",")
 }
 
 func (a *App) saveModelConfig(req ModelConfig) error {
