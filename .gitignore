@@ -1,0 +1,21 @@
+liqmap.db
+liqmap.db-shm
+liqmap.db-wal
+multipleexchangeliquidationmap.exe
+.gocache/
+debug*
+server.log
+*.log
+*.disabled
+*test*
+
+# certificates / keys
+pem/
+*.pem
+fetch_coinglass_liq_v14.py
+coinglass_profile/
+coinglass_profile_inspect/
+.claude/
+*.bak
+*.bak_edit
+*.exe~
