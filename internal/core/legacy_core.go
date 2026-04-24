@@ -4029,7 +4029,7 @@ func (a *App) backfillOKXLiquidations(ctx context.Context, instID string, ctVal 
 }
 
 func (a *App) syncBinanceLiquidations(ctx context.Context, symbol string) {
-	wsURL := "wss://fstream.binance.com/ws/" + strings.ToLower(symbol) + "@forceOrder"
+	wsURL := "wss://fstream.binance.com/market/ws/" + strings.ToLower(symbol) + "@forceOrder"
 	for {
 		if !a.waitExchangeRetry(ctx, "binance", 0) {
 			return

@@ -299,7 +299,7 @@ func (a *App) runLiquidationBatchGroup(ctx context.Context, runners []func(conte
 func (a *App) syncBinanceAllLiquidations(ctx context.Context) {
 	const exchange = "binance"
 	a.setLiquidationWSSubscribed(exchange, "all-market", -1)
-	wsURL := "wss://fstream.binance.com/ws/!forceOrder@arr"
+	wsURL := "wss://fstream.binance.com/market/ws/!forceOrder@arr"
 	for {
 		if !a.waitExchangeRetry(ctx, exchange, 0) {
 			return
