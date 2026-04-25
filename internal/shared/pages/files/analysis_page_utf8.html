@@ -46,6 +46,10 @@ h1{margin:10px 0 10px;font-size:34px;line-height:1.15}
 .broadcast ul{margin:12px 0 0;padding-left:18px;color:#40506a}
 .metric-card{padding:18px;background:linear-gradient(180deg,rgba(255,255,255,.92),rgba(255,255,255,.72));border:1px solid var(--line);border-radius:18px}
 .metric-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.metric-head{display:flex;align-items:center;gap:8px}
+.help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:999px;border:1px solid #c8d2e3;background:#fff;color:#50607d;font-size:11px;font-weight:800;cursor:help;flex:0 0 auto}
+.help-tip{position:absolute;top:24px;right:0;z-index:5;display:none;min-width:240px;max-width:320px;padding:10px 12px;border-radius:12px;background:#172033;color:#f6f7fb;font-size:12px;line-height:1.6;box-shadow:0 12px 30px rgba(17,24,39,.22);white-space:normal;text-align:left}
+.help:hover .help-tip{display:block}
 .metric-value{font-size:30px;font-weight:800;line-height:1.1;margin-top:10px}
 .metric-sub{font-size:13px;color:#38465e;margin-top:8px}
 .score{display:flex;align-items:flex-end;justify-content:space-between;gap:12px}
@@ -165,6 +169,17 @@ function fmtSigned(v,unit){const n=Number(v||0);if(!isFinite(n)) return '-';if(u
 function fmtTime(ts){const n=Number(ts||0);if(!n) return '-';const d=new Date(n);const p=x=>String(x).padStart(2,'0');return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());}
 function scoreToneLabel(score){const n=Number(score||0);if(n>=80) return '高风险';if(n>=65) return '偏高';if(n>=50) return '中性偏高';if(n>=35) return '中性';return '偏低';}
 function pillLabel(tone){if(tone==='high') return '高关注';if(tone==='medium') return '中等';if(tone==='low') return '偏弱';if(tone==='up') return '偏上';if(tone==='down') return '偏下';return '中性';}
+function indicatorFormula(label){
+  const text=String(label||'');
+  if(text.includes('重合强度')) return '公式：100 - min(100, 跨周期最高柱最大价差 / 3)。仅统计主导一侧在 1D / 7D / 30D 的最高柱；窗口越齐、价差越小，分数越高。';
+  if(text.includes('迁移速度')) return '公式：平均(|当前主清算带价格 - 上一份同窗口主清算带价格|) / 时间间隔(小时)。分别计算 1D、7D、30D 后取平均。';
+  if(text.includes('现价到主清算带距离')) return '公式：|主导清算带加权价格 - 当前价格|。主导清算带价格 = Σ(价格 × 最高柱强度) / Σ最高柱强度；同时展示相对现价百分比。';
+  if(text.includes('压力偏向')) return '公式：(上方空头清算带加权强度 - 下方多头清算带加权强度) / max(总强度, 1) × 100。正值偏向上方扫空，负值偏向下方踩踏。';
+  return '基于 1D / 7D / 30D 页面清算分布计算。';
+}
+function helpBubble(label){
+  return '<span class="help">?<span class="help-tip">'+esc(indicatorFormula(label))+'</span></span>';
+}
 
 function showLoadError(message){
   const text=message||'分析接口加载失败';
@@ -203,7 +218,7 @@ async function load(){
   document.getElementById('broadcastText').textContent=d.broadcast?.text||'-';
   document.getElementById('broadcastBullets').innerHTML=(d.broadcast?.bullets||[]).map(it=>'<li>'+esc(it)+'</li>').join('');
 
-  const indicators=(d.indicators||[]).map(it=>'<div class="metric-card"><div class="metric-top"><div class="small">'+esc(it.label||'-')+'</div><span class="pill '+(it.tone||'flat')+'">'+esc(pillLabel(it.tone))+'</span></div><div class="metric-value">'+esc(it.value||'-')+'</div><div class="metric-sub">'+esc(it.subvalue||'-')+'</div><div class="small" style="margin-top:10px">'+esc(it.note||'-')+'</div></div>').join('');
+  const indicators=(d.indicators||[]).map(it=>'<div class="metric-card"><div class="metric-top"><div class="metric-head"><div class="small">'+esc(it.label||'-')+'</div>'+helpBubble(it.label)+'</div><span class="pill '+(it.tone||'flat')+'">'+esc(pillLabel(it.tone))+'</span></div><div class="metric-value">'+esc(it.value||'-')+'</div><div class="metric-sub">'+esc(it.subvalue||'-')+'</div><div class="small" style="margin-top:10px">'+esc(it.note||'-')+'</div></div>').join('');
   document.getElementById('indicators').innerHTML=indicators||'<div class="panel card small">暂无多周期指标</div>';
 
   const scores=(d.risk_scores||[]).map(it=>'<div class="panel card"><div class="small">'+esc(it.label||'-')+'</div><div class="score"><div class="num">'+Math.round(Number(it.score||0))+'</div><span class="pill '+(it.tone||'low')+'">'+esc(scoreToneLabel(it.score))+'</span></div></div>').join('');
