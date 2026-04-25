@@ -47,6 +47,34 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,
 .kv .k{font-size:12px;color:var(--muted)}
 .kv .v{font-size:18px;font-weight:800;margin-top:4px}
 .status-foot{margin-top:10px;min-height:18px;word-break:break-word}
+.section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.section-title{margin:0;font-size:22px;font-weight:800}
+.period-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:14px}
+.period-card{position:relative;border:1px solid var(--line);border-radius:16px;padding:14px;background:var(--panel);overflow:visible;box-shadow:0 1px 2px rgba(15,23,42,.04);transition:transform .16s ease,box-shadow .16s ease}
+.period-card:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(15,23,42,.12)}
+.period-card.long-dominant{border-color:rgba(22,163,74,.28);background:linear-gradient(180deg,rgba(22,163,74,.08),rgba(255,255,255,.98))}
+.period-card.short-dominant{border-color:rgba(220,38,38,.28);background:linear-gradient(180deg,rgba(220,38,38,.08),rgba(255,255,255,.98))}
+.period-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.period-label{font-size:13px;color:var(--muted);font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.period-badge{display:inline-flex;align-items:center;padding:5px 10px;border-radius:999px;font-size:12px;font-weight:700}
+.period-card.long-dominant .period-badge{background:rgba(22,163,74,.14);color:var(--good)}
+.period-card.short-dominant .period-badge{background:rgba(220,38,38,.14);color:var(--bad)}
+.period-total{margin-top:14px;font-size:30px;font-weight:800}
+.period-sub{margin-top:6px;font-size:12px;color:var(--muted)}
+.period-push{margin-top:12px;font-size:13px;font-weight:700}
+.period-bar{display:flex;height:10px;border-radius:999px;overflow:hidden;background:#e2e8f0;margin-top:14px}
+.period-bar-long{background:rgba(22,163,74,.78)}
+.period-bar-short{background:rgba(220,38,38,.78)}
+.period-foot{margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted)}
+.period-tip{position:absolute;left:50%;top:-10px;transform:translate(-50%,-100%);display:none;min-width:220px;padding:12px 14px;border-radius:14px;border:1px solid var(--line);background:#fff;box-shadow:0 18px 40px rgba(15,23,42,.18);z-index:4;pointer-events:none}
+.period-card:hover .period-tip{display:block}
+.period-tip-title{font-size:12px;color:var(--muted);margin-bottom:8px}
+.period-tip-row{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px}
+.period-tip-row+.period-tip-row{margin-top:6px}
+.pattern-card{min-width:280px;max-width:620px;border:1px solid var(--line);border-radius:16px;padding:14px;background:linear-gradient(180deg,rgba(37,99,235,.06),rgba(255,255,255,.96))}
+.pattern-card .k{font-size:12px;color:var(--muted)}
+.pattern-card .v{margin-top:8px;font-size:18px;font-weight:800}
+.pattern-summary{margin-top:8px;font-size:13px;line-height:1.6;color:var(--ink)}
 .table-wrap{overflow:auto}
 table{width:100%;border-collapse:collapse;min-width:920px}
 th,td{border-bottom:1px solid #e5e7eb;padding:10px 12px;text-align:center;font-size:13px;white-space:nowrap}
@@ -64,17 +92,23 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04
 .upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}
 .upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}
 [data-theme="dark"]{--bg:#000;--ink:#f8fafc;--muted:#cbd5e1;--panel:#000;--line:#263041}
-[data-theme="dark"] .field select,[data-theme="dark"] .field input,[data-theme="dark"] .btn,[data-theme="dark"] .kv,[data-theme="dark"] .status-card,[data-theme="dark"] .retry-btn{background:#000;color:#f8fafc;border-color:#475569}
+[data-theme="dark"] .field select,[data-theme="dark"] .field input,[data-theme="dark"] .btn,[data-theme="dark"] .kv,[data-theme="dark"] .status-card,[data-theme="dark"] .retry-btn,[data-theme="dark"] .period-card,[data-theme="dark"] .pattern-card,[data-theme="dark"] .period-tip{background:#000;color:#f8fafc;border-color:#475569}
+[data-theme="dark"] .period-card.long-dominant{background:linear-gradient(180deg,rgba(22,163,74,.14),rgba(0,0,0,.98))}
+[data-theme="dark"] .period-card.short-dominant{background:linear-gradient(180deg,rgba(220,38,38,.14),rgba(0,0,0,.98))}
+[data-theme="dark"] .pattern-card{background:linear-gradient(180deg,rgba(37,99,235,.16),rgba(0,0,0,.98))}
+[data-theme="dark"] .period-tip{background:#020617}
 [data-theme="dark"] th,[data-theme="dark"] td{border-bottom-color:#263041}
-[data-theme="dark"] .title-wrap h2,[data-theme="dark"] .status-name,[data-theme="dark"] .kv .v{color:#f8fafc}
+[data-theme="dark"] .title-wrap h2,[data-theme="dark"] .status-name,[data-theme="dark"] .kv .v,[data-theme="dark"] .section-title,[data-theme="dark"] .period-total,[data-theme="dark"] .pattern-card .v{color:#f8fafc}
 @media (max-width:1080px){
   .status-grid{grid-template-columns:1fr}
+  .period-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media (max-width:880px){
   .menu{display:none}
   .topbar{flex-direction:column}
   .controls{width:100%}
   .field{min-width:calc(50% - 5px)}
+  .period-grid{grid-template-columns:1fr}
 }
 </style>
 </head>
