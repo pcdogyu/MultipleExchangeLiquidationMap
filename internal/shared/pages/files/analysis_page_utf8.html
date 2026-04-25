@@ -62,8 +62,18 @@ h1{margin:10px 0 10px;font-size:34px;line-height:1.15}
 .zone-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:8px}
 .zone-price{font-size:28px;font-weight:800}
 .zone-meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
-.delta{padding:16px;border:1px solid var(--line);border-radius:16px;background:linear-gradient(180deg,rgba(255,255,255,.88),rgba(255,255,255,.66))}
-.delta-val{font-size:28px;font-weight:800;margin:6px 0}
+.trend-card{padding:16px;border:1px solid var(--line);border-radius:16px;background:linear-gradient(180deg,rgba(255,255,255,.92),rgba(255,255,255,.72));display:flex;flex-direction:column;gap:10px;min-height:224px}
+.trend-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.trend-value{font-size:30px;font-weight:800;line-height:1.05}
+.trend-sub{font-size:12px;color:#42506a;line-height:1.6}
+.trend-chart{height:92px;border-radius:14px;background:linear-gradient(180deg,rgba(194,106,45,.06),rgba(20,116,111,.08));border:1px solid rgba(99,112,138,.10);padding:8px}
+.trend-chart svg{display:block;width:100%;height:100%}
+.trend-grid{stroke:rgba(99,112,138,.18);stroke-width:1}
+.trend-line{fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+.trend-line.up{stroke:var(--accent)}
+.trend-line.down{stroke:var(--accent2)}
+.trend-line.flat{stroke:#516179}
+.trend-axis{display:flex;justify-content:space-between;gap:12px;font-size:11px;color:var(--muted)}
 .exchange-card{padding:18px;border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,.66)}
 .exchange-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
 .exchange-name{font-size:22px;font-weight:800}
@@ -141,7 +151,7 @@ h1{margin:10px 0 10px;font-size:34px;line-height:1.15}
 
   <div class="section">
     <h2>近几小时变化摘要</h2>
-    <div class="grid2" id="changes"></div>
+    <div class="grid4" id="changes"></div>
   </div>
 
   <div class="section">
@@ -202,6 +212,53 @@ function helpBubble(label){
   return '<span class="help">?<span class="help-tip">'+esc(indicatorFormula(label))+'</span></span>';
 }
 
+function formatTrendValue(v,unit){
+  const n=Number(v||0);
+  if(!isFinite(n)) return '-';
+  if(unit==='USD') return fmtMoney(n);
+  if(unit==='rate') return (n>=0?'+':'')+n.toFixed(6);
+  if(unit==='score') return (n>=0?'+':'')+n.toFixed(1);
+  return (n>=0?'+':'')+n.toFixed(1);
+}
+
+function sparkline(series,tone){
+  const pts=Array.isArray(series)?series:[];
+  if(!pts.length){
+    return '<div class="trend-chart"><svg viewBox="0 0 240 76" preserveAspectRatio="none"><line class="trend-grid" x1="0" y1="38" x2="240" y2="38"></line></svg></div>';
+  }
+  const values=pts.map(it=>Number(it&&it.value||0)).filter(v=>isFinite(v));
+  if(!values.length){
+    return '<div class="trend-chart"><svg viewBox="0 0 240 76" preserveAspectRatio="none"><line class="trend-grid" x1="0" y1="38" x2="240" y2="38"></line></svg></div>';
+  }
+  const min=Math.min.apply(null,values);
+  const max=Math.max.apply(null,values);
+  const span=(max-min)||1;
+  const width=240;
+  const height=76;
+  const path=pts.map((it,idx)=>{
+    const x=pts.length===1?width/2:(idx*(width/(pts.length-1)));
+    const value=Number(it&&it.value||0);
+    const y=height-(((value-min)/span)*(height-8))-4;
+    return (idx===0?'M':'L')+x.toFixed(2)+','+y.toFixed(2);
+  }).join(' ');
+  return '<div class="trend-chart"><svg viewBox="0 0 240 76" preserveAspectRatio="none"><line class="trend-grid" x1="0" y1="38" x2="240" y2="38"></line><path class="trend-line '+esc(tone||'flat')+'" d="'+path+'"></path></svg></div>';
+}
+
+function renderChangeCard(it){
+  const tone=it.tone||'flat';
+  const pushTone=tone==='up'||tone==='down'?tone:'flat';
+  const pushText=it.push_direction||'-';
+  return '<div class="trend-card">'
+    +'<div class="trend-top"><div class="small">'+esc(it.label||'-')+'</div><span class="pill '+tone+'">'+esc(pillLabel(tone))+'</span></div>'
+    +'<div class="trend-value">'+formatTrendValue(it.value,it.unit)+'</div>'
+    +'<div class="trend-sub">'+esc(it.subvalue||'-')+'</div>'
+    +'<div class="metric-push '+pushTone+'">推动方向：'+esc(pushText)+'</div>'
+    +sparkline(it.series,tone)
+    +'<div class="trend-axis"><span>24h 前</span><span>现在</span></div>'
+    +'<div class="small">'+esc(it.note||'-')+'</div>'
+    +'</div>';
+}
+
 function showLoadError(message){
   const text=message||'分析接口加载失败';
   document.getElementById('title').textContent='加载失败';
@@ -248,7 +305,7 @@ async function load(){
   const zones=(d.key_zones||[]).map(it=>'<div class="zone"><div class="zone-head"><div><div class="small">'+esc(it.name||'-')+'</div><div class="zone-price">'+fmtPrice(it.price)+'</div></div><span class="pill '+(it.side==='up'?'up':'down')+'">'+(it.side==='up'?'上方':'下方')+'</span></div><div class="small">'+esc(it.note||'-')+'</div><div class="zone-meta"><span class="small">距离现价 '+fmtPrice(it.distance)+'</span><span class="small">强度 '+fmtMoney(it.notional_usd)+' USD</span></div></div>').join('');
   document.getElementById('zones').innerHTML=zones||'<div class="panel card small">暂无关键区间</div>';
 
-  const changes=(d.changes||[]).map(it=>'<div class="delta"><div class="small">'+esc(it.label||'-')+'</div><div class="delta-val">'+fmtSigned(it.value,it.unit)+'</div><span class="pill '+(it.tone||'flat')+'">'+esc(pillLabel(it.tone))+'</span><div class="small" style="margin-top:10px">'+esc(it.note||'-')+'</div></div>').join('');
+  const changes=(d.changes||[]).map(renderChangeCard).join('');
   document.getElementById('changes').innerHTML=changes||'<div class="panel card small">暂无变化摘要</div>';
 
   const cards=(d.exchange_cards||[]).map(it=>'<div class="exchange-card"><div class="exchange-top"><div><div class="exchange-name">'+esc(it.exchange||'-')+'</div><div class="small">'+esc(it.summary||'-')+'</div></div><span class="pill '+(it.focus_side||'flat')+'">'+esc(it.bias||'-')+'</span></div><div class="exchange-grid"><div class="kv"><div class="k">标记价格</div><div class="v">'+fmtPrice(it.mark_price)+'</div></div><div class="kv"><div class="k">OI 美元值</div><div class="v">'+fmtMoney(it.oi_value_usd)+'</div></div><div class="kv"><div class="k">空头风险分</div><div class="v">'+Math.round(Number(it.short_risk_score||0))+'</div></div><div class="kv"><div class="k">多头风险分</div><div class="v">'+Math.round(Number(it.long_risk_score||0))+'</div></div><div class="kv"><div class="k">资金费率</div><div class="v">'+Number(it.funding_rate||0).toFixed(6)+'</div></div><div class="kv"><div class="k">近 1 小时清算</div><div class="v">'+fmtMoney(it.recent_liquid_usd)+'</div></div><div class="kv"><div class="k">关注价位</div><div class="v">'+fmtPrice(it.focus_price)+'</div></div><div class="kv"><div class="k">多空比</div><div class="v">'+(Number(it.long_short_ratio||0)>0?Number(it.long_short_ratio||0).toFixed(2):'-')+'</div></div></div></div>').join('');

@@ -23,11 +23,19 @@ type AnalysisKeyZone struct {
 }
 
 type AnalysisDelta struct {
-	Label string  `json:"label"`
+	Label         string                `json:"label"`
+	Value         float64               `json:"value"`
+	Unit          string                `json:"unit"`
+	Tone          string                `json:"tone"`
+	Subvalue      string                `json:"subvalue,omitempty"`
+	PushDirection string                `json:"push_direction,omitempty"`
+	Note          string                `json:"note"`
+	Series        []AnalysisSeriesPoint `json:"series,omitempty"`
+}
+
+type AnalysisSeriesPoint struct {
+	TS    int64   `json:"ts"`
 	Value float64 `json:"value"`
-	Unit  string  `json:"unit"`
-	Tone  string  `json:"tone"`
-	Note  string  `json:"note"`
 }
 
 type AnalysisBacktest struct {

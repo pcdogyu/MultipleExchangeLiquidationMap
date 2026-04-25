@@ -1,4 +1,4 @@
-package liqmap
+﻿package liqmap
 
 import (
 	"bytes"
@@ -361,17 +361,17 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 			if errText == "" {
 				errText = "no 30-day webdatasource snapshot available"
 			}
-			msg := fmt.Sprintf("数据缺失: %s", errText)
+			msg := fmt.Sprintf("鏁版嵁缂哄け: %s", errText)
 			a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
 			errs = append(errs, msg)
 		} else {
 			webImage, err := a.captureWebDataSourceScreenshotJPEG("30d")
 			if err != nil {
-				msg := fmt.Sprintf("截图失败: %v", err)
+				msg := fmt.Sprintf("鎴浘澶辫触: %v", err)
 				a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
 				errs = append(errs, msg)
 			} else if err := a.sendTelegramPhoto("", webImage); err != nil {
-				msg := fmt.Sprintf("发送失败: %v", err)
+				msg := fmt.Sprintf("鍙戦€佸け璐? %v", err)
 				a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
 				errs = append(errs, msg)
 			} else {
@@ -384,11 +384,11 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 	if settings.Group2Enabled {
 		monitorImage, err := a.captureMonitorScreenshotJPEG(windowDays)
 		if err != nil {
-			msg := fmt.Sprintf("截图失败: %v", err)
+			msg := fmt.Sprintf("鎴浘澶辫触: %v", err)
 			a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "failed", msg)
 			errs = append(errs, msg)
 		} else if err := a.sendTelegramPhoto("", monitorImage); err != nil {
-			msg := fmt.Sprintf("发送失败: %v", err)
+			msg := fmt.Sprintf("鍙戦€佸け璐? %v", err)
 			a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "failed", msg)
 			errs = append(errs, msg)
 		} else {
@@ -400,7 +400,7 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 	if settings.Group3Enabled {
 		text := a.buildTelegramThirtyDayTextV4(monitorReport, monitorBands, webMap)
 		if err := a.sendTelegramText(text); err != nil {
-			msg := fmt.Sprintf("发送失败: %v", err)
+			msg := fmt.Sprintf("鍙戦€佸け璐? %v", err)
 			a.recordTelegramSendHistory(sendMode, 3, "monitor-30d-text", "failed", msg)
 			errs = append(errs, msg)
 		} else {
@@ -412,11 +412,11 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 	if settings.Group4Enabled {
 		analysisImage, err := a.captureAnalysisScreenshotJPEG()
 		if err != nil {
-			msg := fmt.Sprintf("截图失败: %v", err)
+			msg := fmt.Sprintf("鎴浘澶辫触: %v", err)
 			a.recordTelegramSendHistory(sendMode, 4, "analysis-image", "failed", msg)
 			errs = append(errs, msg)
 		} else if err := a.sendTelegramPhoto("", analysisImage); err != nil {
-			msg := fmt.Sprintf("发送失败: %v", err)
+			msg := fmt.Sprintf("鍙戦€佸け璐? %v", err)
 			a.recordTelegramSendHistory(sendMode, 4, "analysis-image", "failed", msg)
 			errs = append(errs, msg)
 		} else {
@@ -427,11 +427,11 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 	if settings.Group5Enabled {
 		snapshot, err := loadAnalysisSnapshot()
 		if err != nil {
-			msg := fmt.Sprintf("生成日内分析失败: %v", err)
+			msg := fmt.Sprintf("鐢熸垚鏃ュ唴鍒嗘瀽澶辫触: %v", err)
 			a.recordTelegramSendHistory(sendMode, 5, "analysis-text", "failed", msg)
 			errs = append(errs, msg)
 		} else if err := a.sendTelegramText(a.buildAnalysisTelegramText(snapshot)); err != nil {
-			msg := fmt.Sprintf("发送失败: %v", err)
+			msg := fmt.Sprintf("鍙戦€佸け璐? %v", err)
 			a.recordTelegramSendHistory(sendMode, 5, "analysis-text", "failed", msg)
 			errs = append(errs, msg)
 		} else {
@@ -776,7 +776,7 @@ func (a *App) renderHeatReportPNG(r HeatReportData) ([]byte, error) {
 		} else if b.UpNotionalUSD > b.DownNotionalUSD {
 			diffClass = "diff-short"
 		}
-		rows.WriteString(fmt.Sprintf(`<tr class="%s"><td>%d鐐瑰唴</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
+		rows.WriteString(fmt.Sprintf(`<tr class="%s"><td>%d閻愮懓鍞?/td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
 			cls, b.Band, b.DownPrice, b.DownNotionalUSD/1e8, b.UpPrice, b.UpNotionalUSD/1e8, diffClass, b.DiffUSD/1e8))
 	}
 	longestDiffClass := "diff-flat"
@@ -785,7 +785,7 @@ func (a *App) renderHeatReportPNG(r HeatReportData) ([]byte, error) {
 	} else if r.ShortPeak.SingleUSD > r.LongPeak.SingleUSD {
 		longestDiffClass = "diff-short"
 	}
-	rows.WriteString(fmt.Sprintf(`<tr class="longest"><td>最长柱</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
+	rows.WriteString(fmt.Sprintf(`<tr class="longest"><td>鏈€闀挎煴</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
 		r.LongPeak.Price, r.LongPeak.SingleUSD/1e8, r.ShortPeak.Price, r.ShortPeak.SingleUSD/1e8, longestDiffClass, math.Abs(r.LongPeak.SingleUSD-r.ShortPeak.SingleUSD)/1e8))
 	html := `<!doctype html><html><head><meta charset="utf-8"><style>
 body{margin:0;background:#fff;font-family:Arial,"Microsoft YaHei",sans-serif;color:#34445a}
@@ -845,7 +845,7 @@ func buildHeatReportTableHTML(r HeatReportData) string {
 		} else if b.UpNotionalUSD > b.DownNotionalUSD {
 			diffClass = "diff-short"
 		}
-		rows.WriteString(fmt.Sprintf(`<tr class="%s"><td>%d点内</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
+		rows.WriteString(fmt.Sprintf(`<tr class="%s"><td>%d鐐瑰唴</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
 			cls, b.Band, b.DownPrice, b.DownNotionalUSD/1e8, b.UpPrice, b.UpNotionalUSD/1e8, diffClass, b.DiffUSD/1e8))
 	}
 	longestDiffClass := "diff-flat"
@@ -854,7 +854,7 @@ func buildHeatReportTableHTML(r HeatReportData) string {
 	} else if r.ShortPeak.SingleUSD > r.LongPeak.SingleUSD {
 		longestDiffClass = "diff-short"
 	}
-	rows.WriteString(fmt.Sprintf(`<tr class="longest"><td>最长柱</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
+	rows.WriteString(fmt.Sprintf(`<tr class="longest"><td>鏈€闀挎煴</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
 		r.LongPeak.Price, r.LongPeak.SingleUSD/1e8, r.ShortPeak.Price, r.ShortPeak.SingleUSD/1e8, longestDiffClass, math.Abs(r.LongPeak.SingleUSD-r.ShortPeak.SingleUSD)/1e8))
 	return `<!doctype html><html><head><meta charset="utf-8"></head><body><table><thead>` +
 		`<tr class="group"><th rowspan="2">Band</th><th colspan="2" class="down">Lower Longs</th><th colspan="2">Upper Shorts</th><th rowspan="2">Diff (yi)</th></tr>` +
@@ -1054,8 +1054,8 @@ func (a *App) captureAnalysisScreenshotJPEG() ([]byte, error) {
 		if(!wrap || !title || !broadcast) return false;
 		const titleText=(title.textContent||'').trim();
 		const broadcastText=(broadcast.textContent||'').trim();
-		if(!titleText || titleText==='加载中...' || titleText==='加载失败') return false;
-		if(!broadcastText || broadcastText==='加载中...' || broadcastText==='加载失败') return false;
+		if(!titleText || titleText==='鍔犺浇涓?..' || titleText==='鍔犺浇澶辫触') return false;
+		if(!broadcastText || broadcastText==='鍔犺浇涓?..' || broadcastText==='鍔犺浇澶辫触') return false;
 		return indicators.length > 0;
 	})()`
 	return captureElementJPEGWithScale(pageURL, "#analysisCapture", 1640, 1760, 1.6, prepare, wait)
@@ -1063,19 +1063,19 @@ func (a *App) captureAnalysisScreenshotJPEG() ([]byte, error) {
 
 func (a *App) buildAnalysisTelegramText(snapshot AnalysisSnapshot) string {
 	lines := []string{
-		fmt.Sprintf("<b>ETH 日内分析 | 现价$%s</b>", formatPrice1(snapshot.CurrentPrice)),
+		fmt.Sprintf("<b>ETH 鏃ュ唴鍒嗘瀽 | 鐜颁环$%s</b>", formatPrice1(snapshot.CurrentPrice)),
 		escTelegramHTML(snapshot.Broadcast.Headline),
 		escTelegramHTML(snapshot.Broadcast.Text),
 		"",
-		"<b>多周期指标</b>",
+		"<b>澶氬懆鏈熸寚鏍?/b>",
 	}
 	for _, it := range snapshot.Indicators {
-		lines = append(lines, fmt.Sprintf("• <b>%s</b>: %s", escTelegramHTML(it.Label), escTelegramHTML(strings.TrimSpace(it.Value+" "+it.Subvalue))))
+		lines = append(lines, fmt.Sprintf("鈥?<b>%s</b>: %s", escTelegramHTML(it.Label), escTelegramHTML(strings.TrimSpace(it.Value+" "+it.Subvalue))))
 	}
 	if len(snapshot.Broadcast.Bullets) > 0 {
-		lines = append(lines, "", "<b>播报要点</b>")
+		lines = append(lines, "", "<b>鎾姤瑕佺偣</b>")
 		for _, it := range snapshot.Broadcast.Bullets {
-			lines = append(lines, "• "+escTelegramHTML(it))
+			lines = append(lines, "鈥?"+escTelegramHTML(it))
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -1243,7 +1243,7 @@ func buildTelegramImbalanceLine(b HeatReportBand) string {
 		sign = "-"
 	}
 	return fmt.Sprintf(
-		"<b>%d点内</b> %s(%s%s亿)",
+		"<b>%d鐐瑰唴</b> %s(%s%s浜?",
 		b.Band,
 		telegramImbalanceLabel(b.UpNotionalUSD, b.DownNotionalUSD),
 		sign,
@@ -1259,11 +1259,11 @@ func (a *App) buildTelegramThirtyDayText(monitor HeatReportData) string {
 	bias := func(up, down float64) string {
 		switch {
 		case down > up:
-			return "涓嬫柟鍋忓"
+			return "娑撳鏌熼崑蹇擃樋"
 		case up > down:
-			return "涓婃柟鍋忓"
+			return "娑撳﹥鏌熼崑蹇擃樋"
 		default:
-			return "鍩烘湰鍧囪　"
+			return "閸╃儤婀伴崸鍥€€"
 		}
 	}
 	percent := func(v, total float64) int {
@@ -1318,30 +1318,30 @@ func (a *App) buildTelegramThirtyDayTextV2(monitor HeatReportData, monitorBands 
 	b300 := bandBySize(300)
 
 	imbalanceLine := func(b HeatReportBand) string {
-		side := "基本均衡"
+		side := "鍩烘湰鍧囪　"
 		amount := math.Abs(b.DiffUSD)
 		switch {
 		case b.DownNotionalUSD > b.UpNotionalUSD:
-			side = "多单偏多"
+			side = "澶氬崟鍋忓"
 		case b.UpNotionalUSD > b.DownNotionalUSD:
-			side = "空单偏多"
+			side = "绌哄崟鍋忓"
 		}
-		return fmt.Sprintf("%d点内 %s(%s亿)", b.Band, side, formatYi2(amount))
+		return fmt.Sprintf("%d鐐瑰唴 %s(%s浜?", b.Band, side, formatYi2(amount))
 	}
 
 	lines := []string{
-		fmt.Sprintf("<b>ETH 雷区速报 | 现价$%.1f</b>", monitor.CurrentPrice),
-		fmt.Sprintf("总多单<b>%s亿</b> | 总空单<b>%s亿</b>", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
+		fmt.Sprintf("<b>ETH 闆峰尯閫熸姤 | 鐜颁环$%.1f</b>", monitor.CurrentPrice),
+		fmt.Sprintf("鎬诲鍗?b>%s浜?/b> | 鎬荤┖鍗?b>%s浜?/b>", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
 		"",
-		"<b>多单最长柱</b>",
-		fmt.Sprintf("价格$%.1f | 距现价<b>%.0f点</b>", monitor.LongPeak.Price, monitor.LongPeak.Distance),
-		fmt.Sprintf("单柱%s亿 | 累计<b>%s亿</b>", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
+		"<b>澶氬崟鏈€闀挎煴</b>",
+		fmt.Sprintf("浠锋牸$%.1f | 璺濈幇浠?b>%.0f鐐?/b>", monitor.LongPeak.Price, monitor.LongPeak.Distance),
+		fmt.Sprintf("鍗曟煴%s浜?| 绱<b>%s浜?/b>", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
 		"",
-		"<b>空单最长柱</b>",
-		fmt.Sprintf("价格 $%.1f | 距现价<b>%.0f点</b>", monitor.ShortPeak.Price, monitor.ShortPeak.Distance),
-		fmt.Sprintf("单柱%s亿 | 累计<b>%s亿</b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
+		"<b>绌哄崟鏈€闀挎煴</b>",
+		fmt.Sprintf("浠锋牸 $%.1f | 璺濈幇浠?b>%.0f鐐?/b>", monitor.ShortPeak.Price, monitor.ShortPeak.Distance),
+		fmt.Sprintf("鍗曟煴%s浜?| 绱<b>%s浜?/b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
 		"",
-		"<b>多空失衡概览</b>",
+		"<b>澶氱┖澶辫　姒傝</b>",
 		strings.Replace(imbalanceLine(b20), "20点内", "<b>20点</b>内", 1),
 		strings.Replace(imbalanceLine(b50), "50点内", "<b>50点</b>内", 1),
 		strings.Replace(imbalanceLine(b80), "80点内", "<b>80点</b>内", 1),
@@ -1369,19 +1369,19 @@ func (a *App) buildTelegramThirtyDayTextV3(monitor HeatReportData, monitorBands 
 	longestVerdict := telegramPeakVerdict(monitor.LongPeak, monitor.ShortPeak)
 
 	lines := []string{
-		fmt.Sprintf("<b>ETH 雷区速报 | 现价$%s</b>", formatPrice1(monitor.CurrentPrice)),
-		fmt.Sprintf("下方多单总量<b>%s亿</b> | 上方空单总量<b>%s亿</b>", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
+		fmt.Sprintf("<b>ETH 闆峰尯閫熸姤 | 鐜颁环$%s</b>", formatPrice1(monitor.CurrentPrice)),
+		fmt.Sprintf("涓嬫柟澶氬崟鎬婚噺<b>%s浜?/b> | 涓婃柟绌哄崟鎬婚噺<b>%s浜?/b>", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
 		"",
-		"<b>下方多单最长柱</b>",
-		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice1(monitor.LongPeak.Price), formatPointDistance(monitor.LongPeak.Distance)),
-		fmt.Sprintf("单柱%s亿 | 从现价到该柱累计<b>%s亿</b>", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
+		"<b>涓嬫柟澶氬崟鏈€闀挎煴</b>",
+		fmt.Sprintf("浠锋牸$%s | 璺濈幇浠?b>%s鐐?/b>", formatPrice1(monitor.LongPeak.Price), formatPointDistance(monitor.LongPeak.Distance)),
+		fmt.Sprintf("鍗曟煴%s浜?| 浠庣幇浠峰埌璇ユ煴绱<b>%s浜?/b>", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
 		"",
-		"<b>上方空单最长柱</b>",
-		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice1(monitor.ShortPeak.Price), formatPointDistance(monitor.ShortPeak.Distance)),
-		fmt.Sprintf("单柱%s亿 | 从现价到该柱累计<b>%s亿</b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
-		fmt.Sprintf("最长柱差值<b>%s亿</b> | %s", formatYi2(math.Abs(monitor.LongPeak.SingleUSD-monitor.ShortPeak.SingleUSD)), longestVerdict),
+		"<b>涓婃柟绌哄崟鏈€闀挎煴</b>",
+		fmt.Sprintf("浠锋牸$%s | 璺濈幇浠?b>%s鐐?/b>", formatPrice1(monitor.ShortPeak.Price), formatPointDistance(monitor.ShortPeak.Distance)),
+		fmt.Sprintf("鍗曟煴%s浜?| 浠庣幇浠峰埌璇ユ煴绱<b>%s浜?/b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
+		fmt.Sprintf("鏈€闀挎煴宸€?b>%s浜?/b> | %s", formatYi2(math.Abs(monitor.LongPeak.SingleUSD-monitor.ShortPeak.SingleUSD)), longestVerdict),
 		"",
-		"<b>多空失衡解读</b>",
+		"<b>澶氱┖澶辫　瑙ｈ</b>",
 		buildTelegramImbalanceLine(b20),
 		buildTelegramImbalanceLine(b50),
 		buildTelegramImbalanceLine(b80),
@@ -1401,18 +1401,18 @@ func (a *App) buildTelegramThirtyDayTextV4(monitor HeatReportData, monitorBands 
 		return heatReportBandBySize(monitor, band)
 	}
 	lines := []string{
-		fmt.Sprintf("<b>ETH 雷区速报 | 现价$%s</b>", formatPrice1(monitor.CurrentPrice)),
-		fmt.Sprintf("总多单<b>%s亿</b>|总空单<b>%s亿</b>", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
+		fmt.Sprintf("<b>ETH 闆峰尯閫熸姤 | 鐜颁环$%s</b>", formatPrice1(monitor.CurrentPrice)),
+		fmt.Sprintf("鎬诲鍗?b>%s浜?/b>|鎬荤┖鍗?b>%s浜?/b>", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
 		"",
-		"<b>多单最长柱</b>",
-		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice1(monitor.LongPeak.Price), formatPointDistance(monitor.LongPeak.Distance)),
-		fmt.Sprintf("单柱%s亿 | 累计<b>%s亿</b>", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
+		"<b>澶氬崟鏈€闀挎煴</b>",
+		fmt.Sprintf("浠锋牸$%s | 璺濈幇浠?b>%s鐐?/b>", formatPrice1(monitor.LongPeak.Price), formatPointDistance(monitor.LongPeak.Distance)),
+		fmt.Sprintf("鍗曟煴%s浜?| 绱<b>%s浜?/b>", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
 		"",
-		"<b>空单最长柱</b>",
-		fmt.Sprintf("价格$%s | 距现价<b>%s点</b>", formatPrice1(monitor.ShortPeak.Price), formatPointDistance(monitor.ShortPeak.Distance)),
-		fmt.Sprintf("单柱%s亿 | 累计<b>%s亿</b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
+		"<b>绌哄崟鏈€闀挎煴</b>",
+		fmt.Sprintf("浠锋牸$%s | 璺濈幇浠?b>%s鐐?/b>", formatPrice1(monitor.ShortPeak.Price), formatPointDistance(monitor.ShortPeak.Distance)),
+		fmt.Sprintf("鍗曟煴%s浜?| 绱<b>%s浜?/b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
 		"",
-		"多空失衡概览",
+		"澶氱┖澶辫　姒傝",
 		buildTelegramImbalanceLine(bandBySize(20)),
 		buildTelegramImbalanceLine(bandBySize(50)),
 		buildTelegramImbalanceLine(bandBySize(80)),
@@ -2692,20 +2692,10 @@ func (a *App) buildAnalysisSnapshot() (AnalysisSnapshot, error) {
 	confidence := clamp(math.Abs(shortRiskScore-longRiskScore)*4.5, 18, 92)
 
 	nowTS := time.Now().UnixMilli()
-	oneHour := int64(time.Hour / time.Millisecond)
 	fourHour := int64((4 * time.Hour) / time.Millisecond)
-	up1h, down1h := a.sumBandNotionalInRange(defaultSymbol, dash.CurrentPrice, 50, nowTS-oneHour, nowTS)
-	upPrev1h, downPrev1h := a.sumBandNotionalInRange(defaultSymbol, dash.CurrentPrice, 50, nowTS-2*oneHour, nowTS-oneHour)
 	recent4h := a.sumLiquidationNotionalSince(defaultSymbol, nowTS-fourHour)
-	funding1h := a.avgFundingInRange(defaultSymbol, nowTS-oneHour, nowTS)
-	fundingPrev1h := a.avgFundingInRange(defaultSymbol, nowTS-2*oneHour, nowTS-oneHour)
 
-	changes := []AnalysisDelta{
-		{Label: "上方 50 点风险变化", Value: up1h - upPrev1h, Unit: "USD", Tone: signedTone(up1h - upPrev1h), Note: "比较最近 1 小时与前 1 小时的上方清算累计额。"},
-		{Label: "下方 50 点风险变化", Value: down1h - downPrev1h, Unit: "USD", Tone: signedTone(down1h - downPrev1h), Note: "比较最近 1 小时与前 1 小时的下方清算累计额。"},
-		{Label: "近 4 小时实际清算量", Value: recent4h, Unit: "USD", Tone: scoreTone(clamp(recent4h/1_500_000*100, 0, 100)), Note: "用于判断波动是否正在放大。"},
-		{Label: "资金费率变化", Value: funding1h - fundingPrev1h, Unit: "rate", Tone: signedTone(funding1h - fundingPrev1h), Note: "最近 1 小时平均资金费率相对前 1 小时的变化。"},
-	}
+	changes := a.buildAnalysisChangeCharts(defaultSymbol, 24)
 
 	keyZones := []AnalysisKeyZone{
 		{Name: "上方最近强清算区", Side: "up", Price: dash.Analytics.CoreZone.UpPrice, Distance: nearestZoneDistance(dash.CurrentPrice, dash.Analytics.CoreZone.UpPrice), NotionalUSD: dash.Analytics.CoreZone.UpNotionalUSD, Note: "更适合观察短线挤空触发点。"},
@@ -3150,11 +3140,11 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 		distDown = math.Abs(currentPrice - longPrice)
 	}
 	if distUp < distDown {
-		core.NearestSide = "上方强区"
+		core.NearestSide = "涓婃柟寮哄尯"
 		core.NearestDistance = distUp
 		core.NearestStrongPrice = shortPrice
 	} else if distDown < math.MaxFloat64 {
-		core.NearestSide = "下方强区"
+		core.NearestSide = "涓嬫柟寮哄尯"
 		core.NearestDistance = distDown
 		core.NearestStrongPrice = longPrice
 	}
@@ -3181,9 +3171,9 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 	}
 
 	alert := AlertSummary{
-		Level:       "常规监控",
+		Level:       "甯歌鐩戞帶",
 		Recent1mUSD: a.sumLiquidationNotionalSince(symbol, nowTS-60*1000),
-		Suggestion:  fmt.Sprintf("%.1f / %.1f 关注上下关键价位", b20.UpPrice, b20.DownPrice),
+		Suggestion:  fmt.Sprintf("%.1f / %.1f 鍏虫敞涓婁笅鍏抽敭浠蜂綅", b20.UpPrice, b20.DownPrice),
 	}
 	recentByEx := a.sumLiquidationNotionalByExchangeSince(symbol, nowTS-60*1000)
 	alert.Recent1mBinanceUSD = recentByEx["binance"]
@@ -3196,14 +3186,14 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 		alert.RecentPrice = e.Price
 	}
 	if core.NearestDistance > 0 && core.NearestDistance <= 35 {
-		alert.Level = "临近强区预警"
+		alert.Level = "涓磋繎寮哄尯棰勮"
 	} else if alert.Recent1mUSD >= 2_000_000 {
-		alert.Level = "波动放大预警"
+		alert.Level = "娉㈠姩鏀惧ぇ棰勮"
 	}
-	if verdict20 == "上方偏强" {
-		alert.Suggestion = fmt.Sprintf("%.1f / %.1f 警惕上下双向插针风险", b20.UpPrice, b20.DownPrice)
+	if verdict20 == "涓婃柟鍋忓己" {
+		alert.Suggestion = fmt.Sprintf("%.1f / %.1f 璀︽儠涓婁笅鍙屽悜鎻掗拡椋庨櫓", b20.UpPrice, b20.DownPrice)
 	}
-	if verdict20 == "下方偏强" {
+	if verdict20 == "涓嬫柟鍋忓己" {
 		alert.Suggestion = fmt.Sprintf("%.1f / %.1f lower-side liquidity risk is higher", b20.UpPrice, b20.DownPrice)
 	}
 
@@ -4669,7 +4659,7 @@ func (a *App) runOKXWS(ctx context.Context, instID string) error {
 	}
 }
 
-const analysisHTMLFallback = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>日内分析</title></head><body style="font-family:Segoe UI,Microsoft YaHei,sans-serif;padding:24px"><h2>日内分析页面文件缺失</h2><p>请确认 <code>internal/shared/pages/files/analysis_page_fixed.html</code> 存在，然后刷新页面。</p></body></html>`
+const analysisHTMLFallback = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>鏃ュ唴鍒嗘瀽</title></head><body style="font-family:Segoe UI,Microsoft YaHei,sans-serif;padding:24px"><h2>鏃ュ唴鍒嗘瀽椤甸潰鏂囦欢缂哄け</h2><p>璇风‘璁?<code>internal/shared/pages/files/analysis_page_fixed.html</code> 瀛樺湪锛岀劧鍚庡埛鏂伴〉闈€?/p></body></html>`
 
 const indexHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -4710,10 +4700,10 @@ th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:center}
 .liq-dot.binance{background:rgba(249,115,22,.9)}.liq-dot.okx{background:rgba(234,179,8,.9)}.liq-dot.bybit{background:rgba(103,232,249,.9)}
 .desc{font-size:12px;color:var(--muted);line-height:1.5;margin-top:8px}
 .upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head><body>
-<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/" class="active">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/" class="active">娓呯畻鐑尯</a><a href="/config">妯″瀷閰嶇疆</a><a href="/monitor">闆峰尯鐩戞帶</a><a href="/map">鐩樺彛姹囨€?/a><a href="/liquidations">寮哄钩娓呯畻</a><a href="/bubbles">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel">娑堟伅閫氶亾</a><a href="/analysis">鏃ュ唴鍒嗘瀽</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">涓婚</button><button id="themeDark" onclick="setTheme('dark')">娣辫壊</button><button id="themeLight" onclick="setTheme('light')">娴呰壊</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap"><div class="panel top"><div><h2 style="margin:0 0 6px 0">ETH &#28165;&#31639;&#28909;&#21306;</h2><div class="hint">&#25353; <span class="mono">0</span> / <span class="mono">1</span> / <span class="mono">7</span> / <span class="mono">3</span> &#20999;&#25442; &#26085;&#20869; / 1&#22825; / 7&#22825; / 30&#22825;</div></div><div class="btns"><button data-days="0">&#26085;&#20869;</button><button data-days="1">1&#22825;</button><button data-days="7">7&#22825;</button><button data-days="30">30&#22825;</button></div></div>
 <div class="panel"><div id="status">loading...</div></div>
-<div class="grid"><div class="panel"><h3>ETH 清算地图（OI 增量模型）</h3><div class="heatmap-wrap"><canvas id="liqHeatMap" width="1400" height="320"></canvas><div id="liqTip" class="liq-tip"></div><div class="hint">滚轮缩放，Shift+滚轮左右平移，按住鼠标左键左右拖动。X轴：价格 | 左轴：单价位清算金额 | 右轴：从当前价累计清算金额</div><div id="liqDesc" class="desc"></div></div></div></div></div>
+<div class="grid"><div class="panel"><h3>ETH 娓呯畻鍦板浘锛圤I 澧為噺妯″瀷锛?/h3><div class="heatmap-wrap"><canvas id="liqHeatMap" width="1400" height="320"></canvas><div id="liqTip" class="liq-tip"></div><div class="hint">婊氳疆缂╂斁锛孲hift+婊氳疆宸﹀彸骞崇Щ锛屾寜浣忛紶鏍囧乏閿乏鍙虫嫋鍔ㄣ€俋杞达細浠锋牸 | 宸﹁酱锛氬崟浠蜂綅娓呯畻閲戦 | 鍙宠酱锛氫粠褰撳墠浠风疮璁℃竻绠楅噾棰?/div><div id="liqDesc" class="desc"></div></div></div></div></div>
 <script>
 let currentDays=1;
 let liqMapData=null;
@@ -4732,7 +4722,7 @@ function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n)
 function fmt4(n){return Number(n).toFixed(8)}
 function fitCanvas(id){const c=document.getElementById(id);if(!c)return null;const dpr=window.devicePixelRatio||1;const rect=c.getBoundingClientRect();const W=Math.max(320,Math.floor(rect.width));const H=Math.max(220,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return {c,x,W,H};}
 function hideLiqTip(){const tip=document.getElementById('liqTip');if(tip)tip.style.display='none';}
-function showLiqTip(meta,ev){const tip=document.getElementById('liqTip');if(!tip||!meta||!meta.pts||!meta.pts.length)return;const rect=meta.c.getBoundingClientRect();const mx=ev.clientX-rect.left;let best=null,bd=1e18;for(const it of meta.pts){const d=Math.abs(mx-it.px);if(d<bd){bd=d;best=it;}}const hitW=Math.max(meta.hitW||0,meta.barW||0);if(!best||bd>(hitW*0.5)){hideLiqTip();return;}const hasCum=Number(best.cumTotal||0)>0;const lines=[];lines.push('<div class=\"t\">价格 '+fmtPrice(best.p)+'</div>');lines.push('<div class=\"row\"><span>单价位清算额</span><span>'+fmtAmount(best.total)+'</span></div>');if(hasCum)lines.push('<div class=\"row\"><span>从当前价累计</span><span>'+fmtAmount(best.cumTotal)+'</span></div>');for(const ex of exOrder){const exact=Number((best.ex||{})[ex]||0);const cum=Number((best.cumEx||{})[ex]||0);const v=hasCum?cum:exact;if(!(v>0))continue;lines.push('<div class=\"row\"><span><span class=\"liq-dot '+ex+'\"></span>'+ex.toUpperCase()+(hasCum?' 累计':'')+'</span><span>'+fmtAmount(v)+'</span></div>');}tip.innerHTML=lines.join('');tip.style.display='block';const wrap=document.querySelector('.heatmap-wrap');const wr=wrap?wrap.getBoundingClientRect():rect;let left=(ev.clientX-wr.left)+14,top=(ev.clientY-wr.top)+14;tip.style.left='0px';tip.style.top='0px';const tw=tip.offsetWidth||220,th=tip.offsetHeight||90;if(left+tw>wr.width-10)left=Math.max(8,wr.width-10-tw);if(top+th>wr.height-10)top=Math.max(8,wr.height-10-th);tip.style.left=left+'px';tip.style.top=top+'px';}
+function showLiqTip(meta,ev){const tip=document.getElementById('liqTip');if(!tip||!meta||!meta.pts||!meta.pts.length)return;const rect=meta.c.getBoundingClientRect();const mx=ev.clientX-rect.left;let best=null,bd=1e18;for(const it of meta.pts){const d=Math.abs(mx-it.px);if(d<bd){bd=d;best=it;}}const hitW=Math.max(meta.hitW||0,meta.barW||0);if(!best||bd>(hitW*0.5)){hideLiqTip();return;}const hasCum=Number(best.cumTotal||0)>0;const lines=[];lines.push('<div class=\"t\">浠锋牸 '+fmtPrice(best.p)+'</div>');lines.push('<div class=\"row\"><span>鍗曚环浣嶆竻绠楅</span><span>'+fmtAmount(best.total)+'</span></div>');if(hasCum)lines.push('<div class=\"row\"><span>浠庡綋鍓嶄环绱</span><span>'+fmtAmount(best.cumTotal)+'</span></div>');for(const ex of exOrder){const exact=Number((best.ex||{})[ex]||0);const cum=Number((best.cumEx||{})[ex]||0);const v=hasCum?cum:exact;if(!(v>0))continue;lines.push('<div class=\"row\"><span><span class=\"liq-dot '+ex+'\"></span>'+ex.toUpperCase()+(hasCum?' 绱':'')+'</span><span>'+fmtAmount(v)+'</span></div>');}tip.innerHTML=lines.join('');tip.style.display='block';const wrap=document.querySelector('.heatmap-wrap');const wr=wrap?wrap.getBoundingClientRect():rect;let left=(ev.clientX-wr.left)+14,top=(ev.clientY-wr.top)+14;tip.style.left='0px';tip.style.top='0px';const tw=tip.offsetWidth||220,th=tip.offsetHeight||90;if(left+tw>wr.width-10)left=Math.max(8,wr.width-10-tw);if(top+th>wr.height-10)top=Math.max(8,wr.height-10-th);tip.style.left=left+'px';tip.style.top=top+'px';}
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 function bindLiqHover(){
   const c=document.getElementById('liqHeatMap');
@@ -4815,7 +4805,7 @@ function drawLiqHeat(){
   if(!d||!d.prices||!d.intensity_grid||!d.prices.length){
     hideLiqTip();liqHoverMeta=null;
     x.fillStyle='#64748b';x.font='13px sans-serif';
-    x.fillText('暂无清算地图数据',16,24);
+    x.fillText('鏆傛棤娓呯畻鍦板浘鏁版嵁',16,24);
     return;
   }
 
@@ -4824,7 +4814,7 @@ function drawLiqHeat(){
   if(rows<2||cols<1){
     hideLiqTip();liqHoverMeta=null;
     x.fillStyle='#64748b';x.font='13px sans-serif';
-    x.fillText('暂无清算地图数据',16,24);
+    x.fillText('鏆傛棤娓呯畻鍦板浘鏁版嵁',16,24);
     return;
   }
 
@@ -4850,7 +4840,7 @@ function drawLiqHeat(){
   if(!all.length){
     hideLiqTip();liqHoverMeta=null;
     x.fillStyle='#64748b';x.font='13px sans-serif';
-    x.fillText('暂无清算地图数据',16,24);
+    x.fillText('鏆傛棤娓呯畻鍦板浘鏁版嵁',16,24);
     return;
   }
 
@@ -4956,7 +4946,7 @@ function drawLiqHeat(){
   if(maxCum>0){
     const scy=v=>by-(v/maxCum)*ph;
     x.fillStyle='#475569';
-    x.fillText('累计',W-padR+8,padT-4);
+    x.fillText('绱',W-padR+8,padT-4);
     for(let i=0;i<=4;i++){
       const y=padT+ph*(i/4),val=maxCum*(1-i/4);
       x.fillStyle='#64748b';
@@ -4993,13 +4983,13 @@ function drawLiqHeat(){
     x.beginPath();x.moveTo(cpX,padT);x.lineTo(cpX,by);x.stroke();
     x.setLineDash([]);
     x.fillStyle='#111827';
-    const txt='褰撳墠浠?'+fmtPrice(cp);
+    const txt='瑜版挸澧犳禒?'+fmtPrice(cp);
     const tw=x.measureText(txt).width;
     x.fillText(txt,Math.max(padL,Math.min(cpX+4,W-padR-tw)),padT+12);
   }
   x.fillStyle='#475569';
-  x.fillText('清算金额',padL,padT-4);
-  const xt='价格';
+  x.fillText('娓呯畻閲戦',padL,padT-4);
+  const xt='浠锋牸';
   const xtw=x.measureText(xt).width;
   x.fillText(xt,padL+pw/2-xtw/2,H-8);
   liqHoverMeta={c:c,pts:pts.map(it=>({p:it.p,total:it.total,ex:it.ex,cumTotal:(it.p>=cp?Number(it.cumShortTotal||0):Number(it.cumLongTotal||0)),cumEx:(it.p>=cp?(it.cumShortEx||{}):(it.cumLongEx||{})),px:sx(it.p)})),barW:barW,hitW:barW,pw:pw,padL:padL,baseMin:baseMin,baseMax:baseMax,fullSpan:fullSpan};
@@ -5018,23 +5008,23 @@ function renderLiqDesc(cfg,dash){
   const range=Number(cfg.price_range||cfg.PriceRange||400);
   const wd=Number((dash&&dash.window_days));
   const cutoff=Number((dash&&dash.window_cutoff));
-  let windowText='1天';
+  let windowText='1澶?;
   if(wd===0){
-    windowText='日内（08:00 起）';
+    windowText='鏃ュ唴锛?8:00 璧凤級';
   }else if(wd===7||wd===30||wd===1){
-    windowText=wd+'天';
+    windowText=wd+'澶?;
   }
   let minsText='';
   if(wd===0 && cutoff>0){
     const mins=Math.max(60,Math.ceil((Date.now()-cutoff)/60000));
-    minsText='（约 '+mins+' 分钟）';
+    minsText='锛堢害 '+mins+' 鍒嗛挓锛?;
   }
   const el=document.getElementById('liqDesc');
   if(el){
-    const mmText = mmCSV ? ('mm（按档位）='+mmCSV) : ('mm='+mm.toFixed(4));
-    el.textContent='数据源：Binance / Bybit / OKX 公开接口。模型：按 OI 增量、杠杆权重、资金费率与维护保证金估算清算强度。杠杆档位 '+levs+
-      '，权重 '+ws+'，多空比例使用 clamp(base + funding * '+fs+', 0.2, 0.8)，清算价使用 mark*(1±1/lev∓mm)，'+mmText+'；时间衰减 exp(-'+dk.toFixed(2)+'*age)，邻近扩散 '+ns.toFixed(2)+
-      '。参数：回看 '+windowText+minsText+'，时间桶 '+bucket+' 分钟，价格步长 '+step+'，范围 ±'+range+'。配置入口：/config。';
+    const mmText = mmCSV ? ('mm锛堟寜妗ｄ綅锛?'+mmCSV) : ('mm='+mm.toFixed(4));
+    el.textContent='鏁版嵁婧愶細Binance / Bybit / OKX 鍏紑鎺ュ彛銆傛ā鍨嬶細鎸?OI 澧為噺銆佹潬鏉嗘潈閲嶃€佽祫閲戣垂鐜囦笌缁存姢淇濊瘉閲戜及绠楁竻绠楀己搴︺€傛潬鏉嗘。浣?'+levs+
+      '锛屾潈閲?'+ws+'锛屽绌烘瘮渚嬩娇鐢?clamp(base + funding * '+fs+', 0.2, 0.8)锛屾竻绠椾环浣跨敤 mark*(1卤1/lev鈭搈m)锛?+mmText+'锛涙椂闂磋“鍑?exp(-'+dk.toFixed(2)+'*age)锛岄偦杩戞墿鏁?'+ns.toFixed(2)+
+      '銆傚弬鏁帮細鍥炵湅 '+windowText+minsText+'锛屾椂闂存《 '+bucket+' 鍒嗛挓锛屼环鏍兼闀?'+step+'锛岃寖鍥?卤'+range+'銆傞厤缃叆鍙ｏ細/config銆?;
   }
 }
 function renderTable(rows,headers){if(!rows||!rows.length)return '<div class="hint">\u6682\u65e0\u6570\u636e</div>';let html='<table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>';for(const r of rows) html+='<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>';return html+'</tbody></table>';}
@@ -5077,7 +5067,7 @@ function renderHeatReport(d){
     '<tr><th rowspan="2" class="col-threshold">\u70b9\u6570\u9608\u503c</th><th colspan="2">\u4e0b\u65b9\u591a\u5355</th><th colspan="2">\u4e0a\u65b9\u7a7a\u5355</th></tr>' +
     '<tr><th class="col-down-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-down-size">\u6e05\u7b97\u89c4\u6a21</th><th class="col-up-price">\u6e05\u7b97\u4ef7\u683c</th><th class="col-up-size">\u6e05\u7b97\u89c4\u6a21</th></tr>' +
     '</thead><tbody>';
-  const toScale = n => {n=Number(n||0);const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'浜?;if(a>=1e4)return (n/1e4).toFixed(2)+'涓?;return n.toFixed(2);};
+  const toScale = n => {n=Number(n||0);const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'娴?;if(a>=1e4)return (n/1e4).toFixed(2)+'娑?;return n.toFixed(2);};
   for(const b of bands){
     html += '<tr>' +
       '<td class="col-threshold">'+b.band+'\u70b9\u5185</td>' +
@@ -5113,15 +5103,15 @@ async function load(){
   }
   drawLiqHeat();
 }
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'閸楀洨楠囩€瑰本鍨氶敍宀勨偓鈧崙铏圭垳 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='閸楀洨楠囨潻娑氣柤瀹歌尙绮ㄩ弶鐕傜礄閻樿埖鈧焦婀惌銉礆閿涘矁顕Λ鈧弻銉︽）韫?;return;}}foot.textContent='閸楀洨楠囨禒宥呮躬鏉╂稖顢戦敍宀冾嚞缁嬪秴鎮楅崘宥囨箙';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 initTheme();document.querySelectorAll('button[data-days]').forEach(b=>b.onclick=()=>setWindow(Number(b.dataset.days)));document.addEventListener('keydown',e=>{if(e.key==='0')setWindow(0);if(e.key==='1')setWindow(1);if(e.key==='7')setWindow(7);if(e.key==='3')setWindow(30);});bindLiqHover();window.addEventListener('resize',()=>drawLiqHeat());setInterval(load,5000);load();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
 const monitorHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ETH 清算雷区监控</title>
+<title>ETH 娓呯畻闆峰尯鐩戞帶</title>
 <style>
 :root{--bg:#e8edf4;--nav:#0b1220;--nav-border:#243145;--panel:#ffffff;--line:#d8e0ea;--text:#20324a;--muted:#6d7c93;--accent:#39557c;--good:#169b62;--warn:#e58a17;--danger:#dc3d3d}
 [data-theme="dark"]{--bg:#000;--nav:#000;--nav-border:#111827;--panel:#000;--line:#1f2937;--text:#e5e7eb;--muted:#94a3b8;--accent:#93c5fd;--good:#22c55e;--warn:#f59e0b;--danger:#ef4444}
@@ -5152,22 +5142,22 @@ table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--li
 .upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}
 @media (max-width:980px){.grid,.main-grid,.triple{grid-template-columns:1fr}.subgrid{grid-template-columns:1fr 1fr}.card:nth-child(2){border-right:0}.hero{align-items:flex-start;flex-direction:column}}
 </style></head><body>
-<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor" class="active">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">娓呯畻鐑尯</a><a href="/config">妯″瀷閰嶇疆</a><a href="/monitor" class="active">闆峰尯鐩戞帶</a><a href="/map">鐩樺彛姹囨€?/a><a href="/liquidations">寮哄钩娓呯畻</a><a href="/bubbles">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel">娑堟伅閫氶亾</a><a href="/analysis">鏃ュ唴鍒嗘瀽</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">涓婚</button><button id="themeDark" onclick="setTheme('dark')">娣辫壊</button><button id="themeLight" onclick="setTheme('light')">娴呰壊</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap">
-<div class="hero"><div class="hero-title">ETH 清算雷区监控（Beta）</div><div id="heroTime" class="hero-meta">--</div></div>
-<div class="panel topbar"><div class="hint">按 0 / 1 / 7 / 3 快捷切换 日内 / 1天 / 7天 / 30天</div><div class="btns"><button data-days="0">日内</button><button data-days="1">1天</button><button data-days="7">7天</button><button data-days="30">30天</button></div></div>
+<div class="hero"><div class="hero-title">ETH 娓呯畻闆峰尯鐩戞帶锛圔eta锛?/div><div id="heroTime" class="hero-meta">--</div></div>
+<div class="panel topbar"><div class="hint">鎸?0 / 1 / 7 / 3 蹇嵎鍒囨崲 鏃ュ唴 / 1澶?/ 7澶?/ 30澶?/div><div class="btns"><button data-days="0">鏃ュ唴</button><button data-days="1">1澶?/button><button data-days="7">7澶?/button><button data-days="30">30澶?/button></div></div>
 <div class="grid">
-<div class="panel"><h3>顶部结论卡</h3><div id="topCards" class="subgrid"></div></div>
-<div class="panel sidebox"><h3>市场状态</h3><div id="marketState" class="state-list"></div></div>
+<div class="panel"><h3>椤堕儴缁撹鍗?/h3><div id="topCards" class="subgrid"></div></div>
+<div class="panel sidebox"><h3>甯傚満鐘舵€?/h3><div id="marketState" class="state-list"></div></div>
 </div>
 <div class="main-grid">
-<div class="panel"><h3>清算热区速报</h3><div id="heatReport"></div></div>
-<div class="stack"><div class="panel"><h3>失衡统计</h3><div id="imbalanceStats"></div></div><div class="panel"><h3>密度分层</h3><div id="densityLayers"></div></div><div class="panel"><h3>变化跟踪（较上一时点）</h3><div id="changeTrack"></div></div></div>
+<div class="panel"><h3>娓呯畻鐑尯閫熸姤</h3><div id="heatReport"></div></div>
+<div class="stack"><div class="panel"><h3>澶辫　缁熻</h3><div id="imbalanceStats"></div></div><div class="panel"><h3>瀵嗗害鍒嗗眰</h3><div id="densityLayers"></div></div><div class="panel"><h3>鍙樺寲璺熻釜锛堣緝涓婁竴鏃剁偣锛?/h3><div id="changeTrack"></div></div></div>
 </div>
 <div class="triple">
-<div class="panel"><h3>最长柱 / 核心磁区</h3><div id="coreZone"></div></div>
-<div class="panel"><h3>交易所贡献拆分（10点内）</h3><div id="exchangeContrib"></div></div>
-<div class="panel"><h3>预警与已发生清算</h3><div id="alerts"></div></div>
+<div class="panel"><h3>鏈€闀挎煴 / 鏍稿績纾佸尯</h3><div id="coreZone"></div></div>
+<div class="panel"><h3>浜ゆ槗鎵€璐＄尞鎷嗗垎锛?0鐐瑰唴锛?/h3><div id="exchangeContrib"></div></div>
+<div class="panel"><h3>棰勮涓庡凡鍙戠敓娓呯畻</h3><div id="alerts"></div></div>
 </div>
 </div>
 <script>
@@ -5251,9 +5241,9 @@ function fmtAmount(n){
   const v=Number(n);
   if(!isFinite(v)) return '-';
   const a=Math.abs(v);
-  if(a>=1e8) return (v/1e8).toFixed(2)+'亿';
-  if(a>=1e6) return (v/1e6).toFixed(2)+'百万';
-  return (v/1e4).toFixed(1)+'万';
+  if(a>=1e8) return (v/1e8).toFixed(2)+'浜?;
+  if(a>=1e6) return (v/1e6).toFixed(2)+'鐧句竾';
+  return (v/1e4).toFixed(1)+'涓?;
 }
 
 function fmtFunding(n){
@@ -5270,8 +5260,8 @@ function amountYi(n){
 
 function biasClassByText(v){
   const s=String(v||'');
-  if(s.includes('空')) return 'warn';
-  if(s.includes('多')) return 'good';
+  if(s.includes('绌?)) return 'warn';
+  if(s.includes('澶?)) return 'good';
   return '';
 }
 
@@ -5310,9 +5300,9 @@ function metricRow(label,val,cls){
 function fundingDirectionLabel(v){
   const n=Number(v);
   if(!isFinite(n)) return '-';
-  if(n>0) return '多付空';
-  if(n<0) return '空付多';
-  return '中性';
+  if(n>0) return '澶氫粯绌?;
+  if(n<0) return '绌轰粯澶?;
+  return '涓€?;
 }
 
 function roundMonitorPrice1(v){
@@ -5511,10 +5501,10 @@ function renderTopCards(d){
   const top=analytics.top||{};
   const market=analytics.market||{};
   const cards=[
-    {label:'ETH现价',val:fmtPrice(d.current_price)},
-    {label:'短线倾向',val:top.short_bias||'-',cls:biasClassByText(top.short_bias)},
-    {label:'20点内失衡',val:fmtAmount(Math.abs(Number(top.bias20_delta||0))),cls:deltaClass(top.bias20_delta)},
-    {label:'50点内判断',val:top.bias50_label||'-',cls:biasClassByText(top.bias50_label)}
+    {label:'ETH鐜颁环',val:fmtPrice(d.current_price)},
+    {label:'鐭嚎鍊惧悜',val:top.short_bias||'-',cls:biasClassByText(top.short_bias)},
+    {label:'20鐐瑰唴澶辫　',val:fmtAmount(Math.abs(Number(top.bias20_delta||0))),cls:deltaClass(top.bias20_delta)},
+    {label:'50鐐瑰唴鍒ゆ柇',val:top.bias50_label||'-',cls:biasClassByText(top.bias50_label)}
   ];
   const topCards=document.getElementById('topCards');
   if(topCards) topCards.innerHTML=cards.map(function(c){
@@ -5531,14 +5521,14 @@ function renderTopCards(d){
     const st=byEx[key]||{};
     const fr=st.funding_rate==null?'-':fmtFunding(st.funding_rate);
     const dir=st.funding_rate==null?'-':fundingDirectionLabel(st.funding_rate);
-    return '<div class="state-line"><span>'+name+' OI</span><strong>'+fmtAmount(oi)+'</strong><span class="mini">费率 '+fr+'</span><span class="funding-tag">'+dir+'</span></div>';
+    return '<div class="state-line"><span>'+name+' OI</span><strong>'+fmtAmount(oi)+'</strong><span class="mini">璐圭巼 '+fr+'</span><span class="funding-tag">'+dir+'</span></div>';
   }
   const marketState=document.getElementById('marketState');
   if(marketState) marketState.innerHTML=
     exLine('Binance','binance',market.binance_oi_usd)+
     exLine('Bybit','bybit',market.bybit_oi_usd)+
     exLine('OKX','okx',market.okx_oi_usd)+
-    '<div class="state-line"><span>平均费率</span><strong>'+fmtFunding(market.avg_funding)+'</strong><span class="funding-tag">'+(market.avg_funding_verdict||'-')+'</span></div>';
+    '<div class="state-line"><span>骞冲潎璐圭巼</span><strong>'+fmtFunding(market.avg_funding)+'</strong><span class="funding-tag">'+(market.avg_funding_verdict||'-')+'</span></div>';
 }
 
 function renderHeatReport(d){
@@ -5548,7 +5538,7 @@ function renderHeatReport(d){
   const webBands=buildHeatBandsFromWebMap(monitorWebMap,anchorPrice);
   const bands=webBands.length?webBands:buildHeatBandsFromModel(monitorLiqMapData,anchorPrice);
   if(!bands.length){
-    wrap.innerHTML='<div class="hint">暂无数据</div>';
+    wrap.innerHTML='<div class="hint">鏆傛棤鏁版嵁</div>';
     return;
   }
   const peaks=resolveMonitorPeaks(anchorPrice);
@@ -5557,10 +5547,10 @@ function renderHeatReport(d){
   const hot={20:true,50:true,80:true,100:true,200:true,300:true};
   const dateText=new Date(d.generated_at||Date.now()).toLocaleDateString('zh-CN').split('/').join('.');
   let html='<table class="heat-report-table"><thead>'+
-    '<tr class="title"><th colspan="6">ETH 清算雷区速报（'+dateText+'）</th></tr>'+
-    '<tr class="spot"><th>ETH现价</th><th colspan="5" class="price">'+fmtHeatPrice(d.current_price)+'</th></tr>'+
-    '<tr class="group"><th rowspan="2">范围</th><th colspan="2" class="down">下方多单</th><th colspan="2">上方空单</th><th rowspan="2">差值（亿）</th></tr>'+
-    '<tr class="sub"><th class="down">价格</th><th class="down">规模（亿）</th><th>价格</th><th>规模（亿）</th></tr>'+
+    '<tr class="title"><th colspan="6">ETH 娓呯畻闆峰尯閫熸姤锛?+dateText+'锛?/th></tr>'+
+    '<tr class="spot"><th>ETH鐜颁环</th><th colspan="5" class="price">'+fmtHeatPrice(d.current_price)+'</th></tr>'+
+    '<tr class="group"><th rowspan="2">鑼冨洿</th><th colspan="2" class="down">涓嬫柟澶氬崟</th><th colspan="2">涓婃柟绌哄崟</th><th rowspan="2">宸€硷紙浜匡級</th></tr>'+
+    '<tr class="sub"><th class="down">浠锋牸</th><th class="down">瑙勬ā锛堜嚎锛?/th><th>浠锋牸</th><th>瑙勬ā锛堜嚎锛?/th></tr>'+
     '</thead><tbody>';
   for(let i=0;i<bands.length;i++){
     const b=bands[i];
@@ -5568,12 +5558,12 @@ function renderHeatReport(d){
     const down=Number(b.down_notional_usd||0);
     const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
     const diffClass=down>up?'diff-long':(up>down?'diff-short':'diff-flat');
-    html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="down-cell">'+fmtHeatPrice(b.down_price)+'</td><td class="down-cell">'+amountYi(down)+'</td><td class="up-cell">'+fmtHeatPrice(b.up_price)+'</td><td class="up-cell">'+amountYi(up)+'</td><td class="diff-cell '+diffClass+'">'+amountYi(Math.abs(down-up))+'</td></tr>';
+    html+='<tr class="'+cls+'"><td>'+b.band+'鐐瑰唴</td><td class="down-cell">'+fmtHeatPrice(b.down_price)+'</td><td class="down-cell">'+amountYi(down)+'</td><td class="up-cell">'+fmtHeatPrice(b.up_price)+'</td><td class="up-cell">'+amountYi(up)+'</td><td class="diff-cell '+diffClass+'">'+amountYi(Math.abs(down-up))+'</td></tr>';
   }
   const topUpCum=Number(topUp.cum||0);
   const topDownCum=Number(topDown.cum||0);
   const longestDiffClass=topDownCum>topUpCum?'diff-long':(topUpCum>topDownCum?'diff-short':'diff-flat');
-  html+='<tr class="longest"><td>最长柱内总量</td><td class="down-cell">'+fmtHeatPrice(topDown.price)+'</td><td class="down-cell">'+amountYi(topDownCum)+'</td><td class="up-cell">'+fmtHeatPrice(topUp.price)+'</td><td class="up-cell">'+amountYi(topUpCum)+'</td><td class="diff-cell '+longestDiffClass+'">'+amountYi(Math.abs(topDownCum-topUpCum))+'</td></tr></tbody></table>';
+  html+='<tr class="longest"><td>鏈€闀挎煴鍐呮€婚噺</td><td class="down-cell">'+fmtHeatPrice(topDown.price)+'</td><td class="down-cell">'+amountYi(topDownCum)+'</td><td class="up-cell">'+fmtHeatPrice(topUp.price)+'</td><td class="up-cell">'+amountYi(topUpCum)+'</td><td class="diff-cell '+longestDiffClass+'">'+amountYi(Math.abs(topDownCum-topUpCum))+'</td></tr></tbody></table>';
   wrap.innerHTML=html;
 }
 
@@ -5582,13 +5572,13 @@ function renderImbalance(d){
   const el=document.getElementById('imbalanceStats');
   if(!el) return;
   if(!rows.length){
-    el.innerHTML='<div class="hint">暂无数据</div>';
+    el.innerHTML='<div class="hint">鏆傛棤鏁版嵁</div>';
     return;
   }
   el.innerHTML=rows.map(function(r){
     return metricRow(
-      String(r.band||'-')+'点内',
-      '上方 '+fmtAmount(r.up_notional_usd)+' / 下方 '+fmtAmount(r.down_notional_usd)+' / '+String(r.verdict||'-'),
+      String(r.band||'-')+'鐐瑰唴',
+      '涓婃柟 '+fmtAmount(r.up_notional_usd)+' / 涓嬫柟 '+fmtAmount(r.down_notional_usd)+' / '+String(r.verdict||'-'),
       biasClassByText(r.verdict)
     );
   }).join('');
@@ -5599,10 +5589,10 @@ function renderDensity(d){
   const el=document.getElementById('densityLayers');
   if(!el) return;
   if(!rows.length){
-    el.innerHTML='<div class="hint">暂无数据</div>';
+    el.innerHTML='<div class="hint">鏆傛棤鏁版嵁</div>';
     return;
   }
-  let html='<table><thead><tr><th>区间</th><th>上方空单</th><th>下方多单</th></tr></thead><tbody>';
+  let html='<table><thead><tr><th>鍖洪棿</th><th>涓婃柟绌哄崟</th><th>涓嬫柟澶氬崟</th></tr></thead><tbody>';
   for(const r of rows){
     html+='<tr><td>'+String(r.label||'-')+'</td><td>'+fmtAmount(r.up_notional_usd)+'</td><td>'+fmtAmount(r.down_notional_usd)+'</td></tr>';
   }
@@ -5615,10 +5605,10 @@ function renderTrack(d){
   const el=document.getElementById('changeTrack');
   if(!el) return;
   el.innerHTML=
-    metricRow('20点内上方空单',fmtAmount(t.up20_delta_usd),deltaClass(t.up20_delta_usd))+
-    metricRow('20点内下方多单',fmtAmount(t.down20_delta_usd),deltaClass(t.down20_delta_usd))+
-    metricRow('最长柱变化',fmtAmount(t.longest_delta_usd),deltaClass(t.longest_delta_usd))+
-    metricRow('Funding变化',fmtFunding(t.funding_delta),deltaClass(t.funding_delta));
+    metricRow('20鐐瑰唴涓婃柟绌哄崟',fmtAmount(t.up20_delta_usd),deltaClass(t.up20_delta_usd))+
+    metricRow('20鐐瑰唴涓嬫柟澶氬崟',fmtAmount(t.down20_delta_usd),deltaClass(t.down20_delta_usd))+
+    metricRow('鏈€闀挎煴鍙樺寲',fmtAmount(t.longest_delta_usd),deltaClass(t.longest_delta_usd))+
+    metricRow('Funding鍙樺寲',fmtFunding(t.funding_delta),deltaClass(t.funding_delta));
 }
 
 function renderCore(d){
@@ -5635,19 +5625,19 @@ function renderCore(d){
   const upDist=(cp>0&&up.price>0)?Math.abs(up.price-cp):Infinity;
   const downDist=(cp>0&&down.price>0)?Math.abs(cp-down.price):Infinity;
   if(upDist<downDist){
-    nearestSide='上方强区';
+    nearestSide='涓婃柟寮哄尯';
     nearestPrice=up.price;
     nearestDist=upDist;
   }else if(downDist<Infinity){
-    nearestSide='下方强区';
+    nearestSide='涓嬫柟寮哄尯';
     nearestPrice=down.price;
     nearestDist=downDist;
   }
   el.innerHTML=
-    metricRow('上方最长柱',fmtPrice(up.price)+' / '+fmtAmount(up.v),'warn')+
-    metricRow('下方最长柱',fmtPrice(down.price)+' / '+fmtAmount(down.v),'good')+
-    metricRow('最近强区',fmtPrice(nearestPrice)+' / '+(isFinite(Number(nearestDist))?Number(nearestDist).toFixed(1):'-')+'点',biasClassByText(nearestSide))+
-    metricRow('方向',String(nearestSide||'-'));
+    metricRow('涓婃柟鏈€闀挎煴',fmtPrice(up.price)+' / '+fmtAmount(up.v),'warn')+
+    metricRow('涓嬫柟鏈€闀挎煴',fmtPrice(down.price)+' / '+fmtAmount(down.v),'good')+
+    metricRow('鏈€杩戝己鍖?,fmtPrice(nearestPrice)+' / '+(isFinite(Number(nearestDist))?Number(nearestDist).toFixed(1):'-')+'鐐?,biasClassByText(nearestSide))+
+    metricRow('鏂瑰悜',String(nearestSide||'-'));
 }
 
 function renderContrib(d){
@@ -5655,13 +5645,13 @@ function renderContrib(d){
   const el=document.getElementById('exchangeContrib');
   if(!el) return;
   if(!rows.length){
-    el.innerHTML='<div class="hint">暂无数据</div>';
+    el.innerHTML='<div class="hint">鏆傛棤鏁版嵁</div>';
     return;
   }
   el.innerHTML=rows.map(function(r){
     const share=Math.max(0,Number(r.share||0));
     return '<div class="bar-row"><div>'+String(r.exchange||'-')+'</div><div class="bar"><div class="fill" style="width:'+Math.max(4,share*100)+'%"></div></div><div>'+(share*100).toFixed(0)+'%</div></div>';
-  }).join('')+'<div class="mini">主贡献交易所：'+String(((d.analytics||{}).dominant_exchange)||'-')+'</div>';
+  }).join('')+'<div class="mini">涓昏础鐚氦鏄撴墍锛?+String(((d.analytics||{}).dominant_exchange)||'-')+'</div>';
 }
 
 function renderAlerts(d){
@@ -5669,11 +5659,11 @@ function renderAlerts(d){
   const el=document.getElementById('alerts');
   if(!el) return;
   el.innerHTML=
-    metricRow('当前预警',String(a.level||'-'),String(a.level||'').includes('预警')?'danger':'')+
-    metricRow('最近事件',[a.recent_exchange||'-',a.recent_side||'-',a.recent_price?fmtPrice(a.recent_price):'-'].join(' / '))+
-    metricRow('近1分钟清算',fmtAmount(a.recent_1m_usd),'warn')+
+    metricRow('褰撳墠棰勮',String(a.level||'-'),String(a.level||'').includes('棰勮')?'danger':'')+
+    metricRow('鏈€杩戜簨浠?,[a.recent_exchange||'-',a.recent_side||'-',a.recent_price?fmtPrice(a.recent_price):'-'].join(' / '))+
+    metricRow('杩?鍒嗛挓娓呯畻',fmtAmount(a.recent_1m_usd),'warn')+
     metricRow('Binance / Bybit / OKX',fmtAmount(a.recent_1m_binance_usd)+' / '+fmtAmount(a.recent_1m_bybit_usd)+' / '+fmtAmount(a.recent_1m_okx_usd))+
-    metricRow('建议',String(a.suggestion||'-'));
+    metricRow('寤鸿',String(a.suggestion||'-'));
 }
 
 async function load(opts){
@@ -5728,7 +5718,7 @@ async function load(opts){
     if(seq!==monitorLoadSeq) return false;
     const msg=String((err&&err.message)||err||'load failed').trim();
     const wrap=document.getElementById('heatReport');
-    if(wrap&&!String(wrap.textContent||'').trim()) wrap.innerHTML='<div class="hint">加载失败</div>';
+    if(wrap&&!String(wrap.textContent||'').trim()) wrap.innerHTML='<div class="hint">鍔犺浇澶辫触</div>';
     updateMonitorLoadState({pending:false,done:true,days:currentDays,error:msg,heatReady:false,seq:seq});
     throw err;
   }
@@ -5739,15 +5729,15 @@ async function openUpgradeModal(){
   if(!m||!logEl||!foot) return;
   m.classList.add('show');
   logEl.textContent='';
-  foot.textContent='正在触发升级...';
+  foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';
   const r=await fetch('/api/upgrade/pull',{method:'POST'});
   const d=await r.json().catch(function(){return {error:'response parse failed',output:''};});
   if(d.error){
     logEl.textContent=String(d.output||'');
-    foot.textContent='触发失败: '+d.error;
+    foot.textContent='瑙﹀彂澶辫触: '+d.error;
     return;
   }
-  foot.textContent='已触发，正在执行...';
+  foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';
   let stable=0;
   for(let i=0;i<180;i++){
     await new Promise(function(res){setTimeout(res,1000);});
@@ -5756,16 +5746,16 @@ async function openUpgradeModal(){
     logEl.textContent=String(pr.log||'');
     logEl.scrollTop=logEl.scrollHeight;
     if(pr.done){
-      foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');
+      foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');
       return;
     }
     if(!pr.running) stable++; else stable=0;
     if(stable>=3){
-      foot.textContent='升级进程已结束，但状态未知，请检查日志';
+      foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紝浣嗙姸鎬佹湭鐭ワ紝璇锋鏌ユ棩蹇?;
       return;
     }
   }
-  foot.textContent='升级仍在进行，请稍后再看';
+  foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';
 }
 
 function closeUpgradeModal(){
@@ -5807,10 +5797,10 @@ if(preferredMonitorDays!=null&&preferredMonitorDays!==currentDays){
     if(el) el.textContent='Code by Yuhao@jiansutech.com - - - -';
   }
 })();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
 const mapHTML = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>盘口汇总/title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>鐩樺彛姹囨€?title>
 <style>
 body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
 .nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
@@ -5852,50 +5842,49 @@ canvas{width:100%;height:760px;display:block;border:1px solid #e5e7eb;border-rad
 [data-theme="dark"] .event-card{background:#000;border-color:#1f2937}
 [data-theme="dark"] .wsline,[data-theme="dark"] .merge-val,[data-theme="dark"] .event-title,[data-theme="dark"] .event-card h4,[data-theme="dark"] #mergeTitle{color:#e5e7eb}
 .upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head><body>
-<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map" class="active">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">娓呯畻鐑尯</a><a href="/config">妯″瀷閰嶇疆</a><a href="/monitor">闆峰尯鐩戞帶</a><a href="/map" class="active">鐩樺彛姹囨€?/a><a href="/liquidations">寮哄钩娓呯畻</a><a href="/bubbles">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel">娑堟伅閫氶亾</a><a href="/analysis">鏃ュ唴鍒嗘瀽</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">涓婚</button><button id="themeDark" onclick="setTheme('dark')">娣辫壊</button><button id="themeLight" onclick="setTheme('light')">娴呰壊</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
 <div class="wrap">
   <div class="panel">
     <div class="row">
       <div>
-        <h2 style="margin:0;color:#111827">盘口汇总/h2>
-        <div class="small">瑕嗙洊 Binance / Bybit / OKX 鐩樺彛涓庢祦鍔ㄦ€?/div>
+        <h2 style="margin:0;color:#111827">鐩樺彛姹囨€?h2>
+        <div class="small">鐟曞棛娲?Binance / Bybit / OKX 閻╂ê褰涙稉搴㈢ウ閸斻劍鈧?/div>
       </div>
-      <div class="row"><div class="mode"><button data-mode="weighted">加权模式</button><button data-mode="merged">合并模式</button></div></div>
+      <div class="row"><div class="mode"><button data-mode="weighted">鍔犳潈妯″紡</button><button data-mode="merged">鍚堝苟妯″紡</button></div></div>
     </div>
     <div id="meta" class="meta"></div>
     <div id="weights" class="weights"></div>
     <div id="wsStatus" class="wsline"></div>
     <div class="legend"><span><i class="swatch" style="background:#8b5cf6"></i>Binance</span><span><i class="swatch" style="background:#eab308"></i>OKX</span><span><i class="swatch" style="background:#67e8f9"></i>Bybit</span></div>
     <div class="tune">
-      <label>鍗婅“鏈?
+      <label>閸楀﹨鈥滈張?
         <select id="halfLifeSel">
-          <option value="60">60绉?/option>
-          <option value="120">120绉?/option>
-          <option value="180">180绉?/option>
+          <option value="60">60缁?/option>
+          <option value="120">120缁?/option>
+          <option value="180">180缁?/option>
         </select>
       </label>
-      <label>婊氬姩绐楀彛
-        <select id="rollWinSel">
-          <option value="3">3分钟</option>
-          <option value="5">5分钟</option>
-          <option value="10">10分钟</option>
+      <label>濠婃艾濮╃粣妤€褰?        <select id="rollWinSel">
+          <option value="3">3鍒嗛挓</option>
+          <option value="5">5鍒嗛挓</option>
+          <option value="10">10鍒嗛挓</option>
         </select>
       </label>
     </div>
   </div>
   <div class="panel">
-    <div class="row" style="justify-content:flex-start"><h3 id="mergeTitle" style="margin:0">合并盘口统计</h3><div id="mergeHint" class="small">鍩轰簬鎴愪氦涓?OI 浼拌</div></div>
+    <div class="row" style="justify-content:flex-start"><h3 id="mergeTitle" style="margin:0">鍚堝苟鐩樺彛缁熻</h3><div id="mergeHint" class="small">閸╄桨绨幋鎰唉娑?OI 娴兼媽顓?/div></div>
     <div id="mergeStats" class="merge-grid"></div>
     <canvas id="depthChart" width="1600" height="312"></canvas>
     <div class="event-wrap">
-      <div class="event-title">价格事件</div>
+      <div class="event-title">浠锋牸浜嬩欢</div>
       <div class="event-grid">
         <div class="event-card">
-          <div class="row" style="justify-content:space-between"><h4 style="color:#16a34a;margin:0">买盘事件</h4><div class="small"><button id="bidPrev" class="toggle" onclick="evtPrev('bid')">涓婁竴椤?/button><button id="bidNext" class="toggle" onclick="evtNext('bid')">涓嬩竴椤?/button><span id="bidPage" style="margin-left:8px"></span></div></div>
+          <div class="row" style="justify-content:space-between"><h4 style="color:#16a34a;margin:0">涔扮洏浜嬩欢</h4><div class="small"><button id="bidPrev" class="toggle" onclick="evtPrev('bid')">娑撳﹣绔存い?/button><button id="bidNext" class="toggle" onclick="evtNext('bid')">娑撳绔存い?/button><span id="bidPage" style="margin-left:8px"></span></div></div>
           <div id="bidEvents"></div>
         </div>
         <div class="event-card">
-          <div class="row" style="justify-content:space-between"><h4 style="color:#dc2626;margin:0">卖盘事件</h4><div class="small"><button id="askPrev" class="toggle" onclick="evtPrev('ask')">涓婁竴椤?/button><button id="askNext" class="toggle" onclick="evtNext('ask')">涓嬩竴椤?/button><span id="askPage" style="margin-left:8px"></span></div></div>
+          <div class="row" style="justify-content:space-between"><h4 style="color:#dc2626;margin:0">鍗栫洏浜嬩欢</h4><div class="small"><button id="askPrev" class="toggle" onclick="evtPrev('ask')">娑撳﹣绔存い?/button><button id="askNext" class="toggle" onclick="evtNext('ask')">娑撳绔存い?/button><span id="askPage" style="margin-left:8px"></span></div></div>
           <div id="askEvents"></div>
         </div>
       </div>
@@ -5909,9 +5898,9 @@ function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';
 const depthMemory={halfLifeMs:120000,rollingWindowMs:5*60*1000,bidGhost:{},askGhost:{},bidMax:{},askMax:{},lastUpdate:0};
 const depthEvents={minPersistMs:3000,linkFactor:0.6,bidTrack:{},askTrack:{},bidList:[],askList:[]};
 function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1})}
-function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'浜?;if(a>=1e6)return (n/1e6).toFixed(2)+'鐧句竾';return (n/1e4).toFixed(2)+'涓?;}
+function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'娴?;if(a>=1e6)return (n/1e6).toFixed(2)+'閻у彞绔?;return (n/1e4).toFixed(2)+'娑?;}
 function fmtQty(n){n=Number(n);if(!isFinite(n))return '-';return n.toLocaleString('zh-CN',{maximumFractionDigits:2})}
-function windowLabel(v){return Number(v)===0?'日内':(Number(v)+'澶?)}
+function windowLabel(v){return Number(v)===0?'鏃ュ唴':(Number(v)+'婢?)}
 function syncTuneUI(){const h=document.getElementById('halfLifeSel'),r=document.getElementById('rollWinSel');if(h)h.value=String(Math.round(depthMemory.halfLifeMs/1000));if(r)r.value=String(Math.round(depthMemory.rollingWindowMs/60000));}
 function applyTuneFromUI(){const h=document.getElementById('halfLifeSel'),r=document.getElementById('rollWinSel');const hs=Number(h&&h.value||120),rm=Number(r&&r.value||5);depthMemory.halfLifeMs=Math.max(1000,hs*1000);depthMemory.rollingWindowMs=Math.max(60000,rm*60000);try{localStorage.setItem('depth_tune',JSON.stringify({half_life_sec:hs,rolling_min:rm}));}catch(_){ }drawDepth();}
 function loadTuneFromStorage(){try{const raw=localStorage.getItem('depth_tune');if(!raw)return;const t=JSON.parse(raw);const hs=Number(t&&t.half_life_sec||0),rm=Number(t&&t.rolling_min||0);if(hs===60||hs===120||hs===180)depthMemory.halfLifeMs=hs*1000;if(rm===3||rm===5||rm===10)depthMemory.rollingWindowMs=rm*60000;}catch(_){ }}
@@ -5931,30 +5920,30 @@ function renderActive(){document.querySelectorAll('button[data-mode]').forEach(b
 function resetDepthMemory(){depthMemory.bidGhost={};depthMemory.askGhost={};depthMemory.bidMax={};depthMemory.askMax={};depthMemory.lastUpdate=0;depthState=null;depthEvents.bidTrack={};depthEvents.askTrack={};depthEvents.bidList=[];depthEvents.askList=[];persistedEvents={bid:{rows:[],page:1,total:0},ask:{rows:[],page:1,total:0}};}
 function setMode(mode){const m=(mode==='merged')?'merged':'weighted';if(currentMode===m)return;currentMode=m;resetDepthMemory();try{localStorage.setItem('orderbook_mode',currentMode);}catch(_){ }renderActive();load();}
 function loadModeFromStorage(){try{const m=localStorage.getItem('orderbook_mode');if(m==='weighted'||m==='merged')currentMode=m;}catch(_){ }}
-function renderMergedPanel(){const el=document.getElementById('mergeStats');const m=orderbook&&orderbook.merged;const t=document.getElementById('mergeTitle');const h=document.getElementById('mergeHint');if(t)t.textContent=currentMode==='weighted'?'加权盘口统计':'合并盘口统计';if(h)h.textContent=currentMode==='weighted'?'鍩轰簬鎴愪氦涓?OI 浼拌':'澶氫氦鏄撴墍鍚堝苟鐩樺彛涓庝环宸?;if(!m){el.innerHTML='<div class=\"small\">暂无盘口数据</div>';return;}const spread=(Number(m.best_ask||0)-Number(m.best_bid||0));el.innerHTML='<div class=\"merge-card\"><div class=\"merge-label\">Best Bid</div><div class=\"merge-val\">'+fmtPrice(m.best_bid)+'</div></div>'+'<div class=\"merge-card\"><div class=\"merge-label\">Best Ask</div><div class=\"merge-val\">'+fmtPrice(m.best_ask)+'</div></div>'+'<div class=\"merge-card\"><div class=\"merge-label\">Mid / Spread</div><div class=\"merge-val\">'+fmtPrice(m.mid)+' <span style=\"font-size:12px;color:#64748b\">('+fmtPrice(spread)+')</span></div></div>';}
+function renderMergedPanel(){const el=document.getElementById('mergeStats');const m=orderbook&&orderbook.merged;const t=document.getElementById('mergeTitle');const h=document.getElementById('mergeHint');if(t)t.textContent=currentMode==='weighted'?'鍔犳潈鐩樺彛缁熻':'鍚堝苟鐩樺彛缁熻';if(h)h.textContent=currentMode==='weighted'?'閸╄桨绨幋鎰唉娑?OI 娴兼媽顓?:'婢舵矮姘﹂弰鎾村閸氬牆鑻熼惄妯哄經娑撳簼鐜?;if(!m){el.innerHTML='<div class=\"small\">鏆傛棤鐩樺彛鏁版嵁</div>';return;}const spread=(Number(m.best_ask||0)-Number(m.best_bid||0));el.innerHTML='<div class=\"merge-card\"><div class=\"merge-label\">Best Bid</div><div class=\"merge-val\">'+fmtPrice(m.best_bid)+'</div></div>'+'<div class=\"merge-card\"><div class=\"merge-label\">Best Ask</div><div class=\"merge-val\">'+fmtPrice(m.best_ask)+'</div></div>'+'<div class=\"merge-card\"><div class=\"merge-label\">Mid / Spread</div><div class=\"merge-val\">'+fmtPrice(m.mid)+' <span style=\"font-size:12px;color:#64748b\">('+fmtPrice(spread)+')</span></div></div>';}
 function fmtEventTime(ts){try{return new Date(ts).toLocaleTimeString('zh-CN',{hour12:false});}catch(_){return '-';}}
 function fmtDur(ms){const s=Math.max(0,Math.round(Number(ms||0)/1000));return s+'s';}
-function eventTable(list){if(!list||!list.length)return '<div class=\"small\">暂无事件</div>';let h='<table><thead><tr><th>价格</th><th>宄板€?/th><th>持续时间</th><th>时间</th></tr></thead><tbody>';for(const e of list.slice(0,8)){h+='<tr><td>'+fmtPrice(e.price)+'</td><td>'+fmtAmount(e.peak)+'</td><td>'+fmtDur(e.dur_ms)+'</td><td>'+fmtEventTime(e.ts)+'</td></tr>';}return h+'</tbody></table>';}
+function eventTable(list){if(!list||!list.length)return '<div class=\"small\">鏆傛棤浜嬩欢</div>';let h='<table><thead><tr><th>浠锋牸</th><th>瀹勬澘鈧?/th><th>鎸佺画鏃堕棿</th><th>鏃堕棿</th></tr></thead><tbody>';for(const e of list.slice(0,8)){h+='<tr><td>'+fmtPrice(e.price)+'</td><td>'+fmtAmount(e.peak)+'</td><td>'+fmtDur(e.dur_ms)+'</td><td>'+fmtEventTime(e.ts)+'</td></tr>';}return h+'</tbody></table>';}
 function renderEventTables(){const be=document.getElementById('bidEvents'),ae=document.getElementById('askEvents');if(be)be.innerHTML=eventTable((persistedEvents.bid&&persistedEvents.bid.rows)||[]);if(ae)ae.innerHTML=eventTable((persistedEvents.ask&&persistedEvents.ask.rows)||[]);renderEvtPager('bid');renderEvtPager('ask');}
-function renderEvtPager(side){const st=persistedEvents[side];const pageEl=document.getElementById(side+'Page');const prev=document.getElementById(side+'Prev');const next=document.getElementById(side+'Next');const page=Number((st&&st.page)||1);const total=Number((st&&st.total)||0);const pageSize=25;const pages=Math.max(1,Math.ceil(total/pageSize));if(pageEl)pageEl.textContent='绗?'+page+' / '+pages+' 椤?路 '+total+' 鏉?;if(prev)prev.disabled=page<=1;if(next)next.disabled=page>=pages;}
+function renderEvtPager(side){const st=persistedEvents[side];const pageEl=document.getElementById(side+'Page');const prev=document.getElementById(side+'Prev');const next=document.getElementById(side+'Next');const page=Number((st&&st.page)||1);const total=Number((st&&st.total)||0);const pageSize=25;const pages=Math.max(1,Math.ceil(total/pageSize));if(pageEl)pageEl.textContent='缁?'+page+' / '+pages+' 妞?璺?'+total+' 閺?;if(prev)prev.disabled=page<=1;if(next)next.disabled=page>=pages;}
 async function loadPriceEvents(side,page){const pageSize=25;const url='/api/price-events?side='+encodeURIComponent(side)+'&page='+encodeURIComponent(String(page||1))+'&limit='+encodeURIComponent(String(pageSize))+'&minutes=30';const r=await fetch(url);const d=await r.json().catch(()=>null);if(!d||!d.rows){persistedEvents[side]={rows:[],page:1,total:0};return;}const rows=[];for(const it of (d.rows||[])){rows.push({price:Number(it.price||0),peak:Number(it.peak||0),dur_ms:Number(it.duration_ms||0),ts:Number(it.event_ts||0)});}persistedEvents[side]={rows:rows,page:Number(d.page||1),total:Number(d.total||0)};}
 async function evtPrev(side){const st=persistedEvents[side];const page=Math.max(1,Number((st&&st.page)||1)-1);await loadPriceEvents(side,page);renderEventTables();}
 async function evtNext(side){const st=persistedEvents[side];const page=Math.max(1,Number((st&&st.page)||1)+1);await loadPriceEvents(side,page);renderEventTables();}
 function syncDepthCanvas(c){const rect=c.getBoundingClientRect();const dpr=window.devicePixelRatio||1;const W=Math.max(320,Math.floor(rect.width));const H=Math.max(240,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return{x,W,H};}
 function clampDepthView(minP,maxP){if(!depthState||!(depthState.fullMax>depthState.fullMin))return[minP,maxP];const fullMin=depthState.fullMin,fullMax=depthState.fullMax,fullSpan=Math.max(1e-6,fullMax-fullMin);const minSpan=Math.max(2,fullSpan*0.05);let span=Math.max(minSpan,maxP-minP);span=Math.min(fullSpan,span);let vMin=minP,vMax=vMin+span;if(vMin<fullMin){vMin=fullMin;vMax=vMin+span;}if(vMax>fullMax){vMax=fullMax;vMin=vMax-span;}return[vMin,vMax];}
 function initDepthView(allPrices,cur){const rawMin=Math.min(...allPrices,cur),rawMax=Math.max(...allPrices,cur);const rawSpan=Math.max(2,rawMax-rawMin);const pad=Math.max(1,rawSpan*0.06);const dataMin=rawMin-pad,dataMax=rawMax+pad;if(!depthState||!(depthState.fullMax>depthState.fullMin)){depthState={fullMin:dataMin,fullMax:dataMax,viewMin:dataMin,viewMax:dataMax,padL:64,padR:24,padT:20,padB:44,W:0,H:0};[depthState.viewMin,depthState.viewMax]=clampDepthView(depthState.viewMin,depthState.viewMax);return;}depthState.fullMin=dataMin;depthState.fullMax=dataMax;const span=(depthState.viewMax>depthState.viewMin)?(depthState.viewMax-depthState.viewMin):(dataMax-dataMin);let vMin=cur-span/2,vMax=cur+span/2;[vMin,vMax]=clampDepthView(vMin,vMax);depthState.viewMin=vMin;depthState.viewMax=vMax;}
-function drawDepth(){const c=document.getElementById('depthChart');const v=syncDepthCanvas(c),x=v.x,W=v.W,H=v.H;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);const m=orderbook&&orderbook.merged;const bids=(m&&m.bids)||[];const asks=(m&&m.asks)||[];const cur=Number((m&&m.mid)||0)||Number((dashboard&&dashboard.current_price)||0);if(!(cur>0)||(!bids.length&&!asks.length)){x.fillStyle='#6b7280';x.font='14px sans-serif';x.fillText('暂无盘口数据',20,24);return;}const all=bids.concat(asks).map(v=>({p:Number(v.price||0),n:Number(v.qty||0)*Number(v.price||0)})).filter(v=>v.p>0&&v.n>0);if(!all.length){x.fillStyle='#6b7280';x.font='14px sans-serif';x.fillText('暂无盘口数据',20,24);return;}initDepthView(all.map(v=>v.p),cur);const padL=64,padR=24,padT=20,padB=44,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;depthState.padL=padL;depthState.padR=padR;depthState.padT=padT;depthState.padB=padB;depthState.W=W;depthState.H=H;const minP=depthState.viewMin,maxP=depthState.viewMax,span=Math.max(1e-6,maxP-minP);const bidNow=levelMap(bids),askNow=levelMap(asks);const visible=all.filter(v=>v.p>=minP&&v.p<=maxP);const ghostVals=[];for(const [k,vv] of Object.entries(depthMemory.bidGhost)){const p=Number(k);if(p>=minP&&p<=maxP&&vv>0)ghostVals.push(vv);}for(const [k,vv] of Object.entries(depthMemory.askGhost)){const p=Number(k);if(p>=minP&&p<=maxP&&vv>0)ghostVals.push(vv);}const maxVals=[];for(const [k,o] of Object.entries(depthMemory.bidMax)){const p=Number(k);if(p>=minP&&p<=maxP&&o&&o.v>0)maxVals.push(o.v);}for(const [k,o] of Object.entries(depthMemory.askMax)){const p=Number(k);if(p>=minP&&p<=maxP&&o&&o.v>0)maxVals.push(o.v);}const maxN=Math.max(1,...(visible.length?visible.map(v=>v.n):all.map(v=>v.n)),...(ghostVals.length?ghostVals:[1]),...(maxVals.length?maxVals:[1]));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxN)*ph;x.strokeStyle='#e5e7eb';x.lineWidth=1;x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4),val=maxN*(1-i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#475569';x.fillText(fmtAmount(val),6,y+4);}const minLabelGap=12;const approxLabelW=Math.max(36,x.measureText(fmtPrice(minP)).width,x.measureText(fmtPrice(maxP)).width);const maxTicks=Math.max(2,Math.floor(pw/(approxLabelW+minLabelGap)));const tickCount=Math.max(2,Math.min(10,maxTicks));for(let i=0;i<=tickCount;i++){const p=minP+span*(i/tickCount),px=sx(p);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(px,by);x.lineTo(px,by+4);x.stroke();const label=fmtPrice(p);const lw=x.measureText(label).width;const tx=Math.max(padL,Math.min(px-lw/2,W-padR-lw));x.fillStyle='#64748b';x.fillText(label,tx,by+18);}if(cur>=minP&&cur<=maxP){const cp=sx(cur);x.strokeStyle='#dc2626';x.setLineDash([6,4]);x.beginPath();x.moveTo(cp,padT);x.lineTo(cp,by);x.stroke();x.setLineDash([]);x.fillStyle='#111827';x.fillText('褰撳墠浠?'+fmtPrice(cur),Math.max(padL,Math.min(cp-34,W-150)),padT-4);}const barCount=Math.max(1,visible.length);const barW=Math.max(1,Math.min(12,pw/Math.max(50,barCount)));for(const [k,n] of Object.entries(depthMemory.bidGhost)){const p=Number(k);if(!(p>=minP&&p<=maxP&&n>0&&p<=cur))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(22,163,74,0.18)';x.fillRect(px-barW/2,y,barW,by-y);}for(const [k,n] of Object.entries(depthMemory.askGhost)){const p=Number(k);if(!(p>=minP&&p<=maxP&&n>0&&p>=cur))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(220,38,38,0.16)';x.fillRect(px-barW/2,y,barW,by-y);}for(const [k,o] of Object.entries(depthMemory.bidMax)){const p=Number(k),n=Number(o&&o.v||0);if(!(p>=minP&&p<=maxP&&n>0&&p<=cur))continue;const px=sx(p),y=sy(n);x.strokeStyle='rgba(22,163,74,0.85)';x.lineWidth=1.3;x.beginPath();x.moveTo(px-barW/2,y);x.lineTo(px+barW/2,y);x.stroke();}for(const [k,o] of Object.entries(depthMemory.askMax)){const p=Number(k),n=Number(o&&o.v||0);if(!(p>=minP&&p<=maxP&&n>0&&p>=cur))continue;const px=sx(p),y=sy(n);x.strokeStyle='rgba(220,38,38,0.85)';x.lineWidth=1.3;x.beginPath();x.moveTo(px-barW/2,y);x.lineTo(px+barW/2,y);x.stroke();}x.lineWidth=1;
+function drawDepth(){const c=document.getElementById('depthChart');const v=syncDepthCanvas(c),x=v.x,W=v.W,H=v.H;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);const m=orderbook&&orderbook.merged;const bids=(m&&m.bids)||[];const asks=(m&&m.asks)||[];const cur=Number((m&&m.mid)||0)||Number((dashboard&&dashboard.current_price)||0);if(!(cur>0)||(!bids.length&&!asks.length)){x.fillStyle='#6b7280';x.font='14px sans-serif';x.fillText('鏆傛棤鐩樺彛鏁版嵁',20,24);return;}const all=bids.concat(asks).map(v=>({p:Number(v.price||0),n:Number(v.qty||0)*Number(v.price||0)})).filter(v=>v.p>0&&v.n>0);if(!all.length){x.fillStyle='#6b7280';x.font='14px sans-serif';x.fillText('鏆傛棤鐩樺彛鏁版嵁',20,24);return;}initDepthView(all.map(v=>v.p),cur);const padL=64,padR=24,padT=20,padB=44,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;depthState.padL=padL;depthState.padR=padR;depthState.padT=padT;depthState.padB=padB;depthState.W=W;depthState.H=H;const minP=depthState.viewMin,maxP=depthState.viewMax,span=Math.max(1e-6,maxP-minP);const bidNow=levelMap(bids),askNow=levelMap(asks);const visible=all.filter(v=>v.p>=minP&&v.p<=maxP);const ghostVals=[];for(const [k,vv] of Object.entries(depthMemory.bidGhost)){const p=Number(k);if(p>=minP&&p<=maxP&&vv>0)ghostVals.push(vv);}for(const [k,vv] of Object.entries(depthMemory.askGhost)){const p=Number(k);if(p>=minP&&p<=maxP&&vv>0)ghostVals.push(vv);}const maxVals=[];for(const [k,o] of Object.entries(depthMemory.bidMax)){const p=Number(k);if(p>=minP&&p<=maxP&&o&&o.v>0)maxVals.push(o.v);}for(const [k,o] of Object.entries(depthMemory.askMax)){const p=Number(k);if(p>=minP&&p<=maxP&&o&&o.v>0)maxVals.push(o.v);}const maxN=Math.max(1,...(visible.length?visible.map(v=>v.n):all.map(v=>v.n)),...(ghostVals.length?ghostVals:[1]),...(maxVals.length?maxVals:[1]));const sx=v=>padL+((v-minP)/span)*pw,sy=v=>by-(v/maxN)*ph;x.strokeStyle='#e5e7eb';x.lineWidth=1;x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4),val=maxN*(1-i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#475569';x.fillText(fmtAmount(val),6,y+4);}const minLabelGap=12;const approxLabelW=Math.max(36,x.measureText(fmtPrice(minP)).width,x.measureText(fmtPrice(maxP)).width);const maxTicks=Math.max(2,Math.floor(pw/(approxLabelW+minLabelGap)));const tickCount=Math.max(2,Math.min(10,maxTicks));for(let i=0;i<=tickCount;i++){const p=minP+span*(i/tickCount),px=sx(p);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(px,by);x.lineTo(px,by+4);x.stroke();const label=fmtPrice(p);const lw=x.measureText(label).width;const tx=Math.max(padL,Math.min(px-lw/2,W-padR-lw));x.fillStyle='#64748b';x.fillText(label,tx,by+18);}if(cur>=minP&&cur<=maxP){const cp=sx(cur);x.strokeStyle='#dc2626';x.setLineDash([6,4]);x.beginPath();x.moveTo(cp,padT);x.lineTo(cp,by);x.stroke();x.setLineDash([]);x.fillStyle='#111827';x.fillText('瑜版挸澧犳禒?'+fmtPrice(cur),Math.max(padL,Math.min(cp-34,W-150)),padT-4);}const barCount=Math.max(1,visible.length);const barW=Math.max(1,Math.min(12,pw/Math.max(50,barCount)));for(const [k,n] of Object.entries(depthMemory.bidGhost)){const p=Number(k);if(!(p>=minP&&p<=maxP&&n>0&&p<=cur))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(22,163,74,0.18)';x.fillRect(px-barW/2,y,barW,by-y);}for(const [k,n] of Object.entries(depthMemory.askGhost)){const p=Number(k);if(!(p>=minP&&p<=maxP&&n>0&&p>=cur))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(220,38,38,0.16)';x.fillRect(px-barW/2,y,barW,by-y);}for(const [k,o] of Object.entries(depthMemory.bidMax)){const p=Number(k),n=Number(o&&o.v||0);if(!(p>=minP&&p<=maxP&&n>0&&p<=cur))continue;const px=sx(p),y=sy(n);x.strokeStyle='rgba(22,163,74,0.85)';x.lineWidth=1.3;x.beginPath();x.moveTo(px-barW/2,y);x.lineTo(px+barW/2,y);x.stroke();}for(const [k,o] of Object.entries(depthMemory.askMax)){const p=Number(k),n=Number(o&&o.v||0);if(!(p>=minP&&p<=maxP&&n>0&&p>=cur))continue;const px=sx(p),y=sy(n);x.strokeStyle='rgba(220,38,38,0.85)';x.lineWidth=1.3;x.beginPath();x.moveTo(px-barW/2,y);x.lineTo(px+barW/2,y);x.stroke();}x.lineWidth=1;
 const exColors={binance:'rgba(139,92,246,0.75)',okx:'rgba(234,179,8,0.72)',bybit:'rgba(103,232,249,0.72)'};
 if(currentMode==='weighted'&&m&&m.per_exchange){const order=['binance','okx','bybit'];for(const side of ['bids','asks']){for(const ex of order){const ls=((m.per_exchange[ex]||{})[side])||[];for(const lv of ls){const p=Number(lv.price||0),n=Number(lv.qty||0)*p;if(!(p>=minP&&p<=maxP&&n>0&&((side==='bids'&&p<=cur)||(side==='asks'&&p>=cur))))continue;const px=sx(p),y=sy(n);x.fillStyle=exColors[ex];x.fillRect(px-barW/2,y,barW,by-y);}}}}
 else {for(const b of bids){const p=Number(b.price||0),n=Number(b.qty||0)*p;if(!(p>=minP&&p<=maxP&&n>0&&p<=cur))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(22,163,74,0.75)';x.fillRect(px-barW/2,y,barW,by-y);}for(const a of asks){const p=Number(a.price||0),n=Number(a.qty||0)*p;if(!(p>=minP&&p<=maxP&&n>0&&p>=cur))continue;const px=sx(p),y=sy(n);x.fillStyle='rgba(220,38,38,0.72)';x.fillRect(px-barW/2,y,barW,by-y);}}
-x.fillStyle='#16a34a';x.fillText('Bid 深度',padL,14);x.fillStyle='#dc2626';x.fillText('Ask 深度',padL+100,14);x.fillStyle='#64748b';x.fillText('鍗婅“鏈?'+Math.round(depthMemory.halfLifeMs/1000)+'s  滚动窗口 '+Math.round(depthMemory.rollingWindowMs/60000)+' 分钟',padL+220,14);x.fillText('X 杞翠环鏍?/ Y 杞存寕鍗曢噾棰?,W-190,14);}
+x.fillStyle='#16a34a';x.fillText('Bid 娣卞害',padL,14);x.fillStyle='#dc2626';x.fillText('Ask 娣卞害',padL+100,14);x.fillStyle='#64748b';x.fillText('閸楀﹨鈥滈張?'+Math.round(depthMemory.halfLifeMs/1000)+'s  婊氬姩绐楀彛 '+Math.round(depthMemory.rollingWindowMs/60000)+' 鍒嗛挓',padL+220,14);x.fillText('X 鏉炵繝鐜弽?/ Y 鏉炲瓨瀵曢崡鏇㈠櫨妫?,W-190,14);}
 function bindDepthInteraction(){const c=document.getElementById('depthChart');if(!c||c.dataset.bound==='1')return;c.dataset.bound='1';c.addEventListener('wheel',e=>{if(!depthState||!(depthState.viewMax>depthState.viewMin))return;e.preventDefault();const rect=c.getBoundingClientRect();const xPos=e.clientX-rect.left;const s=depthState,pw=s.W-s.padL-s.padR;if(pw<=0)return;const ratio=Math.max(0,Math.min(1,(xPos-s.padL)/pw));const focus=s.viewMin+(s.viewMax-s.viewMin)*ratio;const factor=e.deltaY<0?0.88:1.14;let vMin=focus-(focus-s.viewMin)*factor,vMax=vMin+(s.viewMax-s.viewMin)*factor;[vMin,vMax]=clampDepthView(vMin,vMax);s.viewMin=vMin;s.viewMax=vMax;drawDepth();},{passive:false});c.addEventListener('mousedown',e=>{if(e.button!==0||!depthState)return;isDraggingDepth=true;depthLastX=e.clientX;});window.addEventListener('mousemove',e=>{if(!isDraggingDepth||!depthState)return;const s=depthState,pw=s.W-s.padL-s.padR;if(pw<=0)return;const dx=e.clientX-depthLastX;depthLastX=e.clientX;const dp=(dx/pw)*(s.viewMax-s.viewMin);let vMin=s.viewMin-dp,vMax=s.viewMax-dp;[vMin,vMax]=clampDepthView(vMin,vMax);s.viewMin=vMin;s.viewMax=vMax;drawDepth();});window.addEventListener('mouseup',()=>{isDraggingDepth=false;});window.addEventListener('mouseleave',()=>{isDraggingDepth=false;});window.addEventListener('resize',()=>drawDepth());}
 function buildShares(states){const order=['binance','okx','bybit'];const out={};let total=0;for(const ex of order){const s=(states||[]).find(v=>(v.exchange||'').toLowerCase()===ex);const oi=Number((s&&s.oi_value_usd)||0);out[ex]=oi;total+=oi;}if(total<=0){for(const ex of order)out[ex]=1/order.length;}else{for(const ex of order)out[ex]/=total;}return out;}
 function exchangeWsHealthy(ex){const ob=orderbook&&orderbook[ex];if(!ob)return false;const now=Date.now();const last=Math.max(Number(ob.last_ws_event||0),Number(ob.last_snapshot||0),Number(ob.updated_ts||0));if(!(last>0))return false;return (now-last)<=20000;}
-function renderWsStatus(){const el=document.getElementById('wsStatus');if(!el)return;const show=(name,ex)=>name+' '+(exchangeWsHealthy(ex)?'宸茶繛鎺?:'鏈繛鎺?);el.textContent=[show('Binance','binance'),show('OKX','okx'),show('Bybit','bybit')].join('  ');}
-function renderMeta(){if(!dashboard)return;const t=new Date(dashboard.generated_at).toLocaleString();document.getElementById('meta').textContent='覆盖 Binance / Bybit / OKX | 更新时间 '+t+' | 当前模式 '+currentMode;const s=buildShares(dashboard.states);document.getElementById('weights').textContent=currentMode==='weighted'?('OI 权重 Binance '+(s.binance*100).toFixed(1)+'% | Bybit '+(s.bybit*100).toFixed(1)+'% | OKX '+(s.okx*100).toFixed(1)+'%'):'鍚堝苟妯″紡涓嬬洿鎺ヨ仛鍚堝浜ゆ槗鎵€鐩樺彛';}
+function renderWsStatus(){const el=document.getElementById('wsStatus');if(!el)return;const show=(name,ex)=>name+' '+(exchangeWsHealthy(ex)?'瀹歌尪绻涢幒?:'閺堫亣绻涢幒?);el.textContent=[show('Binance','binance'),show('OKX','okx'),show('Bybit','bybit')].join('  ');}
+function renderMeta(){if(!dashboard)return;const t=new Date(dashboard.generated_at).toLocaleString();document.getElementById('meta').textContent='瑕嗙洊 Binance / Bybit / OKX | 鏇存柊鏃堕棿 '+t+' | 褰撳墠妯″紡 '+currentMode;const s=buildShares(dashboard.states);document.getElementById('weights').textContent=currentMode==='weighted'?('OI 鏉冮噸 Binance '+(s.binance*100).toFixed(1)+'% | Bybit '+(s.bybit*100).toFixed(1)+'% | OKX '+(s.okx*100).toFixed(1)+'%'):'閸氬牆鑻熷Ο鈥崇础娑撳娲块幒銉ㄤ粵閸氬牆顦挎禍銈嗘閹碘偓閻╂ê褰?;}
 async function load(){const [r1,r2]=await Promise.all([fetch('/api/dashboard'),fetch('/api/orderbook?limit=60&mode='+encodeURIComponent(currentMode))]);dashboard=await r1.json();orderbook=await r2.json();updateDepthMemory();await Promise.all([loadPriceEvents('bid',1),loadPriceEvents('ask',1)]);renderActive();renderMeta();renderWsStatus();renderMergedPanel();drawDepth();renderEventTables();}
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'閸楀洨楠囩€瑰本鍨氶敍宀勨偓鈧崙铏圭垳 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='閸楀洨楠囨潻娑氣柤瀹歌尙绮ㄩ弶鐕傜礄閻樿埖鈧焦婀惌銉礆閿涘矁顕Λ鈧弻銉︽）韫?;return;}}foot.textContent='閸楀洨楠囨禒宥呮躬鏉╂稖顢戦敍宀冾嚞缁嬪秴鎮楅崘宥囨箙';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 document.querySelectorAll('button[data-mode]').forEach(b=>b.onclick=()=>setMode((b.dataset.mode||'weighted')));
@@ -5966,31 +5955,31 @@ if(hs)hs.onchange=applyTuneFromUI;
 if(rw)rw.onchange=applyTuneFromUI;
 bindDepthInteraction();
 initTheme();setInterval(load,5000);load();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
 const channelHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>&#28040;&#24687;&#36890;&#36947;</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{max-width:900px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.small{font-size:12px;color:#6b7280}button.primary{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.switch-row{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:14px;padding:12px;border:1px solid #dce3ec;border-radius:8px}.switch-row input{width:auto;margin:0;transform:scale(1.2)}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}[data-theme="dark"] body{background:#000;color:#e5e7eb}[data-theme="dark"] .nav{background:#000;border-bottom-color:#111827}[data-theme="dark"] .panel{background:#000;border-color:#1f2937}[data-theme="dark"] .small{color:#94a3b8}[data-theme="dark"] input,[data-theme="dark"] button.secondary{background:#000;color:#e5e7eb;border-color:#334155}[data-theme="dark"] .switch-row{border-color:#1f2937}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel" class="active">消息通道</a><a href="/analysis">日内分析</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><h2 style="margin-top:0">Telegram 消息通道</h2><div class="small">閰嶇疆 Telegram 鏈哄櫒浜轰笌棰戦亾锛岀郴缁熷皢鎸夎瀹氶棿闅斿彂閫侀€氱煡銆?/div><label class="switch-row"><span><strong>鍚敤鑷姩鎺ㄩ€?/strong><div class="small">榛樿鍏抽棴锛涘紑鍚悗鎸夐€氱煡闂撮殧鎺ㄩ€佹竻绠楃儹鍖洪€熸姤銆?/div></span><input id="notify-enabled" type="checkbox"></label><div style="margin-top:14px"><label>Telegram Bot Token</label><input id="token" autocomplete="off" placeholder="123456:ABC..."></div><div style="margin-top:14px"><label>Telegram Channel / Chat ID</label><input id="channel" autocomplete="off" placeholder="@mychannel 鎴?-100123456789"></div><div style="margin-top:14px"><label>通知间隔（分钟）</label><input id="notify-interval" type="number" min="1" step="1" placeholder="15"></div><div style="margin-top:16px" class="row"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="testTelegram()">娴嬭瘯鍙戦€?/button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">娓呯畻鐑尯</a><a href="/config">妯″瀷閰嶇疆</a><a href="/monitor">闆峰尯鐩戞帶</a><a href="/map">鐩樺彛姹囨€?/a><a href="/liquidations">寮哄钩娓呯畻</a><a href="/bubbles">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel" class="active">娑堟伅閫氶亾</a><a href="/analysis">鏃ュ唴鍒嗘瀽</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">涓婚</button><button id="themeDark" onclick="setTheme('dark')">娣辫壊</button><button id="themeLight" onclick="setTheme('light')">娴呰壊</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="wrap"><div class="panel"><h2 style="margin-top:0">Telegram 娑堟伅閫氶亾</h2><div class="small">闁板秶鐤?Telegram 閺堝搫娅掓禍杞扮瑢妫版垿浜鹃敍宀€閮寸紒鐔风殺閹稿顔曠€规岸妫块梾鏂垮絺闁線鈧氨鐓￠妴?/div><label class="switch-row"><span><strong>閸氼垳鏁ら懛顏勫З閹恒劑鈧?/strong><div class="small">姒涙顓婚崗鎶芥４閿涙稑绱戦崥顖氭倵閹稿鈧氨鐓￠梻鎾閹恒劑鈧焦绔荤粻妤冨劰閸栨椽鈧喐濮ら妴?/div></span><input id="notify-enabled" type="checkbox"></label><div style="margin-top:14px"><label>Telegram Bot Token</label><input id="token" autocomplete="off" placeholder="123456:ABC..."></div><div style="margin-top:14px"><label>Telegram Channel / Chat ID</label><input id="channel" autocomplete="off" placeholder="@mychannel 閹?-100123456789"></div><div style="margin-top:14px"><label>閫氱煡闂撮殧锛堝垎閽燂級</label><input id="notify-interval" type="number" min="1" step="1" placeholder="15"></div><div style="margin-top:16px" class="row"><button class="primary" onclick="save()">淇濆瓨</button><button class="secondary" onclick="testTelegram()">濞村鐦崣鎴︹偓?/button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
 <script>
 let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawEnabled={{.NotifyEnabled}},tokenDirty=false,channelDirty=false;
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
 function maskInput(v){v=String(v||'');if(!v)return '';if(v.length<=8)return '*'.repeat(v.length);return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}function syncInputs(){const t=document.getElementById('token'),c=document.getElementById('channel'),n=document.getElementById('notify-interval'),e=document.getElementById('notify-enabled');if(!tokenDirty)t.value=maskInput(rawToken);if(!channelDirty)c.value=maskInput(rawChannel);n.value=rawInterval||15;e.checked=!!rawEnabled;}function currentValue(i,raw,dirty){return dirty?(i?String(i.value||''):''):raw;}document.getElementById('token').addEventListener('input',()=>{tokenDirty=true});document.getElementById('channel').addEventListener('input',()=>{channelDirty=true});syncInputs();initTheme();
-async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
+async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'閸楀洨楠囩€瑰本鍨氶敍宀勨偓鈧崙铏圭垳 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='閸楀洨楠囨潻娑氣柤瀹歌尙绮ㄩ弶鐕傜礄閻樿埖鈧焦婀惌銉礆閿涘矁顕Λ鈧弻銉︽）韫?;return;}}foot.textContent='閸楀洨楠囨禒宥呮躬鏉╂稖顢戦敍宀冾嚞缁嬪秴鎮楅崘宥囨箙';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
-async function save(){const n=document.getElementById('notify-interval');const iv=Math.max(1,Number((n&&n.value)||rawInterval||15)|0);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken,tokenDirty),telegram_channel:currentValue(document.getElementById('channel'),rawChannel,channelDirty),notify_interval_min:iv,notify_enabled:document.getElementById('notify-enabled').checked};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=iv;rawEnabled=body.notify_enabled;tokenDirty=false;channelDirty=false;syncInputs();document.getElementById('msg').textContent='保存成功';}else{document.getElementById('msg').textContent='保存失败';}}
-async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='姝ｅ湪鍙戦€佹祴璇曟秷鎭?..';const r=await fetch('/api/channel/test',{method:'POST'});msg.textContent=r.ok?'娴嬭瘯鍙戦€佹垚鍔?:('娴嬭瘯鍙戦€佸け璐? '+await r.text());}
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+async function save(){const n=document.getElementById('notify-interval');const iv=Math.max(1,Number((n&&n.value)||rawInterval||15)|0);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken,tokenDirty),telegram_channel:currentValue(document.getElementById('channel'),rawChannel,channelDirty),notify_interval_min:iv,notify_enabled:document.getElementById('notify-enabled').checked};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=iv;rawEnabled=body.notify_enabled;tokenDirty=false;channelDirty=false;syncInputs();document.getElementById('msg').textContent='淇濆瓨鎴愬姛';}else{document.getElementById('msg').textContent='淇濆瓨澶辫触';}}
+async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='濮濓絽婀崣鎴︹偓浣圭ゴ鐠囨洘绉烽幁?..';const r=await fetch('/api/channel/test',{method:'POST'});msg.textContent=r.ok?'濞村鐦崣鎴︹偓浣瑰灇閸?:('濞村鐦崣鎴︹偓浣搞亼鐠? '+await r.text());}
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
 const channelHTMLV2 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>消息通道</title>
+<title>娑堟伅閫氶亾</title>
 <style>
 body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
 .nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
@@ -6051,36 +6040,36 @@ button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:
   <div class="nav-left">
     <div class="brand">ETH Liquidation Map</div>
     <div class="menu">
-      <a href="/">首页</a>
-      <a href="/config">模型配置</a>
-      <a href="/monitor">雷区监控</a>
-      <a href="/map">盘口汇总</a>
-      <a href="/liquidations">强平清算</a>
-      <a href="/bubbles">气泡图</a>
-      <a href="/webdatasource">页面数据源</a>
-      <a href="/channel" class="active">消息通道</a>
-      <a href="/analysis">日内分析</a>
+      <a href="/">棣栭〉</a>
+      <a href="/config">妯″瀷閰嶇疆</a>
+      <a href="/monitor">闆峰尯鐩戞帶</a>
+      <a href="/map">鐩樺彛姹囨€?/a>
+      <a href="/liquidations">寮哄钩娓呯畻</a>
+      <a href="/bubbles">姘旀场鍥?/a>
+      <a href="/webdatasource">椤甸潰鏁版嵁婧?/a>
+      <a href="/channel" class="active">娑堟伅閫氶亾</a>
+      <a href="/analysis">鏃ュ唴鍒嗘瀽</a>
     </div>
   </div>
   <div class="nav-right">
     <div class="theme-toggle">
-      <button class="label" type="button">主题</button>
-      <button id="themeDark" onclick="setTheme('dark')">深色</button>
-      <button id="themeLight" onclick="setTheme('light')">浅色</button>
+      <button class="label" type="button">涓婚</button>
+      <button id="themeDark" onclick="setTheme('dark')">娣辫壊</button>
+      <button id="themeLight" onclick="setTheme('light')">娴呰壊</button>
     </div>
-    <a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a>
+    <a href="#" class="upgrade" onclick="return doUpgrade(event)">鍗囩骇</a>
   </div>
 </div>
 
 <div class="wrap">
   <div class="channel-layout">
     <div class="panel">
-      <h2 style="margin-top:0">Telegram 消息通道</h2>
-      <div class="small">配置 Telegram Bot 和频道后，系统会按工作时间和非工作时间的不同频率自动推送消息。</div>
+      <h2 style="margin-top:0">Telegram 娑堟伅閫氶亾</h2>
+      <div class="small">閰嶇疆 Telegram Bot 鍜岄閬撳悗锛岀郴缁熶細鎸夊伐浣滄椂闂村拰闈炲伐浣滄椂闂寸殑涓嶅悓棰戠巼鑷姩鎺ㄩ€佹秷鎭€?/div>
       <label class="switch-row">
         <span>
-          <strong>启用自动通知</strong>
-          <div class="small">关闭时不会自动推送；开启后会按下方配置的时间范围和频率执行。</div>
+          <strong>鍚敤鑷姩閫氱煡</strong>
+          <div class="small">鍏抽棴鏃朵笉浼氳嚜鍔ㄦ帹閫侊紱寮€鍚悗浼氭寜涓嬫柟閰嶇疆鐨勬椂闂磋寖鍥村拰棰戠巼鎵ц銆?/div>
         </span>
         <input id="notify-enabled" type="checkbox">
       </label>
@@ -6088,30 +6077,30 @@ button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:
         <div class="field" style="grid-column:1/-1">
           <label>Telegram Bot Token</label>
           <input id="token" autocomplete="off" placeholder="123456:ABC...">
-          <div class="small">留空会保留当前已保存的 Token。</div>
+          <div class="small">鐣欑┖浼氫繚鐣欏綋鍓嶅凡淇濆瓨鐨?Token銆?/div>
         </div>
         <div class="field" style="grid-column:1/-1">
           <label>Telegram Channel / Chat ID</label>
-          <input id="channel" autocomplete="off" placeholder="@mychannel 或 -100123456789">
-          <div class="small">留空会保留当前已保存的频道或 Chat ID。</div>
+          <input id="channel" autocomplete="off" placeholder="@mychannel 鎴?-100123456789">
+          <div class="small">鐣欑┖浼氫繚鐣欏綋鍓嶅凡淇濆瓨鐨勯閬撴垨 Chat ID銆?/div>
         </div>
         <div class="field">
-          <label>工作时间通知间隔（分钟）</label>
+          <label>宸ヤ綔鏃堕棿閫氱煡闂撮殧锛堝垎閽燂級</label>
           <input id="notify-work-interval" type="number" min="1" step="1" placeholder="15">
         </div>
         <div class="field">
-          <label>非工作时间通知间隔（分钟）</label>
+          <label>闈炲伐浣滄椂闂撮€氱煡闂撮殧锛堝垎閽燂級</label>
           <input id="notify-off-interval" type="number" min="1" step="1" placeholder="60">
         </div>
         <div class="field" style="grid-column:1/-1">
-          <label>工作时间范围 / 正则表达式</label>
-          <textarea id="work-time-expr" placeholder="09:00-12:00,13:00-18:00&#10;或 regex:^(Mon|Tue|Wed|Thu|Fri) (09|1[0-7]):[0-5][0-9]$"></textarea>
-          <div class="hint small">支持两种写法：<span class="mono">09:00-18:00</span>、<span class="mono">09:00-12:00,13:00-18:00</span>；也支持直接输入正则，推荐带上 <span class="mono">regex:</span> 前缀。留空表示全天按“工作时间通知间隔”处理。</div>
+          <label>宸ヤ綔鏃堕棿鑼冨洿 / 姝ｅ垯琛ㄨ揪寮?/label>
+          <textarea id="work-time-expr" placeholder="09:00-12:00,13:00-18:00&#10;鎴?regex:^(Mon|Tue|Wed|Thu|Fri) (09|1[0-7]):[0-5][0-9]$"></textarea>
+          <div class="hint small">鏀寔涓ょ鍐欐硶锛?span class="mono">09:00-18:00</span>銆?span class="mono">09:00-12:00,13:00-18:00</span>锛涗篃鏀寔鐩存帴杈撳叆姝ｅ垯锛屾帹鑽愬甫涓?<span class="mono">regex:</span> 鍓嶇紑銆傜暀绌鸿〃绀哄叏澶╂寜鈥滃伐浣滄椂闂撮€氱煡闂撮殧鈥濆鐞嗐€?/div>
         </div>
       </div>
       <div style="margin-top:16px" class="row">
-        <button class="primary" onclick="save()">保存</button>
-        <button class="secondary" onclick="testTelegram()">发送测试消息</button>
+        <button class="primary" onclick="save()">淇濆瓨</button>
+        <button class="secondary" onclick="testTelegram()">鍙戦€佹祴璇曟秷鎭?/button>
         <span id="msg" class="small status" style="margin-left:10px"></span>
       </div>
     </div>
@@ -6119,10 +6108,10 @@ button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:
     <div class="panel">
       <div class="row" style="justify-content:space-between">
         <div>
-          <h3 style="margin:0">历史发送记录</h3>
-          <div class="small">显示最近 15 条历史发送记录。</div>
+          <h3 style="margin:0">鍘嗗彶鍙戦€佽褰?/h3>
+          <div class="small">鏄剧ず鏈€杩?15 鏉″巻鍙插彂閫佽褰曘€?/div>
         </div>
-        <button class="secondary" onclick="loadHistory()">刷新</button>
+        <button class="secondary" onclick="loadHistory()">鍒锋柊</button>
       </div>
       <div class="table-scroll table-scroll-fit">
         <table class="history-table history-table-wide">
@@ -6134,9 +6123,9 @@ button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:
             <col style="width:35%">
           </colgroup>
           <thead>
-            <tr><th>时间</th><th>类型</th><th>组别</th><th>结果</th><th>详情</th></tr>
+            <tr><th>鏃堕棿</th><th>绫诲瀷</th><th>缁勫埆</th><th>缁撴灉</th><th>璇︽儏</th></tr>
           </thead>
-          <tbody id="historyBody"><tr><td colspan="5" class="small">加载中...</td></tr></tbody>
+          <tbody id="historyBody"><tr><td colspan="5" class="small">鍔犺浇涓?..</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -6144,10 +6133,10 @@ button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:
     <div class="panel">
       <div class="row" style="justify-content:space-between">
         <div>
-          <h3 style="margin:0">抓取历史</h3>
-          <div class="small">显示最近 24 小时的 24 条抓取记录。</div>
+          <h3 style="margin:0">鎶撳彇鍘嗗彶</h3>
+          <div class="small">鏄剧ず鏈€杩?24 灏忔椂鐨?24 鏉℃姄鍙栬褰曘€?/div>
         </div>
-        <button class="secondary" onclick="loadTimeline()">刷新</button>
+        <button class="secondary" onclick="loadTimeline()">鍒锋柊</button>
       </div>
       <div class="table-scroll">
         <table class="history-table">
@@ -6160,9 +6149,9 @@ button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:
             <col style="width:20%">
           </colgroup>
           <thead>
-            <tr><th>时间</th><th>来源</th><th>类型</th><th>窗口/目标</th><th>状态</th><th>详情</th></tr>
+            <tr><th>鏃堕棿</th><th>鏉ユ簮</th><th>绫诲瀷</th><th>绐楀彛/鐩爣</th><th>鐘舵€?/th><th>璇︽儏</th></tr>
           </thead>
-          <tbody id="timelineBody"><tr><td colspan="6" class="small">加载中...</td></tr></tbody>
+          <tbody id="timelineBody"><tr><td colspan="6" class="small">鍔犺浇涓?..</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -6170,10 +6159,10 @@ button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:
     <div class="panel">
       <div class="row" style="justify-content:space-between">
         <div>
-          <h3 style="margin:0">24小时的预计推送时间表</h3>
-          <div class="small">列出未来 24 小时内的抓取与推送计划，方便查看更长的未来安排。</div>
+          <h3 style="margin:0">24灏忔椂鐨勯璁℃帹閫佹椂闂磋〃</h3>
+          <div class="small">鍒楀嚭鏈潵 24 灏忔椂鍐呯殑鎶撳彇涓庢帹閫佽鍒掞紝鏂逛究鏌ョ湅鏇撮暱鐨勬湭鏉ュ畨鎺掋€?/div>
         </div>
-        <button class="secondary" onclick="loadSchedule()">刷新</button>
+        <button class="secondary" onclick="loadSchedule()">鍒锋柊</button>
       </div>
       <div class="table-scroll">
         <table class="history-table">
@@ -6185,9 +6174,9 @@ button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:
             <col style="width:40%">
           </colgroup>
           <thead>
-            <tr><th>预计推送时间</th><th>预计抓取时间</th><th>时段</th><th>频率</th><th>说明</th></tr>
+            <tr><th>棰勮鎺ㄩ€佹椂闂?/th><th>棰勮鎶撳彇鏃堕棿</th><th>鏃舵</th><th>棰戠巼</th><th>璇存槑</th></tr>
           </thead>
-          <tbody id="scheduleBody"><tr><td colspan="5" class="small">加载中...</td></tr></tbody>
+          <tbody id="scheduleBody"><tr><td colspan="5" class="small">鍔犺浇涓?..</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -6199,15 +6188,15 @@ let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .Telegra
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
 function maskInput(v){v=String(v||'');if(!v)return '';if(v.length<=8)return '*'.repeat(v.length);return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}
-function syncInputs(){const t=document.getElementById('token'),c=document.getElementById('channel'),w=document.getElementById('notify-work-interval'),o=document.getElementById('notify-off-interval'),x=document.getElementById('work-time-expr'),e=document.getElementById('notify-enabled');if(!tokenDirty){t.value='';t.placeholder=rawToken?maskInput(rawToken):'123456:ABC...';}if(!channelDirty){c.value='';c.placeholder=rawChannel?maskInput(rawChannel):'@mychannel 或 -100123456789';}w.value=rawWorkInterval||rawInterval||15;o.value=rawOffInterval||rawWorkInterval||rawInterval||15;x.value=rawWorkExpr||'';e.checked=!!rawEnabled;}
+function syncInputs(){const t=document.getElementById('token'),c=document.getElementById('channel'),w=document.getElementById('notify-work-interval'),o=document.getElementById('notify-off-interval'),x=document.getElementById('work-time-expr'),e=document.getElementById('notify-enabled');if(!tokenDirty){t.value='';t.placeholder=rawToken?maskInput(rawToken):'123456:ABC...';}if(!channelDirty){c.value='';c.placeholder=rawChannel?maskInput(rawChannel):'@mychannel 鎴?-100123456789';}w.value=rawWorkInterval||rawInterval||15;o.value=rawOffInterval||rawWorkInterval||rawInterval||15;x.value=rawWorkExpr||'';e.checked=!!rawEnabled;}
 function currentValue(i,raw){const next=String((i&&i.value)||'').trim();return next!==''?next:raw;}
 function intValue(id,fallback){const el=document.getElementById(id);const raw=String((el&&el.value)||'').trim();const v=Number(raw);return Number.isFinite(v)&&v>0?Math.floor(v):fallback;}
 function fmtHistoryTime(ts){if(!ts)return '-';return new Date(ts).toLocaleString('zh-CN',{hour12:false});}
 function esc(v){return String(v||'').replace(/[&<>"]/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[s]));}
-function sendModeLabel(v){if(v==='test')return '测试';if(v==='auto')return '自动';if(v==='manual')return '手动';return String(v||'-');}
-function sourceLabel(v){if(v==='channel')return '消息通道';if(v==='webdatasource')return '页面数据源';return String(v||'-');}
-function typeLabel(v){if(v==='push')return '推送';if(v==='capture')return '抓取';return String(v||'-');}
-function periodLabel(v){if(v==='work-hours')return '工作时间';if(v==='off-hours')return '非工作时间';return String(v||'-');}
+function sendModeLabel(v){if(v==='test')return '娴嬭瘯';if(v==='auto')return '鑷姩';if(v==='manual')return '鎵嬪姩';return String(v||'-');}
+function sourceLabel(v){if(v==='channel')return '娑堟伅閫氶亾';if(v==='webdatasource')return '椤甸潰鏁版嵁婧?;return String(v||'-');}
+function typeLabel(v){if(v==='push')return '鎺ㄩ€?;if(v==='capture')return '鎶撳彇';return String(v||'-');}
+function periodLabel(v){if(v==='work-hours')return '宸ヤ綔鏃堕棿';if(v==='off-hours')return '闈炲伐浣滄椂闂?;return String(v||'-');}
 
 document.getElementById('token').addEventListener('input',()=>{tokenDirty=true;});
 document.getElementById('channel').addEventListener('input',()=>{channelDirty=true;});
@@ -6215,26 +6204,26 @@ syncInputs();
 initTheme();
 
 async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束，但状态未知，请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紝浣嗙姸鎬佹湭鐭ワ紝璇锋鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 
-async function loadHistory(){const body=document.getElementById('historyBody');if(!body)return;const rows=await fetch('/api/channel/history?limit=15').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="5" class="small">暂无最近历史发送记录</td></tr>';return;}body.innerHTML=rows.map(it=>'<tr><td>'+fmtHistoryTime(it.sent_at)+'</td><td>'+sendModeLabel(it.send_mode)+'</td><td>第'+Number(it.group_index||0)+'组 / '+esc(it.group_name||'-')+'</td><td class="'+(String(it.status||'').toLowerCase()==='success'?'ok':'fail')+'">'+(String(it.status||'').toLowerCase()==='success'?'成功':'失败')+'</td><td>'+esc(it.error_text||'-')+'</td></tr>').join('');}
-async function loadTimeline(){const body=document.getElementById('timelineBody');if(!body)return;const rows=await fetch('/api/channel/timeline?hours=24&limit=24').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="6" class="small">近 24 小时暂无抓取记录</td></tr>';return;}body.innerHTML=rows.map(it=>{const status=String(it.status||'').toLowerCase();const statusCls=status==='success'?'ok':(status==='failed'?'fail':'');const target=it.target||it.window||'-';const detail=[it.records?('记录数 '+Number(it.records)):'',it.detail||''].filter(Boolean).join(' | ');return '<tr><td>'+fmtHistoryTime(it.ts)+'</td><td>'+esc(sourceLabel(it.source||'-'))+'</td><td>'+esc(typeLabel(it.type||'-'))+'</td><td>'+esc(target)+'</td><td class="'+statusCls+'">'+esc(it.status||'-')+'</td><td>'+esc(detail||'-')+'</td></tr>';}).join('');}
-async function loadSchedule(){const body=document.getElementById('scheduleBody');if(!body)return;const rows=await fetch('/api/channel/schedule?hours=24').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="5" class="small">'+(rawEnabled?'未来 24 小时暂无预计推送项目':'自动通知未开启，暂无未来推送计划')+'</td></tr>';return;}body.innerHTML=rows.map(it=>'<tr><td>'+fmtHistoryTime(it.push_ts)+'</td><td>'+fmtHistoryTime(it.capture_ts)+'</td><td>'+esc(periodLabel(it.period||'-'))+'</td><td>'+(Number(it.interval_min||0)>0?(Number(it.interval_min)+' 分钟'):'-')+'</td><td>'+esc(it.detail||'-')+'</td></tr>').join('');}
-async function save(){const msg=document.getElementById('msg');msg.textContent='正在保存...';const workInterval=intValue('notify-work-interval',rawWorkInterval||rawInterval||15);const offInterval=intValue('notify-off-interval',rawOffInterval||workInterval);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken),telegram_channel:currentValue(document.getElementById('channel'),rawChannel),notify_interval_min:workInterval,notify_work_interval_min:workInterval,notify_off_interval_min:offInterval,work_time_expr:String((document.getElementById('work-time-expr').value||'').trim()),notify_enabled:document.getElementById('notify-enabled').checked};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;tokenDirty=false;channelDirty=false;syncInputs();await loadSchedule();msg.textContent='保存成功';return;}msg.textContent='保存失败: '+await r.text();}
-async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='正在触发测试发送...';const r=await fetch('/api/channel/test',{method:'POST'});const text=String(await r.text().catch(()=>'' )||'').trim();if(r.ok){msg.textContent=text==='already running'?'已有测试发送进行中，请稍后查看下方历史':'测试发送已触发，约 30-60 秒后查看下方历史';await loadHistory();setTimeout(loadHistory,5000);setTimeout(loadHistory,20000);return;}msg.textContent='测试发送失败: '+(text||('HTTP '+r.status));}
+async function loadHistory(){const body=document.getElementById('historyBody');if(!body)return;const rows=await fetch('/api/channel/history?limit=15').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="5" class="small">鏆傛棤鏈€杩戝巻鍙插彂閫佽褰?/td></tr>';return;}body.innerHTML=rows.map(it=>'<tr><td>'+fmtHistoryTime(it.sent_at)+'</td><td>'+sendModeLabel(it.send_mode)+'</td><td>绗?+Number(it.group_index||0)+'缁?/ '+esc(it.group_name||'-')+'</td><td class="'+(String(it.status||'').toLowerCase()==='success'?'ok':'fail')+'">'+(String(it.status||'').toLowerCase()==='success'?'鎴愬姛':'澶辫触')+'</td><td>'+esc(it.error_text||'-')+'</td></tr>').join('');}
+async function loadTimeline(){const body=document.getElementById('timelineBody');if(!body)return;const rows=await fetch('/api/channel/timeline?hours=24&limit=24').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="6" class="small">杩?24 灏忔椂鏆傛棤鎶撳彇璁板綍</td></tr>';return;}body.innerHTML=rows.map(it=>{const status=String(it.status||'').toLowerCase();const statusCls=status==='success'?'ok':(status==='failed'?'fail':'');const target=it.target||it.window||'-';const detail=[it.records?('璁板綍鏁?'+Number(it.records)):'',it.detail||''].filter(Boolean).join(' | ');return '<tr><td>'+fmtHistoryTime(it.ts)+'</td><td>'+esc(sourceLabel(it.source||'-'))+'</td><td>'+esc(typeLabel(it.type||'-'))+'</td><td>'+esc(target)+'</td><td class="'+statusCls+'">'+esc(it.status||'-')+'</td><td>'+esc(detail||'-')+'</td></tr>';}).join('');}
+async function loadSchedule(){const body=document.getElementById('scheduleBody');if(!body)return;const rows=await fetch('/api/channel/schedule?hours=24').then(r=>r.ok?r.json():[]).catch(()=>[]);if(!Array.isArray(rows)||!rows.length){body.innerHTML='<tr><td colspan="5" class="small">'+(rawEnabled?'鏈潵 24 灏忔椂鏆傛棤棰勮鎺ㄩ€侀」鐩?:'鑷姩閫氱煡鏈紑鍚紝鏆傛棤鏈潵鎺ㄩ€佽鍒?)+'</td></tr>';return;}body.innerHTML=rows.map(it=>'<tr><td>'+fmtHistoryTime(it.push_ts)+'</td><td>'+fmtHistoryTime(it.capture_ts)+'</td><td>'+esc(periodLabel(it.period||'-'))+'</td><td>'+(Number(it.interval_min||0)>0?(Number(it.interval_min)+' 鍒嗛挓'):'-')+'</td><td>'+esc(it.detail||'-')+'</td></tr>').join('');}
+async function save(){const msg=document.getElementById('msg');msg.textContent='姝ｅ湪淇濆瓨...';const workInterval=intValue('notify-work-interval',rawWorkInterval||rawInterval||15);const offInterval=intValue('notify-off-interval',rawOffInterval||workInterval);const body={telegram_bot_token:currentValue(document.getElementById('token'),rawToken),telegram_channel:currentValue(document.getElementById('channel'),rawChannel),notify_interval_min:workInterval,notify_work_interval_min:workInterval,notify_off_interval_min:offInterval,work_time_expr:String((document.getElementById('work-time-expr').value||'').trim()),notify_enabled:document.getElementById('notify-enabled').checked};const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;tokenDirty=false;channelDirty=false;syncInputs();await loadSchedule();msg.textContent='淇濆瓨鎴愬姛';return;}msg.textContent='淇濆瓨澶辫触: '+await r.text();}
+async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='姝ｅ湪瑙﹀彂娴嬭瘯鍙戦€?..';const r=await fetch('/api/channel/test',{method:'POST'});const text=String(await r.text().catch(()=>'' )||'').trim();if(r.ok){msg.textContent=text==='already running'?'宸叉湁娴嬭瘯鍙戦€佽繘琛屼腑锛岃绋嶅悗鏌ョ湅涓嬫柟鍘嗗彶':'娴嬭瘯鍙戦€佸凡瑙﹀彂锛岀害 30-60 绉掑悗鏌ョ湅涓嬫柟鍘嗗彶';await loadHistory();setTimeout(loadHistory,5000);setTimeout(loadHistory,20000);return;}msg.textContent='娴嬭瘯鍙戦€佸け璐? '+(text||('HTTP '+r.status));}
 
 window.addEventListener('load',async()=>{await loadFooter();await loadHistory();await loadTimeline();await loadSchedule();});
 </script>
 <div id="upgradeModal" class="upgrade-modal">
   <div class="upgrade-card">
     <div class="upgrade-head">
-      <div class="upgrade-title">升级过程</div>
-      <button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button>
+      <div class="upgrade-title">鍗囩骇杩囩▼</div>
+      <button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button>
     </div>
     <pre id="upgradeLog" class="upgrade-log"></pre>
-    <div id="upgradeFoot" class="upgrade-foot">等待开始...</div>
+    <div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div>
   </div>
 </div>
 <div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
@@ -6242,10 +6231,10 @@ window.addEventListener('load',async()=>{await loadFooter();await loadHistory();
 </html>`
 
 const liquidationsHTML = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>强平清算</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>寮哄钩娓呯畻</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{max-width:1200px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:center;font-size:13px}.row{display:flex;gap:8px;align-items:center}.btn{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:8px 12px;border-radius:8px;cursor:pointer}.btn.primary{background:#22c55e;color:#fff;border-color:#22c55e}.small{font-size:12px;color:#64748b}[data-theme="dark"] body{background:#000;color:#e5e7eb}[data-theme="dark"] .nav{background:#000;border-bottom-color:#111827}[data-theme="dark"] .panel{background:#000;border-color:#1f2937}[data-theme="dark"] .small{color:#94a3b8}[data-theme="dark"] th,[data-theme="dark"] td{border-bottom-color:#1f2937}[data-theme="dark"] .btn{background:#000;color:#e5e7eb;border-color:#334155}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations" class="active">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><div class="row" style="justify-content:space-between"><h2 style="margin:0">ETH 寮哄钩娓呯畻锛圔inance / Bybit / OKX锛?/h2><div class="row"><button id="filterBtn" class="btn" onclick="toggleFilter()">过滤小单</button><button class="btn" onclick="prev()">涓婁竴椤?/button><button class="btn" onclick="next()">涓嬩竴椤?/button><button class="btn primary" onclick="load()">刷新</button></div></div><div id="meta" class="small" style="margin:8px 0 10px 0"></div><div id="table"></div></div></div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">娓呯畻鐑尯</a><a href="/config">妯″瀷閰嶇疆</a><a href="/monitor">闆峰尯鐩戞帶</a><a href="/map">鐩樺彛姹囨€?/a><a href="/liquidations" class="active">寮哄钩娓呯畻</a><a href="/bubbles">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel">娑堟伅閫氶亾</a><a href="/analysis">鏃ュ唴鍒嗘瀽</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">涓婚</button><button id="themeDark" onclick="setTheme('dark')">娣辫壊</button><button id="themeLight" onclick="setTheme('light')">娴呰壊</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="wrap"><div class="panel"><div class="row" style="justify-content:space-between"><h2 style="margin:0">ETH 瀵搫閽╁〒鍛暬閿涘湐inance / Bybit / OKX閿?/h2><div class="row"><button id="filterBtn" class="btn" onclick="toggleFilter()">杩囨护灏忓崟</button><button class="btn" onclick="prev()">娑撳﹣绔存い?/button><button class="btn" onclick="next()">娑撳绔存い?/button><button class="btn primary" onclick="load()">鍒锋柊</button></div></div><div id="meta" class="small" style="margin:8px 0 10px 0"></div><div id="table"></div></div></div>
 <script>
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
@@ -6254,22 +6243,22 @@ function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDig
 function fmtQty(n){return Number(n).toLocaleString('zh-CN',{maximumFractionDigits:4})}
 function fmtAmt(n){n=Number(n);if(!isFinite(n))return '-';return n.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function fmtTime(ts){try{return new Date(Number(ts||0)).toLocaleString('zh-CN',{hour12:false});}catch(_){return '-';}}
-function render(rows){if(!rows||!rows.length){document.getElementById('table').innerHTML='<div class="small">暂无数据</div>';return;}let h='<table><thead><tr><th>时间</th><th>浜ゆ槗鎵€</th><th>方向</th><th>价格</th><th>数量</th><th>金额 (USD)</th></tr></thead><tbody>';for(const r of rows){h+='<tr><td>'+fmtTime(r.event_ts)+'</td><td>'+String(r.exchange||'').toUpperCase()+'</td><td>'+r.side+'</td><td>'+fmtPrice(r.price)+'</td><td>'+fmtQty(r.qty)+'</td><td>'+fmtAmt(r.notional_usd)+'</td></tr>';}h+='</tbody></table>';document.getElementById('table').innerHTML=h;}
-function toggleFilter(){filterSmall=!filterSmall;const b=document.getElementById('filterBtn');if(b)b.textContent=filterSmall?'显示全部':'过滤小单';load();}
-async function load(){const r=await fetch('/api/liquidations?page='+page+'&limit='+pageSize);const d=await r.json();let rows=(d.rows||[]);if(filterSmall)rows=rows.filter(x=>Number(x.qty||0)>=1);document.getElementById('meta').textContent='绗?'+d.page+' 椤?| 姣忛〉 '+d.page_size+' 鏉?+(filterSmall?' | 宸茶繃婊ゅ皬浜?1 ETH 鐨勮褰?:'');render(rows);}
+function render(rows){if(!rows||!rows.length){document.getElementById('table').innerHTML='<div class="small">鏆傛棤鏁版嵁</div>';return;}let h='<table><thead><tr><th>鏃堕棿</th><th>娴溿倖妲楅幍鈧?/th><th>鏂瑰悜</th><th>浠锋牸</th><th>鏁伴噺</th><th>閲戦 (USD)</th></tr></thead><tbody>';for(const r of rows){h+='<tr><td>'+fmtTime(r.event_ts)+'</td><td>'+String(r.exchange||'').toUpperCase()+'</td><td>'+r.side+'</td><td>'+fmtPrice(r.price)+'</td><td>'+fmtQty(r.qty)+'</td><td>'+fmtAmt(r.notional_usd)+'</td></tr>';}h+='</tbody></table>';document.getElementById('table').innerHTML=h;}
+function toggleFilter(){filterSmall=!filterSmall;const b=document.getElementById('filterBtn');if(b)b.textContent=filterSmall?'鏄剧ず鍏ㄩ儴':'杩囨护灏忓崟';load();}
+async function load(){const r=await fetch('/api/liquidations?page='+page+'&limit='+pageSize);const d=await r.json();let rows=(d.rows||[]);if(filterSmall)rows=rows.filter(x=>Number(x.qty||0)>=1);document.getElementById('meta').textContent='缁?'+d.page+' 妞?| 濮ｅ繘銆?'+d.page_size+' 閺?+(filterSmall?' | 瀹歌尪绻冨銈呯毈娴?1 ETH 閻ㄥ嫯顔囪ぐ?:'');render(rows);}
 function prev(){if(page>1){page--;load();}}
 function next(){page++;load();}
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'閸楀洨楠囩€瑰本鍨氶敍宀勨偓鈧崙铏圭垳 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='閸楀洨楠囨潻娑氣柤瀹歌尙绮ㄩ弶鐕傜礄閻樿埖鈧焦婀惌銉礆閿涘矁顕Λ鈧弻銉︽）韫?;return;}}foot.textContent='閸楀洨楠囨禒宥呮躬鏉╂稖顢戦敍宀冾嚞缁嬪秴鎮楅崘宥囨箙';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 initTheme();setInterval(load,5000);load();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
 
 const bubblesHTML = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>气泡图</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>姘旀场鍥?/title>
 <style>:root{--bg:#f5f7fb;--text:#1f2937;--muted:#64748b;--nav-bg:#0b1220;--nav-border:#243145;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#fff;--panel-border:#dce3ec;--ctl-bg:#fff;--ctl-text:#111827;--ctl-border:#cbd5e1;--chart-border:#e5e7eb}[data-theme="dark"]{--bg:#000;--text:#e5e7eb;--muted:#94a3b8;--nav-bg:#000;--nav-border:#111827;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#000;--panel-border:#1f2937;--ctl-bg:#000;--ctl-text:#e5e7eb;--ctl-border:#334155;--chart-border:#1f2937}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:var(--nav-bg);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:14px}.brand{font-size:18px;font-weight:700;color:var(--nav-text)}.menu a{color:var(--link);text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{width:100%;max-width:none;margin:0 auto;padding:14px;box-sizing:border-box}.panel{border:1px solid var(--panel-border);background:var(--panel-bg);margin:10px 0;padding:12px;border-radius:10px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.small{font-size:12px;color:var(--muted)}select,button,input{height:34px;border:1px solid var(--ctl-border);border-radius:8px;background:var(--ctl-bg);color:var(--ctl-text);padding:0 10px}input{width:96px}button{cursor:pointer}.btn-applied{background:#0f172a;color:#eef3f9;border-color:#0f172a}.chart{width:100%;height:682px;border:1px solid var(--chart-border);border-radius:8px;background:var(--panel-bg);display:block}.chart-wrap{position:relative}.legend{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:8px}.tag{display:inline-flex;align-items:center;gap:6px}.dot{width:10px;height:10px;border-radius:999px;display:inline-block}.bubble-tip{position:absolute;display:none;min-width:180px;max-width:260px;background:rgba(15,23,42,.96);color:#e2e8f0;border:1px solid rgba(148,163,184,.25);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.5;box-shadow:0 10px 28px rgba(2,6,23,.35);pointer-events:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:var(--nav-text);cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:var(--muted);text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles" class="active">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap"><div class="panel"><div class="row"><span>周期</span><select id="iv"><option value="1m">1M</option><option value="2m">2M</option><option value="5m">5M</option><option value="10m">10M</option><option value="15m">15M</option><option value="30m">30M</option><option value="1h">1H</option><option value="4h">4H</option><option value="8h">8H</option><option value="12h">12H</option><option value="1d">1D</option><option value="3d">3D</option><option value="7d" selected>7D</option></select><button onclick="load()">刷新</button><span class="small">过滤小单 ETH 数量</span><input id="qtyFilter" type="number" min="0" step="0.1" value="50"><button id="filterBtn" onclick="applyQtyFilter()">应用过滤</button><label class="small" style="display:inline-flex;align-items:center;gap:6px;margin-left:6px"><input id="hist" type="checkbox">历史</label><button id="moreBtn" style="display:none" onclick="loadMoreHistory()">向左加载</button><span id="meta" class="small"></span></div><div class="chart-wrap"><canvas id="cv" class="chart" width="1600" height="620"></canvas><div id="bubbleTip" class="bubble-tip"></div></div><div class="legend small"><div>姘旀场澶у皬浠ｈ〃娓呯畻閲戦锛岄鑹蹭唬琛ㄥ绌烘柟鍚戙€傛粴杞缉鏀撅紙榛樿浠ユ渶鍙充晶K绾夸负閿氱偣锛夛紝鎸変綇榧犳爣宸﹂敭宸﹀彸鎷栧姩銆?/div><div class="tag"><span class="dot" style="background:#dc2626"></span><span>红色=多单爆仓</span><span class="dot" style="margin-left:10px;background:#16a34a"></span><span>绿色=空单爆仓</span></div></div></div></div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">娓呯畻鐑尯</a><a href="/config">妯″瀷閰嶇疆</a><a href="/monitor">闆峰尯鐩戞帶</a><a href="/map">鐩樺彛姹囨€?/a><a href="/liquidations">寮哄钩娓呯畻</a><a href="/bubbles" class="active">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel">娑堟伅閫氶亾</a><a href="/analysis">鏃ュ唴鍒嗘瀽</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">涓婚</button><button id="themeDark" onclick="setTheme('dark')">娣辫壊</button><button id="themeLight" onclick="setTheme('light')">娴呰壊</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="wrap"><div class="panel"><div class="row"><span>鍛ㄦ湡</span><select id="iv"><option value="1m">1M</option><option value="2m">2M</option><option value="5m">5M</option><option value="10m">10M</option><option value="15m">15M</option><option value="30m">30M</option><option value="1h">1H</option><option value="4h">4H</option><option value="8h">8H</option><option value="12h">12H</option><option value="1d">1D</option><option value="3d">3D</option><option value="7d" selected>7D</option></select><button onclick="load()">鍒锋柊</button><span class="small">杩囨护灏忓崟 ETH 鏁伴噺</span><input id="qtyFilter" type="number" min="0" step="0.1" value="50"><button id="filterBtn" onclick="applyQtyFilter()">搴旂敤杩囨护</button><label class="small" style="display:inline-flex;align-items:center;gap:6px;margin-left:6px"><input id="hist" type="checkbox">鍘嗗彶</label><button id="moreBtn" style="display:none" onclick="loadMoreHistory()">鍚戝乏鍔犺浇</button><span id="meta" class="small"></span></div><div class="chart-wrap"><canvas id="cv" class="chart" width="1600" height="620"></canvas><div id="bubbleTip" class="bubble-tip"></div></div><div class="legend small"><div>濮樻梹鍦烘径褍鐨禒锝堛€冨〒鍛暬闁叉垿顤傞敍宀勵杹閼硅弓鍞悰銊ヮ樋缁岀儤鏌熼崥鎴欌偓鍌涚泊鏉烆喚缂夐弨鎾呯礄姒涙顓绘禒銉︽付閸欏厖鏅禟缁惧じ璐熼柨姘卞仯閿涘绱濋幐澶夌秶姒х姵鐖ｅ锕傛暛瀹革箑褰搁幏鏍уЗ閵?/div><div class="tag"><span class="dot" style="background:#dc2626"></span><span>绾㈣壊=澶氬崟鐖嗕粨</span><span class="dot" style="margin-left:10px;background:#16a34a"></span><span>缁胯壊=绌哄崟鐖嗕粨</span></div></div></div></div>
 <script>
 let candles=[],events=[],viewStart=0,viewCount=120,drag=false,lastX=0,intervalMs=0,latestStart=0,qtyFilter=50,filterApplied=false,bubbleHoverMeta=[],klineSource='-';
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
@@ -6281,7 +6270,7 @@ function mapInterval(v){if(v==='10m')return '5m';if(v==='7d')return '1w';return 
 function visibleEvents(){return (events||[]).filter(ev=>toNum(ev.qty)>=qtyFilter);}
 function syncFilterBtn(){const btn=document.getElementById('filterBtn');if(btn)btn.classList.toggle('btn-applied',!!filterApplied);}
 function applyQtyFilter(){const input=document.getElementById('qtyFilter');qtyFilter=Math.max(0,toNum(input&&input.value));if(input)input.value=String(qtyFilter);filterApplied=true;syncFilterBtn();draw();updateMeta();}
-function updateMeta(){const meta=document.getElementById('meta');if(!meta)return;meta.textContent='K绾挎潵婧? '+(klineSource||((document.getElementById('iv')&&document.getElementById('iv').value)||'-'))+' | 区间清算事件 '+visibleEvents().length+' 鏉?| 宸茶繃婊ゅ皬浜?'+qtyFilter+' ETH';}
+function updateMeta(){const meta=document.getElementById('meta');if(!meta)return;meta.textContent='K缁炬寧娼靛┃? '+(klineSource||((document.getElementById('iv')&&document.getElementById('iv').value)||'-'))+' | 鍖洪棿娓呯畻浜嬩欢 '+visibleEvents().length+' 閺?| 瀹歌尪绻冨銈呯毈娴?'+qtyFilter+' ETH';}
 function drawMessage(msg){const v=fit(),x=v.x,W=v.w,H=v.h;x.clearRect(0,0,W,H);x.fillStyle=cssVar('--panel-bg','#fff');x.fillRect(0,0,W,H);x.fillStyle=cssVar('--muted','#64748b');x.font='14px sans-serif';x.fillText(msg,16,26);}
 function fmtAmt(n){n=toNum(n);if(!isFinite(n))return '-';return n.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function fmtQty(n){return toNum(n).toLocaleString('zh-CN',{maximumFractionDigits:4});}
@@ -6292,12 +6281,12 @@ function showBubbleTip(hit,ev){
   const tip=document.getElementById('bubbleTip');
   const wrap=document.querySelector('.chart-wrap');
   if(!tip||!wrap||!hit)return;
-  tip.innerHTML='<div><strong>'+(String(hit.side)==='long'?'多单爆仓':'空单爆仓')+'</strong></div>'+
-    '<div>浜ゆ槗鎵€: '+String(hit.exchange||'-').toUpperCase()+'</div>'+
-    '<div>价格: '+fmtPrice(hit.price)+'</div>'+
-    '<div>时间: '+fmtTime(hit.event_ts)+'</div>'+
-    '<div>数量: '+fmtQty(hit.qty)+' ETH</div>'+
-    '<div>金额: '+fmtAmt(hit.notional_usd)+' USD</div>';
+  tip.innerHTML='<div><strong>'+(String(hit.side)==='long'?'澶氬崟鐖嗕粨':'绌哄崟鐖嗕粨')+'</strong></div>'+
+    '<div>娴溿倖妲楅幍鈧? '+String(hit.exchange||'-').toUpperCase()+'</div>'+
+    '<div>浠锋牸: '+fmtPrice(hit.price)+'</div>'+
+    '<div>鏃堕棿: '+fmtTime(hit.event_ts)+'</div>'+
+    '<div>鏁伴噺: '+fmtQty(hit.qty)+' ETH</div>'+
+    '<div>閲戦: '+fmtAmt(hit.notional_usd)+' USD</div>';
   tip.style.display='block';
   const wr=wrap.getBoundingClientRect();
   let left=(ev.clientX-wr.left)+14,top=(ev.clientY-wr.top)+14;
@@ -6309,7 +6298,7 @@ function showBubbleTip(hit,ev){
 }
 function parseRows(rows,interval){let cs=(rows||[]).map(r=>({t:toNum(r[0]),o:toNum(r[1]),h:toNum(r[2]),l:toNum(r[3]),c:toNum(r[4])}));if(interval==='2m'){const out=[];for(let i=0;i+1<cs.length;i+=2){const a=cs[i],b=cs[i+1];out.push({t:a.t,o:a.o,h:Math.max(a.h,b.h),l:Math.min(a.l,b.l),c:b.c});}cs=out;}if(interval==='10m'){const out=[];for(let i=0;i+1<cs.length;i+=2){const a=cs[i],b=cs[i+1];out.push({t:a.t,o:a.o,h:Math.max(a.h,b.h),l:Math.min(a.l,b.l),c:b.c});}cs=out;}if(interval==='7d'){const out=[];for(let i=0;i+6<cs.length;i+=7){const a=cs[i],g=cs.slice(i,i+7),z=g[g.length-1];out.push({t:a.t,o:a.o,h:Math.max(...g.map(v=>v.h)),l:Math.min(...g.map(v=>v.l)),c:z.c});}cs=out;}return cs;}
 function cssVar(name,fallback){try{const v=getComputedStyle(document.documentElement).getPropertyValue(name).trim();return v||fallback;}catch(_){return fallback;}}
-function draw(){const v=fit(),x=v.x,W=v.w,H=v.h,padL=70,padR=20,padT=18,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;x.clearRect(0,0,W,H);bubbleHoverMeta=[];hideBubbleTip();const bg=cssVar('--panel-bg','#fff');const muted=cssVar('--muted','#64748b');const grid=cssVar('--chart-border','#e5e7eb');x.fillStyle=bg;x.fillRect(0,0,W,H);if(!candles.length){x.fillStyle=muted;x.fillText('暂无数据',16,24);return;}const s=Math.max(0,Math.min(candles.length-1,viewStart)),e=Math.max(s+10,Math.min(candles.length,s+viewCount));const cs=candles.slice(s,e);const minP=Math.min(...cs.map(v=>v.l)),maxP=Math.max(...cs.map(v=>v.h));const span=Math.max(1e-6,maxP-minP);const sx=i=>padL+(i/(cs.length-1))*pw,sy=p=>padT+((maxP-p)/span)*ph;x.strokeStyle=grid;x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*i/4,val=maxP-(span*i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle=muted;x.fillText(val.toFixed(1),6,y+4);}const bodyW=Math.max(3,Math.min(12,pw/Math.max(20,cs.length)));for(let i=0;i<cs.length;i++){const c=cs[i],px=sx(i),yo=sy(c.o),yc=sy(c.c),yh=sy(c.h),yl=sy(c.l),up=c.c>=c.o;x.strokeStyle=up?'#16a34a':'#dc2626';x.beginPath();x.moveTo(px,yh);x.lineTo(px,yl);x.stroke();x.fillStyle=up?'rgba(22,163,74,0.75)':'rgba(220,38,38,0.75)';x.fillRect(px-bodyW/2,Math.min(yo,yc),bodyW,Math.max(1,Math.abs(yc-yo)));}
+function draw(){const v=fit(),x=v.x,W=v.w,H=v.h,padL=70,padR=20,padT=18,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;x.clearRect(0,0,W,H);bubbleHoverMeta=[];hideBubbleTip();const bg=cssVar('--panel-bg','#fff');const muted=cssVar('--muted','#64748b');const grid=cssVar('--chart-border','#e5e7eb');x.fillStyle=bg;x.fillRect(0,0,W,H);if(!candles.length){x.fillStyle=muted;x.fillText('鏆傛棤鏁版嵁',16,24);return;}const s=Math.max(0,Math.min(candles.length-1,viewStart)),e=Math.max(s+10,Math.min(candles.length,s+viewCount));const cs=candles.slice(s,e);const minP=Math.min(...cs.map(v=>v.l)),maxP=Math.max(...cs.map(v=>v.h));const span=Math.max(1e-6,maxP-minP);const sx=i=>padL+(i/(cs.length-1))*pw,sy=p=>padT+((maxP-p)/span)*ph;x.strokeStyle=grid;x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*i/4,val=maxP-(span*i/4);x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle=muted;x.fillText(val.toFixed(1),6,y+4);}const bodyW=Math.max(3,Math.min(12,pw/Math.max(20,cs.length)));for(let i=0;i<cs.length;i++){const c=cs[i],px=sx(i),yo=sy(c.o),yc=sy(c.c),yh=sy(c.h),yl=sy(c.l),up=c.c>=c.o;x.strokeStyle=up?'#16a34a':'#dc2626';x.beginPath();x.moveTo(px,yh);x.lineTo(px,yl);x.stroke();x.fillStyle=up?'rgba(22,163,74,0.75)':'rgba(220,38,38,0.75)';x.fillRect(px-bodyW/2,Math.min(yo,yc),bodyW,Math.max(1,Math.abs(yc-yo)));}
 function upperBound(arr,x){let lo=0,hi=arr.length;while(lo<hi){const mid=(lo+hi)>>1;if(arr[mid]<=x)lo=mid+1;else hi=mid;}return lo;}
 const t0=cs[0].t,t1=cs[cs.length-1].t;
 const spanMs=(intervalMs>0?intervalMs:intervalToMs(document.getElementById('iv').value||''))||0;
@@ -6342,51 +6331,51 @@ x.fillStyle=muted;for(let i=0;i<=6;i++){const k=Math.floor((cs.length-1)*i/6),px
 function uniqByT(list){const out=[];const seen=new Set();for(const it of (list||[])){const t=toNum(it.t);if(!t||seen.has(t))continue;seen.add(t);out.push(it);}out.sort((a,b)=>a.t-b.t);return out;}
 function mergeEvents(a,b){const out=[];const key=(e)=>String(toNum(e.event_ts))+'|'+String(e.exchange||'')+'|'+String(e.side||'')+'|'+String(toNum(e.price))+'|'+String(toNum(e.qty));const seen=new Set();for(const it of (a||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}for(const it of (b||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}out.sort((x,y)=>toNum(x.event_ts)-toNum(y.event_ts));return out;}
 function setMoreBtnVisible(){const cb=document.getElementById('hist');const b=document.getElementById('moreBtn');if(!cb||!b)return;b.style.display=cb.checked?'inline-block':'none';}
-async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');if(!kr.ok){const msg='K绾垮姞杞藉け璐? '+await kr.text();candles=[];events=[];klineSource='-';updateMeta();drawMessage(msg);return;}const kd=await kr.json();klineSource=kd.source||iv;candles=uniqByT(parseRows(kd.rows||[],iv));if(!candles.length){events=[];updateMeta();drawMessage('K绾垮姞杞藉け璐? 杩斿洖鏁版嵁涓虹┖');return;}intervalMs=(candles.length>=2)?Math.max(0,toNum(candles[candles.length-1].t)-toNum(candles[candles.length-2].t)):intervalToMs(iv);if(!(intervalMs>0))intervalMs=intervalToMs(iv);latestStart=candles.length?toNum(candles[candles.length-1].t):0;events=[];if(candles.length){const startTS=toNum(candles[0].t);const endTS=latestStart+(intervalMs>0?intervalMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];}viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);setMoreBtnVisible();updateMeta();draw();}
-async function loadMoreHistory(){const cb=document.getElementById('hist');if(!cb||!cb.checked)return;if(!candles.length)return;const iv=document.getElementById('iv').value;const endTS=Math.max(0,toNum(candles[0].t)-1);const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500&end_ts='+encodeURIComponent(endTS));if(!kr.ok){document.getElementById('meta').textContent='鍘嗗彶K绾垮姞杞藉け璐? '+await kr.text();return;}const kd=await kr.json();klineSource=kd.source||klineSource;const more=uniqByT(parseRows(kd.rows||[],iv));if(!more.length){document.getElementById('meta').textContent='娌℃湁鏇村鍘嗗彶K绾?;return;}const added=more.filter(x=>toNum(x.t)<toNum(candles[0].t));if(!added.length){document.getElementById('meta').textContent='娌℃湁鏇村鍘嗗彶K绾?;return;}candles=uniqByT(added.concat(candles));const spanMs=(intervalMs>0?intervalMs:intervalToMs(iv));const startTS=toNum(added[0].t),endTS2=toNum(added[added.length-1].t)+(spanMs>0?spanMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS2));const ed=await er.json();events=mergeEvents(ed.rows||[],events);viewStart=Math.max(0,viewStart+added.length);updateMeta();draw();}
+async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');if(!kr.ok){const msg='K缁惧灝濮炴潪钘夈亼鐠? '+await kr.text();candles=[];events=[];klineSource='-';updateMeta();drawMessage(msg);return;}const kd=await kr.json();klineSource=kd.source||iv;candles=uniqByT(parseRows(kd.rows||[],iv));if(!candles.length){events=[];updateMeta();drawMessage('K缁惧灝濮炴潪钘夈亼鐠? 鏉╂柨娲栭弫鐗堝祦娑撹櫣鈹?);return;}intervalMs=(candles.length>=2)?Math.max(0,toNum(candles[candles.length-1].t)-toNum(candles[candles.length-2].t)):intervalToMs(iv);if(!(intervalMs>0))intervalMs=intervalToMs(iv);latestStart=candles.length?toNum(candles[candles.length-1].t):0;events=[];if(candles.length){const startTS=toNum(candles[0].t);const endTS=latestStart+(intervalMs>0?intervalMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];}viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);setMoreBtnVisible();updateMeta();draw();}
+async function loadMoreHistory(){const cb=document.getElementById('hist');if(!cb||!cb.checked)return;if(!candles.length)return;const iv=document.getElementById('iv').value;const endTS=Math.max(0,toNum(candles[0].t)-1);const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500&end_ts='+encodeURIComponent(endTS));if(!kr.ok){document.getElementById('meta').textContent='閸樺棗褰禟缁惧灝濮炴潪钘夈亼鐠? '+await kr.text();return;}const kd=await kr.json();klineSource=kd.source||klineSource;const more=uniqByT(parseRows(kd.rows||[],iv));if(!more.length){document.getElementById('meta').textContent='濞屸剝婀侀弴鏉戭樋閸樺棗褰禟缁?;return;}const added=more.filter(x=>toNum(x.t)<toNum(candles[0].t));if(!added.length){document.getElementById('meta').textContent='濞屸剝婀侀弴鏉戭樋閸樺棗褰禟缁?;return;}candles=uniqByT(added.concat(candles));const spanMs=(intervalMs>0?intervalMs:intervalToMs(iv));const startTS=toNum(added[0].t),endTS2=toNum(added[added.length-1].t)+(spanMs>0?spanMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS2));const ed=await er.json();events=mergeEvents(ed.rows||[],events);viewStart=Math.max(0,viewStart+added.length);updateMeta();draw();}
 const c=document.getElementById('cv');c.addEventListener('wheel',e=>{if(!candles.length)return;e.preventDefault();const right=Math.min(candles.length,viewStart+viewCount);const factor=e.deltaY<0?0.88:1.12;const nextCount=Math.max(30,Math.min(candles.length,Math.round(viewCount*factor)));viewCount=nextCount;viewStart=Math.max(0,Math.min(candles.length-viewCount,right-viewCount));draw();},{passive:false});c.addEventListener('mousedown',e=>{drag=true;lastX=e.clientX});c.addEventListener('mousemove',e=>{const rect=c.getBoundingClientRect();const mx=e.clientX-rect.left,my=e.clientY-rect.top;let hit=null,dist=1e18;for(const it of bubbleHoverMeta){const d=Math.hypot(mx-it.px,my-it.py);if(d<=it.r+3&&d<dist){dist=d;hit=it.event;}}if(hit)showBubbleTip(hit,e);else hideBubbleTip();});c.addEventListener('mouseleave',()=>hideBubbleTip());window.addEventListener('mouseup',()=>drag=false);window.addEventListener('mousemove',e=>{if(!drag||!candles.length)return;const dx=e.clientX-lastX;lastX=e.clientX;const shift=Math.round(-dx/8);if(shift!==0){viewStart=Math.max(0,Math.min(candles.length-viewCount,viewStart+shift));draw();}});window.addEventListener('resize',()=>draw());document.getElementById('iv').addEventListener('change',load);document.getElementById('hist').addEventListener('change',setMoreBtnVisible);document.getElementById('qtyFilter').addEventListener('input',()=>{filterApplied=false;syncFilterBtn();});document.getElementById('qtyFilter').addEventListener('change',applyQtyFilter);
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'閸楀洨楠囩€瑰本鍨氶敍宀勨偓鈧崙铏圭垳 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='閸楀洨楠囨潻娑氣柤瀹歌尙绮ㄩ弶鐕傜礄閻樿埖鈧焦婀惌銉礆閿涘矁顕Λ鈧弻銉︽）韫?;return;}}foot.textContent='閸楀洨楠囨禒宥呮躬鏉╂稖顢戦敍宀冾嚞缁嬪秴鎮楅崘宥囨箙';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 initTheme();syncFilterBtn();load();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div><script>(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();</script></body></html>`
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div><script>(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();</script></body></html>`
 const configHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.PageTitle}}</title>
 <style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{max-width:980px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.small{font-size:12px;color:#6b7280}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.field label{display:block;font-size:12px;color:#6b7280}.field input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}.field input:disabled{background:#f1f5f9;color:#64748b;cursor:not-allowed}button.primary{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}.q{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:6px;border-radius:999px;border:1px solid #cbd5e1;color:#475569;font-size:12px;line-height:1;cursor:help;background:#fff}[data-theme="dark"] body{background:#000;color:#e5e7eb}[data-theme="dark"] .nav{background:#000;border-bottom-color:#111827}[data-theme="dark"] .panel{background:#000;border-color:#1f2937}[data-theme="dark"] .small,[data-theme="dark"] .field label{color:#94a3b8}[data-theme="dark"] .field input,[data-theme="dark"] select,[data-theme="dark"] button.secondary{background:#000;color:#e5e7eb;border-color:#334155}[data-theme="dark"] .q{background:#000;color:#cbd5e1;border-color:#334155}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config"{{if eq .ActiveMenu "config"}} class="active"{{end}}>模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis"{{if eq .ActiveMenu "analysis"}} class="active"{{end}}>日内分析</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
-<div class="wrap">{{if .ShowAnalysisInfo}}<div class="panel"><h2 style="margin-top:0">日内分析</h2><div class="small">首版先承接模型参数与说明，后续会在这里补充分析结果、评分与回测摘要。</div><div class="small" style="margin-top:8px">当前页面可直接编辑与日内分析相关的模型参数，保存后会与“模型配置”页面保持同步。</div></div>{{end}}<div class="panel"><h2 style="margin-top:0">清算地图模型参数</h2><div class="small">淇敼鍚庣珛鍗冲奖鍝?OI 澧為噺妯″瀷鐨勮绠椾笌灞曠ず銆?/div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">娓呯畻鐑尯</a><a href="/config"{{if eq .ActiveMenu "config"}} class="active"{{end}}>妯″瀷閰嶇疆</a><a href="/monitor">闆峰尯鐩戞帶</a><a href="/map">鐩樺彛姹囨€?/a><a href="/liquidations">寮哄钩娓呯畻</a><a href="/bubbles">姘旀场鍥?/a><a href="/webdatasource">椤甸潰鏁版嵁婧?/a><a href="/channel">娑堟伅閫氶亾</a><a href="/analysis"{{if eq .ActiveMenu "analysis"}} class="active"{{end}}>鏃ュ唴鍒嗘瀽</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">涓婚</button><button id="themeDark" onclick="setTheme('dark')">娣辫壊</button><button id="themeLight" onclick="setTheme('light')">娴呰壊</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a></div></div>
+<div class="wrap">{{if .ShowAnalysisInfo}}<div class="panel"><h2 style="margin-top:0">鏃ュ唴鍒嗘瀽</h2><div class="small">棣栫増鍏堟壙鎺ユā鍨嬪弬鏁颁笌璇存槑锛屽悗缁細鍦ㄨ繖閲岃ˉ鍏呭垎鏋愮粨鏋溿€佽瘎鍒嗕笌鍥炴祴鎽樿銆?/div><div class="small" style="margin-top:8px">褰撳墠椤甸潰鍙洿鎺ョ紪杈戜笌鏃ュ唴鍒嗘瀽鐩稿叧鐨勬ā鍨嬪弬鏁帮紝淇濆瓨鍚庝細涓庘€滄ā鍨嬮厤缃€濋〉闈繚鎸佸悓姝ャ€?/div></div>{{end}}<div class="panel"><h2 style="margin-top:0">娓呯畻鍦板浘妯″瀷鍙傛暟</h2><div class="small">娣囶喗鏁奸崥搴ｇ彌閸楀啿濂栭崫?OI 婢х偤鍣哄Ο鈥崇€烽惃鍕吀缁犳ぞ绗岀仦鏇犮仛閵?/div>
 <div class="grid" style="margin-top:14px">
-  <div class="field"><label>鍥炵湅绐楀彛锛堝ぉ锛?/label><input id="lookback" type="number" min="0" max="30" step="1" disabled></div>
-  <div class="field"><label>鏃堕棿妗讹紙鍒嗛挓锛?/label><input id="bucket" type="number" min="1" max="30" step="1"></div>
-  <div class="field"><label>价格步长</label><input id="step" type="number" min="1" max="50" step="0.5"></div>
-  <div class="field"><label>价格范围（±）</label><input id="range" type="number" min="100" max="1000" step="10"></div>
+  <div class="field"><label>閸ョ偟婀呯粣妤€褰涢敍鍫濄亯閿?/label><input id="lookback" type="number" min="0" max="30" step="1" disabled></div>
+  <div class="field"><label>閺冨爼妫垮璁圭礄閸掑棝鎸撻敍?/label><input id="bucket" type="number" min="1" max="30" step="1"></div>
+  <div class="field"><label>浠锋牸姝ラ暱</label><input id="step" type="number" min="1" max="50" step="0.5"></div>
+  <div class="field"><label>浠锋牸鑼冨洿锛埪憋級</label><input id="range" type="number" min="100" max="1000" step="10"></div>
   <div class="field" style="grid-column:1/-1">
-    <label>鏉犳潌鍥哄畾妗ｄ綅锛?x / 5x / 10x / 20x / 30x / 50x / 100x锛?/label>
-    <div class="small" style="margin-top:6px">鍒嗗埆閰嶇疆锛氭潈閲嶃€佺淮鎶や繚璇侀噾鐜囥€佽祫閲戣垂鐜囩缉鏀剧郴鏁帮紙涓庢潬鏉嗘。浣嶄竴涓€瀵瑰簲锛夈€?/div>
+    <label>閺夌姵娼岄崶鍝勭暰濡楋絼缍呴敍?x / 5x / 10x / 20x / 30x / 50x / 100x閿?/label>
+    <div class="small" style="margin-top:6px">閸掑棗鍩嗛柊宥囩枂閿涙碍娼堥柌宥冣偓浣烘樊閹躲倓绻氱拠渚€鍣鹃悳鍥モ偓浣界カ闁叉垼鍨傞悳鍥╃級閺€鍓ч兇閺佸府绱欐稉搴㈡浆閺夊棙銆傛担宥勭娑撯偓鐎电懓绨查敍澶堚偓?/div>
     <div class="row" style="margin-top:10px;justify-content:space-between">
       <div class="field" style="min-width:280px">
-        <label>缂栬緫鑼冨洿锛堟潈閲?mm锛?/label>
+        <label>缂傛牞绶懠鍐ㄦ纯閿涘牊娼堥柌?mm閿?/label>
         <select id="ex_scope" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px">
-          <option value="global">全局</option>
+          <option value="global">鍏ㄥ眬</option>
           <option value="binance">Binance</option>
           <option value="okx">OKX</option>
           <option value="bybit">Bybit</option>
         </select>
-        <div class="small" style="margin-top:6px">鎻愮ず锛氳祫閲戣垂鐜囩缉鏀剧郴鏁颁粛涓哄叏灞€閰嶇疆銆?/div>
+        <div class="small" style="margin-top:6px">閹绘劗銇氶敍姘崇カ闁叉垼鍨傞悳鍥╃級閺€鍓ч兇閺侀绮涙稉鍝勫弿鐏炩偓闁板秶鐤嗛妴?/div>
       </div>
       <div class="row" style="margin-top:18px">
         <input id="fit_hours" type="number" min="1" max="168" step="1" value="24" style="width:88px;height:34px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:0 10px">
-        <span class="small">小时</span>
+        <span class="small">灏忔椂</span>
         <input id="fit_min" type="number" min="5" max="200" step="1" value="25" style="width:76px;height:34px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:0 10px">
-        <span class="small">鏉?/span>
-        <button class="secondary" type="button" onclick="fitScope()">拟合</button>
-        <button class="secondary" type="button" onclick="clearScope()">清空覆盖</button>
+        <span class="small">閺?/span>
+        <button class="secondary" type="button" onclick="fitScope()">鎷熷悎</button>
+        <button class="secondary" type="button" onclick="clearScope()">娓呯┖瑕嗙洊</button>
         <span id="fitMsg" class="small"></span>
       </div>
     </div>
     <div style="overflow:auto;margin-top:10px">
       <table style="width:100%;border-collapse:collapse">
-        <thead><tr style="background:#f1f5f9"><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">杠杆</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">权重</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">维护保证金率 <span class="q" title="鐢ㄩ€旓細杩戜技浜ゆ槗鎵€鐨勭淮鎶や繚璇侀噾鐜囷紙Maintenance Margin Ratio锛岃浣?mm锛夛紝鐢ㄤ簬璁＄畻娓呯畻浠蜂綅缃€俶m 瓒婂ぇ锛屽厑璁哥殑浜忔崯瓒婂皬锛屾竻绠椾环瓒娾€滈潬杩戠幇浠封€濄€?#10;&#10;鏈ā鍨嬬殑娓呯畻浠凤紙鎸夋爣璁颁环 mark 浼扮畻锛夛細&#10;澶氬崟娓呯畻浠凤紙涓嬫柟锛夛細liqLong = mark * (1 - 1/lev + mm)&#10;绌哄崟娓呯畻浠凤紙涓婃柟锛夛細liqShort = mark * (1 + 1/lev - mm)&#10;&#10;褰卞搷锛?#10;- 鎻愰珮 mm锛氬鍗曟竻绠椾环涓婄Щ銆佺┖鍗曟竻绠椾环涓嬬Щ锛堜袱杈归兘鏇磋创杩戠幇浠凤級锛屾煴瀛愭洿闆嗕腑锛?#10;- 闄嶄綆 mm锛氭竻绠椾环鏇磋繙绂荤幇浠凤紝鏌卞瓙鏇村垎鏁ｃ€?#10;&#10;绀轰緥锛歮ark=2250锛宭ev=10x&#10;- mm=0.005锛歭iqLong=2250*(1-0.1+0.005)=2021.25锛沴iqShort=2250*(1+0.1-0.005)=2463.75&#10;- mm=0.010锛歭iqLong=2250*(1-0.1+0.010)=2032.50锛沴iqShort=2250*(1+0.1-0.010)=2452.50&#10;&#10;鎻愮ず锛氱洰鍓嶇晫闈㈠厑璁镐綘涓烘瘡涓潬鏉嗘。浣嶅崟鐙缃?mm銆?>?</span></th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">资金费率缩放系数 <span class="q" title="鐢ㄩ€旓細鐢ㄨ祫閲戣垂鐜囷紙Funding Rate锛夋潵璋冩暣鈥滃/绌衡€濇竻绠楀己搴︾殑鍒嗛厤姣斾緥銆?#10;&#10;鍏紡锛堟瘡涓氦鏄撴墍銆佹瘡涓潬鏉嗘。浣嶅垎鍒绠楋級锛?#10;longShare = clamp(0.5 + funding_rate * funding_scale, 0.2, 0.8)&#10;shortShare = 1 - longShare&#10;longAmt = 螖OI * longShare * weight&#10;shortAmt = 螖OI * shortShare * weight&#10;&#10;瑙ｉ噴锛?#10;- funding_rate > 0 閫氬父琛ㄧず澶氬ご浠樿垂锛屾ā鍨嬩細鎶婃洿澶氬己搴﹀垎缁欌€滅┖鍗曟竻绠椾环锛堜笂鏂瑰尯鍩燂級鈥濓紝鍥犳涓婃柟鏌卞瓙浼氬彉澶э紱&#10;- funding_rate < 0 鐩稿弽锛屼細璁╀笅鏂规煴瀛愭洿澶э紱&#10;- funding_scale 瓒婂ぇ锛屽亸鍚戣秺寮猴紝浣嗕細琚檺鍒跺湪 20%~80% 鍖洪棿銆?#10;&#10;绀轰緥锛歠unding_rate=0.00005锛?e-5锛?#10;- funding_scale=4500 鈬?longShare=0.5+0.00005*4500=0.725锛?2.5%/27.5%锛?#10;- funding_scale=7000 鈬?0.85 鈫?clamp 鍒?0.80锛?0%/20%锛?>?</span></th></tr></thead>
+        <thead><tr style="background:#f1f5f9"><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">鏉犳潌</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">鏉冮噸</th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">缁存姢淇濊瘉閲戠巼 <span class="q" title="閻劑鈧棑绱版潻鎴滄妧娴溿倖妲楅幍鈧惃鍕樊閹躲倓绻氱拠渚€鍣鹃悳鍥风礄Maintenance Margin Ratio閿涘矁顔囨担?mm閿涘绱濋悽銊ょ艾鐠侊紕鐣诲〒鍛暬娴犺渹缍呯純顔衡偓淇秏 鐡掑﹤銇囬敍灞藉帒鐠佸摜娈戞禍蹇斿疮鐡掑﹤鐨敍灞剧缁犳ぞ鐜搾濞锯偓婊堟浆鏉╂垹骞囨禒灏佲偓婵勨偓?#10;&#10;閺堫剚膩閸ㄥ娈戝〒鍛暬娴犲嚖绱欓幐澶嬬垼鐠侀鐜?mark 娴兼壆鐣婚敍澶涚窗&#10;婢舵艾宕熷〒鍛暬娴犲嚖绱欐稉瀣煙閿涘绱發iqLong = mark * (1 - 1/lev + mm)&#10;缁屽搫宕熷〒鍛暬娴犲嚖绱欐稉濠冩煙閿涘绱發iqShort = mark * (1 + 1/lev - mm)&#10;&#10;瑜板崬鎼烽敍?#10;- 閹绘劙鐝?mm閿涙艾顦块崡鏇熺缁犳ぞ鐜稉濠勑╅妴浣衡敄閸楁洘绔荤粻妞剧幆娑撳些閿涘牅琚辨潏褰掑厴閺囩鍒涙潻鎴犲箛娴犲嚖绱氶敍灞剧叴鐎涙劖娲块梿鍡曡厬閿?#10;- 闂勫秳缍?mm閿涙碍绔荤粻妞剧幆閺囩绻欑粋鑽ゅ箛娴犲嚖绱濋弻鍗炵摍閺囨潙鍨庨弫锝冣偓?#10;&#10;缁€杞扮伐閿涙ark=2250閿涘ev=10x&#10;- mm=0.005閿涙iqLong=2250*(1-0.1+0.005)=2021.25閿涙泊iqShort=2250*(1+0.1-0.005)=2463.75&#10;- mm=0.010閿涙iqLong=2250*(1-0.1+0.010)=2032.50閿涙泊iqShort=2250*(1+0.1-0.010)=2452.50&#10;&#10;閹绘劗銇氶敍姘辨窗閸撳秶鏅棃銏犲帒鐠侀晲缍樻稉鐑樼槨娑擃亝娼弶鍡樸€傛担宥呭礋閻欘剝顔曠純?mm閵?>?</span></th><th style="text-align:left;padding:8px;border:1px solid #e2e8f0">璧勯噾璐圭巼缂╂斁绯绘暟 <span class="q" title="閻劑鈧棑绱伴悽銊ㄧカ闁叉垼鍨傞悳鍥风礄Funding Rate閿涘娼电拫鍐╂殻閳ユ粌顦?缁岃　鈧繃绔荤粻妤€宸辨惔锔炬畱閸掑棝鍘ゅВ鏂剧伐閵?#10;&#10;閸忣剙绱￠敍鍫熺槨娑擃亙姘﹂弰鎾村閵嗕焦鐦℃稉顏呮浆閺夊棙銆傛担宥呭瀻閸掝偉顓哥粻妤嬬礆閿?#10;longShare = clamp(0.5 + funding_rate * funding_scale, 0.2, 0.8)&#10;shortShare = 1 - longShare&#10;longAmt = 铻朞I * longShare * weight&#10;shortAmt = 铻朞I * shortShare * weight&#10;&#10;鐟欙綁鍣撮敍?#10;- funding_rate > 0 闁艾鐖剁悰銊с仛婢舵艾銇旀禒妯垮瀭閿涘本膩閸ㄥ绱伴幎濠冩纯婢舵艾宸辨惔锕€鍨庣紒娆屸偓婊呪敄閸楁洘绔荤粻妞剧幆閿涘牅绗傞弬鐟板隘閸╃噦绱氶垾婵撶礉閸ョ姵顒濇稉濠冩煙閺屽崬鐡欐导姘綁婢堆嶇幢&#10;- funding_rate < 0 閻╃寮介敍灞肩窗鐠佲晙绗呴弬瑙勭叴鐎涙劖娲挎径褝绱?#10;- funding_scale 鐡掑﹤銇囬敍灞戒焊閸氭垼绉哄鐚寸礉娴ｅ棔绱扮悮顐︽閸掕泛婀?20%~80% 閸栨椽妫块妴?#10;&#10;缁€杞扮伐閿涙瓲unding_rate=0.00005閿?e-5閿?#10;- funding_scale=4500 閳?longShare=0.5+0.00005*4500=0.725閿?2.5%/27.5%閿?#10;- funding_scale=7000 閳?0.85 閳?clamp 閸?0.80閿?0%/20%閿?>?</span></th></tr></thead>
         <tbody>
           <tr><td style="padding:8px;border:1px solid #e2e8f0">1x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_1" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_1" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_1" type="number" step="100"></td></tr>
           <tr><td style="padding:8px;border:1px solid #e2e8f0">5x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_5" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_5" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_5" type="number" step="100"></td></tr>
@@ -6395,16 +6384,16 @@ const configHTML = `<!doctype html>
           <tr><td style="padding:8px;border:1px solid #e2e8f0">30x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_30" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_30" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_30" type="number" step="100"></td></tr>
           <tr><td style="padding:8px;border:1px solid #e2e8f0">50x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_50" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_50" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_50" type="number" step="100"></td></tr>
           <tr><td style="padding:8px;border:1px solid #e2e8f0">100x</td><td style="padding:8px;border:1px solid #e2e8f0"><input id="w_100" type="number" step="0.01" min="0" max="100"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="mm_100" type="number" step="0.0001"></td><td style="padding:8px;border:1px solid #e2e8f0"><input id="fs_100" type="number" step="100"></td></tr>
-          <tr style="background:#f8fafc"><td style="padding:8px;border:1px solid #e2e8f0;font-weight:700">合计</td><td style="padding:8px;border:1px solid #e2e8f0"><span id="w_sum" style="font-weight:700">-</span>%</td><td style="padding:8px;border:1px solid #e2e8f0"></td><td style="padding:8px;border:1px solid #e2e8f0"></td></tr>
+          <tr style="background:#f8fafc"><td style="padding:8px;border:1px solid #e2e8f0;font-weight:700">鍚堣</td><td style="padding:8px;border:1px solid #e2e8f0"><span id="w_sum" style="font-weight:700">-</span>%</td><td style="padding:8px;border:1px solid #e2e8f0"></td><td style="padding:8px;border:1px solid #e2e8f0"></td></tr>
         </tbody>
       </table>
     </div>
   </div>
-  <div class="field"><label>清算强度缩放系数</label><input id="scale" type="number" step="0.1" min="0.1" max="50"></div>
-  <div class="field"><label>时间衰减系数 k</label><input id="decay" type="number" step="0.1"></div>
-  <div class="field"><label>閭昏繎浠锋墿鏁ｆ瘮渚?/label><input id="neighbor" type="number" step="0.01"></div>
+  <div class="field"><label>娓呯畻寮哄害缂╂斁绯绘暟</label><input id="scale" type="number" step="0.1" min="0.1" max="50"></div>
+  <div class="field"><label>鏃堕棿琛板噺绯绘暟 k</label><input id="decay" type="number" step="0.1"></div>
+  <div class="field"><label>闁槒绻庢禒閿嬪⒖閺侊絾鐦笟?/label><input id="neighbor" type="number" step="0.01"></div>
 </div>
-<div class="row" style="margin-top:14px"><button class="primary" onclick="save()">保存</button><button class="secondary" onclick="reloadCfg()">重载</button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
+<div class="row" style="margin-top:14px"><button class="primary" onclick="save()">淇濆瓨</button><button class="secondary" onclick="reloadCfg()">閲嶈浇</button><span id="msg" class="small" style="margin-left:10px"></span></div></div></div>
 <script>
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
@@ -6487,14 +6476,14 @@ function renderScope(){
   }
   const msg=document.getElementById('fitMsg');
   if(msg){
-    msg.textContent=(currentScope==='global')?'褰撳墠缂栬緫锛氬叏灞€':('褰撳墠缂栬緫锛?+currentScope.toUpperCase());
+    msg.textContent=(currentScope==='global')?'瑜版挸澧犵紓鏍帆閿涙艾鍙忕仦鈧?:('瑜版挸澧犵紓鏍帆閿?+currentScope.toUpperCase());
   }
 }
 
 async function fitScope(){
   const msg=document.getElementById('fitMsg');
   if(!msg){return;}
-  msg.textContent='鎷熷悎涓?..';
+  msg.textContent='閹风喎鎮庢稉?..';
   const hoursEl=document.getElementById('fit_hours');
   const hours=Math.max(1,Math.min(168,Number((hoursEl&&hoursEl.value)||24)||24));
   const minEl=document.getElementById('fit_min');
@@ -6502,10 +6491,10 @@ async function fitScope(){
   const ex=(currentScope==='global')?'':currentScope;
   const u='/api/model-fit?hours='+encodeURIComponent(String(hours))+'&min_events='+encodeURIComponent(String(minEvents))+(ex?('&exchange='+encodeURIComponent(ex)):'&mode=global');
   const r=await fetch(u).catch(()=>null);
-  if(!r){msg.textContent='鎷熷悎澶辫触锛氱綉缁滈敊璇?;return;}
-  if(!r.ok){msg.textContent='拟合失败：HTTP '+String(r.status);return;}
+  if(!r){msg.textContent='閹风喎鎮庢径杈Е閿涙氨缍夌紒婊堟晩鐠?;return;}
+  if(!r.ok){msg.textContent='鎷熷悎澶辫触锛欻TTP '+String(r.status);return;}
   const d=await r.json().catch(()=>null);
-  if(!d){msg.textContent='鎷熷悎澶辫触锛氬搷搴旇В鏋愬け璐?;return;}
+  if(!d){msg.textContent='閹风喎鎮庢径杈Е閿涙艾鎼锋惔鏃囆掗弸鎰亼鐠?;return;}
   if(!d.suggestions||!d.suggestions.length){
     const cs=d.counts||{};
     const parts=[];
@@ -6514,11 +6503,11 @@ async function fitScope(){
       const n=Number(c.count||0);
       if(n>0) parts.push(k+':'+n);
     }
-    msg.textContent='鎷熷悎澶辫触锛氭牱鏈笉瓒筹紙闇€>='+String(minEvents)+'条，窗口 '+String(hours)+'h锛?+(parts.length?(' '+parts.join(' ')):'');
+    msg.textContent='閹风喎鎮庢径杈Е閿涙碍鐗遍張顑跨瑝鐡掔绱欓棁鈧?='+String(minEvents)+'鏉★紝绐楀彛 '+String(hours)+'h閿?+(parts.length?(' '+parts.join(' ')):'');
     return;
   }
   const sug=d.suggestions[0];
-  if(!sug||!sug.weight_csv||!sug.maint_margin_csv){msg.textContent='拟合失败：无有效结果';return;}
+  if(!sug||!sug.weight_csv||!sug.maint_margin_csv){msg.textContent='鎷熷悎澶辫触锛氭棤鏈夋晥缁撴灉';return;}
   if(!lastCfg) lastCfg={};
   if(currentScope==='binance'){lastCfg.WeightCSVBinance=sug.weight_csv;lastCfg.MaintMarginCSVBinance=sug.maint_margin_csv;}
   else if(currentScope==='okx'){lastCfg.WeightCSVOKX=sug.weight_csv;lastCfg.MaintMarginCSVOKX=sug.maint_margin_csv;}
@@ -6526,17 +6515,17 @@ async function fitScope(){
   else {lastCfg.WeightCSV=sug.weight_csv;lastCfg.MaintMarginCSV=sug.maint_margin_csv;}
   scopeCleared=false;
   renderScope();
-  msg.textContent='鎷熷悎瀹屾垚锛氭牱鏈?'+String(sug.count||0)+' 鏉?;
+  msg.textContent='閹风喎鎮庣€瑰本鍨氶敍姘壉閺?'+String(sug.count||0)+' 閺?;
 }
 
 function clearScope(){
   const msg=document.getElementById('fitMsg');
   if(currentScope==='global'){
-    if(msg) msg.textContent='全局不可清空覆盖';
+    if(msg) msg.textContent='鍏ㄥ眬涓嶅彲娓呯┖瑕嗙洊';
     return;
   }
   scopeCleared=true;
-  if(msg) msg.textContent='宸叉爣璁版竻绌鸿鐩栵細淇濆瓨鍚庤浜ゆ槗鎵€鍥為€€鍏ㄥ眬';
+  if(msg) msg.textContent='瀹稿弶鐖ｇ拋鐗堢缁岄缚顩惄鏍电窗娣囨繂鐡ㄩ崥搴ゎ嚉娴溿倖妲楅幍鈧崶鐐衡偓鈧崗銊ョ湰';
 }
 async function reloadCfg(){
   const cfg=await fetch('/api/model-config').then(r=>r.json()).catch(()=>null);
@@ -6559,14 +6548,14 @@ async function save(){
   const sumEl=document.getElementById('w_sum');if(sumEl)sumEl.textContent=(isFinite(sumW)?sumW:0).toFixed(2);
   // If clearing per-exchange overrides, don't validate current inputs.
   if(!(scopeCleared && currentScope!=='global')){
-    if(!(sumW>0)){document.getElementById('msg').textContent='保存失败：权重合计必须为 100.00%';return;}
-    if(Math.abs(sumW-100)>0.01){document.getElementById('msg').textContent='淇濆瓨澶辫触锛氭潈閲嶅悎璁￠渶绛変簬 100.00%锛屽綋鍓?'+sumW.toFixed(2)+'%';return;}
+    if(!(sumW>0)){document.getElementById('msg').textContent='淇濆瓨澶辫触锛氭潈閲嶅悎璁″繀椤讳负 100.00%';return;}
+    if(Math.abs(sumW-100)>0.01){document.getElementById('msg').textContent='娣囨繂鐡ㄦ径杈Е閿涙碍娼堥柌宥呮値鐠侊繝娓剁粵澶夌艾 100.00%閿涘苯缍嬮崜?'+sumW.toFixed(2)+'%';return;}
     for(let i=0;i<wList.length;i++) wList[i]=wList[i]/100.0;
-    for(const v of mmList){if(!(v>0&&v<=0.02)){document.getElementById('msg').textContent='淇濆瓨澶辫触锛氱淮鎶や繚璇侀噾鐜囬渶鍦?(0,0.02]';return;}}
+    for(const v of mmList){if(!(v>0&&v<=0.02)){document.getElementById('msg').textContent='娣囨繂鐡ㄦ径杈Е閿涙氨娣幎銈勭箽鐠囦線鍣鹃悳鍥付閸?(0,0.02]';return;}}
   }else{
     for(let i=0;i<wList.length;i++) wList[i]=wList[i]/100.0;
   }
-  for(const v of fsList){if(!(v>=1000&&v<=20000)){document.getElementById('msg').textContent='淇濆瓨澶辫触锛氳祫閲戣垂鐜囩缉鏀剧郴鏁伴渶鍦?[1000,20000]';return;}}
+  for(const v of fsList){if(!(v>=1000&&v<=20000)){document.getElementById('msg').textContent='娣囨繂鐡ㄦ径杈Е閿涙俺绁柌鎴ｅ瀭閻滃洨缂夐弨鍓ч兇閺佷即娓堕崷?[1000,20000]';return;}}
   const mmCSV=(scopeCleared && currentScope!=='global')?'':mmList.map(v=>String(v)).join(',');
   const fsCSV=fsList.map(v=>String(v)).join(',');
   const wCSV=(scopeCleared && currentScope!=='global')?'':wList.map(v=>String(v)).join(',');
@@ -6593,8 +6582,8 @@ async function save(){
     NeighborShare:Number(document.getElementById('neighbor').value||0.28)
   };
   const r=await fetch('/api/model-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  if(r.ok){document.getElementById('msg').textContent='宸蹭繚瀛?;await reloadCfg();bindWeightSumLive();}
-  else{document.getElementById('msg').textContent='保存失败';}
+  if(r.ok){document.getElementById('msg').textContent='瀹歌弓绻氱€?;await reloadCfg();bindWeightSumLive();}
+  else{document.getElementById('msg').textContent='淇濆瓨澶辫触';}
 }
 function bindWeightSumLive(){
   const levs=[1,5,10,20,30,50,100];
@@ -6611,11 +6600,12 @@ function bindWeightSumLive(){
   recalc();
 }
 async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩蹇?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅惎':'閸楀洨楠囩€瑰本鍨氶敍宀勨偓鈧崙铏圭垳 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='閸楀洨楠囨潻娑氣柤瀹歌尙绮ㄩ弶鐕傜礄閻樿埖鈧焦婀惌銉礆閿涘矁顕Λ鈧弻銉︽）韫?;return;}}foot.textContent='閸楀洨楠囨禒宥呮躬鏉╂稖顢戦敍宀冾嚞缁嬪秴鎮楅崘宥囨箙';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
 initTheme();bind({LookbackMin:{{.LookbackMin}},BucketMin:{{.BucketMin}},PriceStep:{{.PriceStep}},PriceRange:{{.PriceRange}},LeverageCSV:{{printf "%q" .LeverageCSV}},WeightCSV:{{printf "%q" .WeightCSV}},MaintMargin:{{.MaintMargin}},MaintMarginCSV:{{printf "%q" .MaintMarginCSV}},FundingScale:{{.FundingScale}},FundingScaleCSV:{{printf "%q" .FundingScaleCSV}},IntensityScale:{{.IntensityScale}},DecayK:{{.DecayK}},NeighborShare:{{.NeighborShare}}});
 bindWeightSumLive();
 reloadCfg();
 loadFooter();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">升级过程</div><button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">等待开始...</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
+
