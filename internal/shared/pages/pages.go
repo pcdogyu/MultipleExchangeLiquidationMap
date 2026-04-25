@@ -48,7 +48,7 @@ func Bookmap() sharedtypes.HTMLPage {
 func Liquidations() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "liquidations",
-		FallbackHTML: liqmap.LiquidationsHTML(),
+		FallbackHTML: `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>强平清算</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:32px"><h1>强平清算页面</h1><p>页面文件缺失，请检查 <code>internal/shared/pages/files/liquidations_page_fixed.html</code> 是否存在。</p></body></html>`,
 		Preferred:    []string{file("liquidations_page_fixed.html")},
 	}
 }
