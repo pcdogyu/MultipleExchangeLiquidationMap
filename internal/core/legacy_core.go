@@ -1795,7 +1795,7 @@ func (a *App) waitExchangeRetry(ctx context.Context, exchange string, fallback t
 	}
 	if ch, ok := a.retrySignals[exchange]; ok {
 		retryCh = ch
-	} else if settings.Group1Enabled {
+	} else {
 		ch = make(chan struct{}, 1)
 		a.retrySignals[exchange] = ch
 		retryCh = ch
