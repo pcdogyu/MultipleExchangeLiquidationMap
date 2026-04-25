@@ -17,6 +17,7 @@ func Home() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "index",
 		FallbackHTML: liqmap.IndexHTML(),
+		Preferred:    []string{file("home_page_utf8.html")},
 	}
 }
 
@@ -32,6 +33,7 @@ func Monitor() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "monitor",
 		FallbackHTML: liqmap.MonitorHTML(),
+		Preferred:    []string{file(".monitor_mismatch_dom.html")},
 	}
 }
 
