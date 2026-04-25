@@ -47,7 +47,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,
 .kv .k{font-size:12px;color:var(--muted)}
 .kv .v{font-size:18px;font-weight:800;margin-top:4px}
 .status-foot{margin-top:10px;min-height:18px;word-break:break-word}
-.section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.section-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}
 .section-title{margin:0;font-size:22px;font-weight:800}
 .period-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:14px}
 .period-card{position:relative;border:1px solid var(--line);border-radius:16px;padding:14px;background:var(--panel);overflow:visible;box-shadow:0 1px 2px rgba(15,23,42,.04);transition:transform .16s ease,box-shadow .16s ease}
@@ -71,7 +71,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,
 .period-tip-title{font-size:12px;color:var(--muted);margin-bottom:8px}
 .period-tip-row{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px}
 .period-tip-row+.period-tip-row{margin-top:6px}
-.pattern-card{min-width:280px;max-width:620px;border:1px solid var(--line);border-radius:16px;padding:14px;background:linear-gradient(180deg,rgba(37,99,235,.06),rgba(255,255,255,.96))}
+.pattern-card{width:100%;border:1px solid var(--line);border-radius:16px;padding:14px;background:linear-gradient(180deg,rgba(37,99,235,.06),rgba(255,255,255,.96))}
 .pattern-card .k{font-size:12px;color:var(--muted)}
 .pattern-card .v{margin-top:8px;font-size:18px;font-weight:800}
 .pattern-summary{margin-top:8px;font-size:13px;line-height:1.7;color:var(--ink)}
