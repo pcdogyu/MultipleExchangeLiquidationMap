@@ -16,6 +16,10 @@ body{margin:0;background:radial-gradient(circle at top left,#fff8ee,transparent 
 .menu a{color:#cdd5e4;text-decoration:none;font-size:15px;margin-right:16px}
 .menu a.active{color:#fff;font-weight:700}
 .nav-right a{color:#fff;text-decoration:none;font-size:14px;padding:8px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.18)}
+.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}
+.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:var(--navInk);cursor:pointer}
+.theme-toggle button.label{cursor:default;opacity:.92}
+.theme-toggle button.active{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.18);color:#fff}
 .wrap{max-width:1180px;margin:0 auto;padding:24px 18px 40px}
 .hero{display:grid;grid-template-columns:1.3fr .7fr;gap:16px;margin-bottom:16px}
 .panel{background:rgba(255,253,248,.92);border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow)}
@@ -117,7 +121,12 @@ h1{margin:10px 0 10px;font-size:34px;line-height:1.15}
     </div>
   </div>
   <div class="nav-right">
-    <a href="/config">调整参数</a>
+    <div class="theme-toggle">
+      <button class="label" type="button">主题</button>
+      <button id="themeDark" type="button" onclick="setTheme('dark')">深色</button>
+      <button id="themeLight" type="button" onclick="setTheme('light')">浅色</button>
+    </div>
+    <a href="/config">升级</a>
   </div>
 </div>
 <div class="wrap" id="analysisCapture">
@@ -224,6 +233,10 @@ function helpBubble(label){
 function setTheme(t){
   const theme=(t==='dark')?'dark':'light';
   document.documentElement.setAttribute('data-theme',theme);
+  try{localStorage.setItem('theme',theme);}catch(_){}
+  const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');
+  if(bd)bd.classList.toggle('active',theme==='dark');
+  if(bl)bl.classList.toggle('active',theme==='light');
 }
 
 function initTheme(){
