@@ -28,7 +28,7 @@ func New(debug bool) *Manager {
 }
 
 func (m *Manager) logRequest(r *http.Request) {
-	if m.debug {
+	if m.debug && r.URL.Path != "/api/version" {
 		log.Printf("%s %s", r.Method, r.URL.Path)
 	}
 }
