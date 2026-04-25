@@ -261,6 +261,9 @@ func (b *Browser) run(ctx context.Context) {
 			case msg.Method != "":
 				ev, err := cdproto.UnmarshalMessage(msg)
 				if err != nil {
+					if isIgnorableUnmarshalError(err) {
+						continue
+					}
 					b.errf("%s", err)
 					continue
 				}

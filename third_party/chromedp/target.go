@@ -123,6 +123,9 @@ func (t *Target) run(ctx context.Context) {
 						// deprecated. Ignore that error.
 						continue
 					}
+					if isIgnorableUnmarshalError(err) {
+						continue
+					}
 					t.errf("could not unmarshal event: %v", err)
 					continue
 				}

@@ -1,5 +1,7 @@
 package chromedp
 
+import "strings"
+
 // Error is a chromedp error.
 type Error string
 
@@ -55,3 +57,11 @@ const (
 	// ErrJSNull is the error that the value of RemoteObject is null.
 	ErrJSNull Error = "encountered a null value"
 )
+
+func isIgnorableUnmarshalError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "unknown IPAddressSpace value: Loopback")
+}
