@@ -1063,19 +1063,19 @@ func (a *App) captureAnalysisScreenshotJPEG() ([]byte, error) {
 
 func (a *App) buildAnalysisTelegramText(snapshot AnalysisSnapshot) string {
 	lines := []string{
-		fmt.Sprintf("<b>ETH 鏃ュ唴鍒嗘瀽 | 鐜颁环$%s</b>", formatPrice1(snapshot.CurrentPrice)),
+		fmt.Sprintf("<b>ETH 日内分析 | 现价$%s</b>", formatPrice1(snapshot.CurrentPrice)),
 		escTelegramHTML(snapshot.Broadcast.Headline),
 		escTelegramHTML(snapshot.Broadcast.Text),
 		"",
-		"<b>澶氬懆鏈熸寚鏍?/b>",
+		"<b>多周期指标</b>",
 	}
 	for _, it := range snapshot.Indicators {
-		lines = append(lines, fmt.Sprintf("鈥?<b>%s</b>: %s", escTelegramHTML(it.Label), escTelegramHTML(strings.TrimSpace(it.Value+" "+it.Subvalue))))
+		lines = append(lines, fmt.Sprintf("• <b>%s</b>: %s", escTelegramHTML(it.Label), escTelegramHTML(strings.TrimSpace(it.Value+" "+it.Subvalue))))
 	}
 	if len(snapshot.Broadcast.Bullets) > 0 {
-		lines = append(lines, "", "<b>鎾姤瑕佺偣</b>")
+		lines = append(lines, "", "<b>播报要点</b>")
 		for _, it := range snapshot.Broadcast.Bullets {
-			lines = append(lines, "鈥?"+escTelegramHTML(it))
+			lines = append(lines, "• "+escTelegramHTML(it))
 		}
 	}
 	return strings.Join(lines, "\n")
