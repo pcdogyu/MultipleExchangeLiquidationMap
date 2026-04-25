@@ -4,6 +4,7 @@ import liqmap "multipleexchangeliquidationmap/internal/core"
 
 type Services interface {
 	QueryLiquidations(opts liqmap.LiquidationListOptions) []liqmap.EventRow
+	LiquidationPeriodSummary(opts liqmap.LiquidationListOptions) liqmap.LiquidationPeriodSummary
 	LiquidationSymbols(limit int) []string
 	LiquidationWSStatuses() []liqmap.LiquidationWSStatus
 	RetryLiquidationExchange(exchange string) error
