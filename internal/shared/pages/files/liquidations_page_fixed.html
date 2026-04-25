@@ -266,6 +266,58 @@ function renderWSStatus(items){
     '</div>';
   }).join('');
 }
+function fmtPeriodDominant(side){
+  return side==='short'?'空单更大':'多单更大';
+}
+function fmtPatternBias(bias){
+  switch(String(bias||'')){
+    case 'up_strong': return '强上推';
+    case 'up': return '偏上推';
+    case 'up_light': return '轻微偏上';
+    case 'down_strong': return '强下压';
+    case 'down': return '偏下压';
+    case 'down_light': return '轻微偏下';
+    default: return '震荡分歧';
+  }
+}
+function renderPeriodSummary(summary){
+  const grid=document.getElementById('periodGrid');
+  const patternBox=document.getElementById('patternBox');
+  const buckets=Array.isArray(summary&&summary.buckets)?summary.buckets:[];
+  if(!buckets.length){
+    grid.innerHTML='<div class="period-card"><div class="period-total">--</div><div class="period-sub">暂无周期清算统计</div></div>';
+    patternBox.innerHTML='<div class="k">四周期 16 种形态判断</div><div class="v">暂无数据</div><div class="pattern-summary">尚未计算出当前多空结构。</div>';
+    return;
+  }
+  grid.innerHTML=buckets.map(bucket=>{
+    const total=Number(bucket.total_usd||0);
+    const longUSD=Number(bucket.long_usd||0);
+    const shortUSD=Number(bucket.short_usd||0);
+    const longPct=total>0?Math.max(0,Math.min(100,longUSD/total*100)):50;
+    const shortPct=Math.max(0,100-longPct);
+    const dominant=String(bucket.dominant_side||'long').toLowerCase();
+    const cls=dominant==='short'?'short-dominant':'long-dominant';
+    return '<div class="period-card '+cls+'">'+
+      '<div class="period-tip">'+
+        '<div class="period-tip-title">'+esc(bucket.label||'-')+' 统计明细</div>'+
+        '<div class="period-tip-row"><span>总清算金额</span><strong>'+esc(fmtAmt(total))+'</strong></div>'+
+        '<div class="period-tip-row"><span>多单清算量</span><strong>'+esc(fmtAmt(longUSD))+'</strong></div>'+
+        '<div class="period-tip-row"><span>空单清算量</span><strong>'+esc(fmtAmt(shortUSD))+'</strong></div>'+
+      '</div>'+
+      '<div class="period-top"><div class="period-label">'+esc(bucket.label||'-')+'</div><span class="period-badge">'+esc(fmtPeriodDominant(dominant))+'</span></div>'+
+      '<div class="period-total">'+esc(fmtAmt(total))+'</div>'+
+      '<div class="period-sub">总清算金额</div>'+
+      '<div class="period-push">价格推动：'+esc(bucket.price_push_label||'当前较中性')+'</div>'+
+      '<div class="period-bar"><div class="period-bar-long" style="width:'+longPct.toFixed(2)+'%"></div><div class="period-bar-short" style="width:'+shortPct.toFixed(2)+'%"></div></div>'+
+      '<div class="period-foot"><span>多 '+esc(fmtAmt(longUSD))+'</span><span>空 '+esc(fmtAmt(shortUSD))+'</span></div>'+
+    '</div>';
+  }).join('');
+  const pattern=summary&&summary.pattern?summary.pattern:{};
+  patternBox.innerHTML=
+    '<div class="k">四周期 16 种形态判断</div>'+
+    '<div class="v">'+esc(pattern.code||'----')+' · '+esc(fmtPatternBias(pattern.trend_bias))+'</div>'+
+    '<div class="pattern-summary">'+esc(pattern.label||'')+'。'+esc(pattern.summary||'')+'</div>';
+}
 function renderRows(rows){
   const body=document.getElementById('tableBody');
   if(!Array.isArray(rows)||!rows.length){
@@ -362,6 +414,7 @@ async function load(){
   }
   syncSymbolOptions(data.available_symbols||[]);
   renderWSStatus(data.ws_status||[]);
+  renderPeriodSummary(data.period_summary||null);
   renderRows(data.rows||[]);
   const symbolText=currentSymbol==='ALL'?'全部币对':currentSymbol;
   const filterText=minValue>0?(' | '+filterFieldLabel(filterField)+' ≥ '+minValue):'';
