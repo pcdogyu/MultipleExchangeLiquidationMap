@@ -3171,9 +3171,9 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 	}
 
 	alert := AlertSummary{
-		Level:       "甯歌鐩戞帶",
+		Level:       "常规监控",
 		Recent1mUSD: a.sumLiquidationNotionalSince(symbol, nowTS-60*1000),
-		Suggestion:  fmt.Sprintf("%.1f / %.1f 鍏虫敞涓婁笅鍏抽敭浠蜂綅", b20.UpPrice, b20.DownPrice),
+		Suggestion:  fmt.Sprintf("%.1f / %.1f 关注上下关键价位", b20.UpPrice, b20.DownPrice),
 	}
 	recentByEx := a.sumLiquidationNotionalByExchangeSince(symbol, nowTS-60*1000)
 	alert.Recent1mBinanceUSD = recentByEx["binance"]
@@ -3186,15 +3186,15 @@ func (a *App) buildHeatZoneAnalytics(symbol string, currentPrice float64, states
 		alert.RecentPrice = e.Price
 	}
 	if core.NearestDistance > 0 && core.NearestDistance <= 35 {
-		alert.Level = "涓磋繎寮哄尯棰勮"
+		alert.Level = "临近强区预警"
 	} else if alert.Recent1mUSD >= 2_000_000 {
-		alert.Level = "娉㈠姩鏀惧ぇ棰勮"
+		alert.Level = "波动放大预警"
 	}
 	if verdict20 == "涓婃柟鍋忓己" {
-		alert.Suggestion = fmt.Sprintf("%.1f / %.1f 璀︽儠涓婁笅鍙屽悜鎻掗拡椋庨櫓", b20.UpPrice, b20.DownPrice)
+		alert.Suggestion = fmt.Sprintf("%.1f / %.1f 警惕上下双向插针风险", b20.UpPrice, b20.DownPrice)
 	}
 	if verdict20 == "涓嬫柟鍋忓己" {
-		alert.Suggestion = fmt.Sprintf("%.1f / %.1f lower-side liquidity risk is higher", b20.UpPrice, b20.DownPrice)
+		alert.Suggestion = fmt.Sprintf("%.1f / %.1f 下方流动性风险更高", b20.UpPrice, b20.DownPrice)
 	}
 
 	return HeatZoneAnalytics{

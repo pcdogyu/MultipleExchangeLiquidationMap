@@ -8,15 +8,15 @@ import (
 func heatReportBias(up, down float64) string {
 	total := up + down
 	if total <= 0 {
-		return "鍩烘湰鍧囪　"
+		return "基本均衡"
 	}
 	if down > up {
-		return "涓嬫柟鍋忓"
+		return "下方偏多"
 	}
 	if up > down {
-		return "涓婃柟鍋忓"
+		return "上方偏多"
 	}
-	return "鍩烘湰鍧囪　"
+	return "基本均衡"
 }
 
 func telegramSendLabel(isTest bool) string {
