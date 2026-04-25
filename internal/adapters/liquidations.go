@@ -17,6 +17,10 @@ func (s *liquidationsModuleAdapter) QueryLiquidations(opts liqmap.LiquidationLis
 	return s.app.QueryLiquidations(opts)
 }
 
+func (s *liquidationsModuleAdapter) LiquidationPeriodSummary(opts liqmap.LiquidationListOptions) liqmap.LiquidationPeriodSummary {
+	return s.app.LiquidationPeriodSummary(opts)
+}
+
 func (s *liquidationsModuleAdapter) LiquidationSymbols(limit int) []string {
 	return s.app.LiquidationSymbols(limit)
 }
