@@ -6,8 +6,10 @@
 <title>消息通道</title>
 <style>
 :root{--bg:#f4efe7;--ink:#172033;--muted:#63708a;--card:#fffdf8;--line:#e5dccd;--nav:#101827;--navInk:#f6f7fb;--accent:#c26a2d;--accent2:#14746f;--good:#24805e;--danger:#bf3b3b;--shadow:0 12px 36px rgba(17,24,39,.08)}
+[data-theme="dark"]{--bg:#000;--ink:#f8fafc;--muted:#cbd5e1;--card:#000;--line:#263041;--nav:#000;--navInk:#f8fafc;--accent:#f59e0b;--accent2:#5eead4;--good:#4ade80;--danger:#f87171;--shadow:none}
 *{box-sizing:border-box}
 body{margin:0;background:radial-gradient(circle at top left,#fff8ee,transparent 28%),linear-gradient(180deg,#f8f4ed 0%,#efe8dc 100%);color:var(--ink);font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+[data-theme="dark"] body{background:#000}
 .nav{height:58px;background:var(--nav);border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:20}
 .nav-left,.nav-right{display:flex;align-items:center;gap:20px}
 .brand{font-size:18px;font-weight:700;color:var(--navInk)}
@@ -41,6 +43,9 @@ th{color:var(--muted);font-weight:600}
 .ok{color:var(--good);font-weight:700}
 .fail{color:var(--danger);font-weight:700}
 .footer{margin-top:20px;font-size:12px;color:var(--muted);text-align:center}
+[data-theme="dark"] .panel,[data-theme="dark"] .switch-row,[data-theme="dark"] .group-switch{background:#000;border-color:var(--line);box-shadow:none}
+[data-theme="dark"] .field input,[data-theme="dark"] .field textarea,[data-theme="dark"] button{background:#000;color:#f8fafc;border-color:#475569}
+[data-theme="dark"] th,[data-theme="dark"] td,[data-theme="dark"] .section-title,[data-theme="dark"] strong{color:#f8fafc}
 @media (max-width:1280px){.groups{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:980px){.layout,.grid,.groups{grid-template-columns:1fr}.menu{display:none}}
 </style>
@@ -219,6 +224,8 @@ th{color:var(--muted);font-weight:600}
 
 <script>
 let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawWorkInterval={{.NotifyWorkIntervalMin}},rawOffInterval={{.NotifyOffIntervalMin}},rawWorkExpr={{printf "%q" .WorkTimeExpr}},rawEnabled={{.NotifyEnabled}},rawGroup1Enabled={{.Group1Enabled}},rawGroup2Enabled={{.Group2Enabled}},rawGroup3Enabled={{.Group3Enabled}},rawGroup4Enabled={{.Group4Enabled}},rawGroup5Enabled={{.Group5Enabled}},tokenDirty=false,channelDirty=false;
+function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}}
+function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
 function maskInput(v){v=String(v||'');if(!v)return '';if(v.length<=8)return '*'.repeat(v.length);return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}
 function syncInputs(){
   const t=document.getElementById('token'),c=document.getElementById('channel'),w=document.getElementById('notify-work-interval'),o=document.getElementById('notify-off-interval'),x=document.getElementById('work-time-expr'),e=document.getElementById('notify-enabled');
@@ -243,6 +250,7 @@ function sourceLabel(v){if(v==='channel')return '消息通道';if(v==='webdataso
 function typeLabel(v){if(v==='push')return '推送';if(v==='capture')return '抓取';return String(v||'-');}
 function periodLabel(v){if(v==='work-hours')return '工作时间';if(v==='off-hours')return '非工作时间';return String(v||'-');}
 
+initTheme();
 document.getElementById('token').addEventListener('input',()=>{tokenDirty=true;});
 document.getElementById('channel').addEventListener('input',()=>{channelDirty=true;});
 syncInputs();
