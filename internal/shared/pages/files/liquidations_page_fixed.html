@@ -179,7 +179,7 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04
     <div class="section-head">
       <div>
         <h3 class="section-title">四周期多空清算结构</h3>
-        <div class="small">统计过去 1H / 4H / 12H / 24H 的多空清算额。卡片保留“多单更大 / 空单更大”的清算侧信息，并额外给出对应价格方向。</div>
+        <div class="small">统计过去 1H / 4H / 12H / 24H 的多空清算额。卡片徽标按方向显示：多单更大记为“空”，空单更大记为“多”，并额外给出对应价格方向。</div>
       </div>
       <div id="patternBox" class="pattern-card">
         <div class="k">四周期 16 种形态判断</div>
@@ -267,7 +267,7 @@ function renderWSStatus(items){
   }).join('');
 }
 function fmtPeriodDominant(side){
-  return side==='short'?'空单更大':'多单更大';
+  return side==='short'?'多':'空';
 }
 function fmtPatternBias(bias){
   switch(String(bias||'')){
