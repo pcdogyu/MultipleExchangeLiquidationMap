@@ -71,6 +71,7 @@ func Channel() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "channel",
 		FallbackHTML: liqmap.ChannelHTMLV2(),
+		Preferred:    []string{file("channel_page_utf8.html")},
 	}
 }
 

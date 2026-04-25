@@ -52,6 +52,11 @@ func (a *App) loadSettings() ChannelSettings {
 		NotifyOffIntervalMin:  offInterval,
 		WorkTimeExpr:          strings.TrimSpace(a.getSetting("notify_work_time_expr")),
 		NotifyEnabled:         parseBoolSetting(a.getSetting("notify_enabled"), false),
+		Group1Enabled:         parseBoolSetting(a.getSetting("notify_group_1_enabled"), true),
+		Group2Enabled:         parseBoolSetting(a.getSetting("notify_group_2_enabled"), true),
+		Group3Enabled:         parseBoolSetting(a.getSetting("notify_group_3_enabled"), true),
+		Group4Enabled:         parseBoolSetting(a.getSetting("notify_group_4_enabled"), true),
+		Group5Enabled:         parseBoolSetting(a.getSetting("notify_group_5_enabled"), true),
 	}
 }
 
@@ -96,6 +101,21 @@ func (a *App) saveSettings(req ChannelSettings) error {
 		return err
 	}
 	if err := a.setSetting("notify_enabled", strconv.FormatBool(req.NotifyEnabled)); err != nil {
+		return err
+	}
+	if err := a.setSetting("notify_group_1_enabled", strconv.FormatBool(req.Group1Enabled)); err != nil {
+		return err
+	}
+	if err := a.setSetting("notify_group_2_enabled", strconv.FormatBool(req.Group2Enabled)); err != nil {
+		return err
+	}
+	if err := a.setSetting("notify_group_3_enabled", strconv.FormatBool(req.Group3Enabled)); err != nil {
+		return err
+	}
+	if err := a.setSetting("notify_group_4_enabled", strconv.FormatBool(req.Group4Enabled)); err != nil {
+		return err
+	}
+	if err := a.setSetting("notify_group_5_enabled", strconv.FormatBool(req.Group5Enabled)); err != nil {
 		return err
 	}
 	return nil

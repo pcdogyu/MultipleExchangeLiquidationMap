@@ -8,6 +8,11 @@ type ChannelSettings struct {
 	NotifyOffIntervalMin  int    `json:"notify_off_interval_min"`
 	WorkTimeExpr          string `json:"work_time_expr"`
 	NotifyEnabled         bool   `json:"notify_enabled"`
+	Group1Enabled         bool   `json:"group1_enabled"`
+	Group2Enabled         bool   `json:"group2_enabled"`
+	Group3Enabled         bool   `json:"group3_enabled"`
+	Group4Enabled         bool   `json:"group4_enabled"`
+	Group5Enabled         bool   `json:"group5_enabled"`
 }
 
 type TelegramSendHistoryRow struct {

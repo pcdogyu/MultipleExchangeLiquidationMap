@@ -326,6 +326,7 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 	if isTest {
 		sendMode = "test"
 	}
+	settings := a.loadSettings()
 
 	webMap := a.webds.loadLatestMap("30d")
 	displayPrice := a.resolveUnifiedDisplayPrice(webMap, 0)
@@ -339,50 +340,103 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 	}
 
 	var errs []string
-
-	if !webMap.HasData || len(webMap.Points) == 0 {
-		errText := strings.TrimSpace(webMap.LastError)
-		if errText == "" {
-			errText = "no 30-day webdatasource snapshot available"
+	var analysisSnapshot AnalysisSnapshot
+	var analysisSnapshotLoaded bool
+	loadAnalysisSnapshot := func() (AnalysisSnapshot, error) {
+		if analysisSnapshotLoaded {
+			return analysisSnapshot, nil
 		}
-		msg := fmt.Sprintf("数据缺失: %s", errText)
-		a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
-		errs = append(errs, msg)
-	} else {
-		webImage, err := a.captureWebDataSourceScreenshotJPEG("30d")
+		snapshot, err := a.BuildAnalysisSnapshot()
 		if err != nil {
-			msg := fmt.Sprintf("截图失败: %v", err)
-			a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
-			errs = append(errs, msg)
-		} else if err := a.sendTelegramPhoto("", webImage); err != nil {
-			msg := fmt.Sprintf("发送失败: %v", err)
+			return AnalysisSnapshot{}, err
+		}
+		analysisSnapshot = snapshot
+		analysisSnapshotLoaded = true
+		return analysisSnapshot, nil
+	}
+
+	if settings.Group1Enabled {
+		if !webMap.HasData || len(webMap.Points) == 0 {
+			errText := strings.TrimSpace(webMap.LastError)
+			if errText == "" {
+				errText = "no 30-day webdatasource snapshot available"
+			}
+			msg := fmt.Sprintf("数据缺失: %s", errText)
 			a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
 			errs = append(errs, msg)
 		} else {
-			a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "success", "")
+			webImage, err := a.captureWebDataSourceScreenshotJPEG("30d")
+			if err != nil {
+				msg := fmt.Sprintf("截图失败: %v", err)
+				a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
+				errs = append(errs, msg)
+			} else if err := a.sendTelegramPhoto("", webImage); err != nil {
+				msg := fmt.Sprintf("发送失败: %v", err)
+				a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
+				errs = append(errs, msg)
+			} else {
+				a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "success", "")
+			}
+		}
+
+	}
+
+	if settings.Group2Enabled {
+		monitorImage, err := a.captureMonitorScreenshotJPEG(windowDays)
+		if err != nil {
+			msg := fmt.Sprintf("截图失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "failed", msg)
+			errs = append(errs, msg)
+		} else if err := a.sendTelegramPhoto("", monitorImage); err != nil {
+			msg := fmt.Sprintf("发送失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "success", "")
+		}
+
+	}
+
+	if settings.Group3Enabled {
+		text := a.buildTelegramThirtyDayTextV4(monitorReport, monitorBands, webMap)
+		if err := a.sendTelegramText(text); err != nil {
+			msg := fmt.Sprintf("发送失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 3, "monitor-30d-text", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 3, "monitor-30d-text", "success", "")
+		}
+
+	}
+
+	if settings.Group4Enabled {
+		analysisImage, err := a.captureAnalysisScreenshotJPEG()
+		if err != nil {
+			msg := fmt.Sprintf("截图失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 4, "analysis-image", "failed", msg)
+			errs = append(errs, msg)
+		} else if err := a.sendTelegramPhoto("", analysisImage); err != nil {
+			msg := fmt.Sprintf("发送失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 4, "analysis-image", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 4, "analysis-image", "success", "")
 		}
 	}
 
-	monitorImage, err := a.captureMonitorScreenshotJPEG(windowDays)
-	if err != nil {
-		msg := fmt.Sprintf("截图失败: %v", err)
-		a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "failed", msg)
-		errs = append(errs, msg)
-	} else if err := a.sendTelegramPhoto("", monitorImage); err != nil {
-		msg := fmt.Sprintf("发送失败: %v", err)
-		a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "failed", msg)
-		errs = append(errs, msg)
-	} else {
-		a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "success", "")
-	}
-
-	text := a.buildTelegramThirtyDayTextV4(monitorReport, monitorBands, webMap)
-	if err := a.sendTelegramText(text); err != nil {
-		msg := fmt.Sprintf("发送失败: %v", err)
-		a.recordTelegramSendHistory(sendMode, 3, "monitor-30d-text", "failed", msg)
-		errs = append(errs, msg)
-	} else {
-		a.recordTelegramSendHistory(sendMode, 3, "monitor-30d-text", "success", "")
+	if settings.Group5Enabled {
+		snapshot, err := loadAnalysisSnapshot()
+		if err != nil {
+			msg := fmt.Sprintf("生成日内分析失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 5, "analysis-text", "failed", msg)
+			errs = append(errs, msg)
+		} else if err := a.sendTelegramText(a.buildAnalysisTelegramText(snapshot)); err != nil {
+			msg := fmt.Sprintf("发送失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 5, "analysis-text", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 5, "analysis-text", "success", "")
+		}
 	}
 
 	if len(errs) > 0 {
@@ -989,6 +1043,44 @@ func (a *App) captureWebDataSourceScreenshotJPEG(window string) ([]byte, error) 
 	return captureCanvasJPEGWithScale(pageURL, "#cv", 1480, 980, 2, prepare, wait)
 }
 
+func (a *App) captureAnalysisScreenshotJPEG() ([]byte, error) {
+	pageURL := fmt.Sprintf("http://127.0.0.1%s/analysis", defaultServerAddr)
+	prepare := `(async()=>{ window.scrollTo(0,0); return true; })()`
+	wait := `(function(){
+		const wrap=document.getElementById('analysisCapture');
+		const title=document.getElementById('title');
+		const indicators=document.querySelectorAll('#indicators .metric-card');
+		const broadcast=document.getElementById('broadcastHeadline');
+		if(!wrap || !title || !broadcast) return false;
+		const titleText=(title.textContent||'').trim();
+		const broadcastText=(broadcast.textContent||'').trim();
+		if(!titleText || titleText==='加载中...' || titleText==='加载失败') return false;
+		if(!broadcastText || broadcastText==='加载中...' || broadcastText==='加载失败') return false;
+		return indicators.length > 0;
+	})()`
+	return captureElementJPEGWithScale(pageURL, "#analysisCapture", 1640, 1760, 1.6, prepare, wait)
+}
+
+func (a *App) buildAnalysisTelegramText(snapshot AnalysisSnapshot) string {
+	lines := []string{
+		fmt.Sprintf("<b>ETH 日内分析 | 现价$%s</b>", formatPrice1(snapshot.CurrentPrice)),
+		escTelegramHTML(snapshot.Broadcast.Headline),
+		escTelegramHTML(snapshot.Broadcast.Text),
+		"",
+		"<b>多周期指标</b>",
+	}
+	for _, it := range snapshot.Indicators {
+		lines = append(lines, fmt.Sprintf("• <b>%s</b>: %s", escTelegramHTML(it.Label), escTelegramHTML(strings.TrimSpace(it.Value+" "+it.Subvalue))))
+	}
+	if len(snapshot.Broadcast.Bullets) > 0 {
+		lines = append(lines, "", "<b>播报要点</b>")
+		for _, it := range snapshot.Broadcast.Bullets {
+			lines = append(lines, "• "+escTelegramHTML(it))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (a *App) buildMonitorBundleCaption(windowDays int, dash Dashboard, report HeatReportData, isTest bool) string {
 	b20 := bandRowOrDefault(dash.Bands, dash.CurrentPrice, 20)
 	label := telegramSendLabel(isTest)
@@ -1329,6 +1421,11 @@ func (a *App) buildTelegramThirtyDayTextV4(monitor HeatReportData, monitorBands 
 		buildTelegramImbalanceLine(bandBySize(300)),
 	}
 	return strings.Join(lines, "\n")
+}
+
+func escTelegramHTML(s string) string {
+	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+	return r.Replace(strings.TrimSpace(s))
 }
 
 func maskSensitive(s string) string {
@@ -1698,7 +1795,7 @@ func (a *App) waitExchangeRetry(ctx context.Context, exchange string, fallback t
 	}
 	if ch, ok := a.retrySignals[exchange]; ok {
 		retryCh = ch
-	} else {
+	} else if settings.Group1Enabled {
 		ch = make(chan struct{}, 1)
 		a.retrySignals[exchange] = ch
 		retryCh = ch
