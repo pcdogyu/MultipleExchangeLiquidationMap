@@ -4360,11 +4360,8 @@ func (a *App) runBinanceWSConn(ctx context.Context, wsURL string, checkPU bool) 
 		return err
 	}
 	defer conn.Close()
-	_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
-	conn.SetPongHandler(func(string) error {
-		_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
-		return nil
-	})
+	stopKeepalive := startWSKeepalive(ctx, conn, 90*time.Second, wsKeepalivePingInterval)
+	defer stopKeepalive()
 	book := a.ob.get("binance")
 	book.mu.RLock()
 	snapshotID := book.LastUpdateID
@@ -4384,6 +4381,7 @@ func (a *App) runBinanceWSConn(ctx context.Context, wsURL string, checkPU bool) 
 		if err := conn.ReadJSON(&msg); err != nil {
 			return err
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		uVal := int64(parseAnyFloat(msg["u"]))
 		UVal := int64(parseAnyFloat(msg["U"]))
 		puVal := int64(parseAnyFloat(msg["pu"]))
