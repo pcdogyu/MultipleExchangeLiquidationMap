@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -27,7 +27,9 @@ h1{margin:10px 0 10px;font-size:34px;line-height:1.15}
 .statline .label{font-size:12px;color:var(--muted)}
 .statline .value{font-size:26px;font-weight:700}
 .section{margin-top:18px}
-.section h2{margin:0 0 10px;font-size:17px}
+.section h2{margin:0;font-size:17px}
+.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 10px}
+.section-head-main{display:flex;align-items:center;gap:8px}
 .grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
 .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
 .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
@@ -49,6 +51,7 @@ h1{margin:10px 0 10px;font-size:34px;line-height:1.15}
 .metric-head{display:flex;align-items:center;gap:8px}
 .help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:999px;border:1px solid #c8d2e3;background:#fff;color:#50607d;font-size:11px;font-weight:800;cursor:help;flex:0 0 auto}
 .help-tip{position:absolute;top:24px;right:0;z-index:5;display:none;min-width:240px;max-width:320px;padding:10px 12px;border-radius:12px;background:#172033;color:#f6f7fb;font-size:12px;line-height:1.6;box-shadow:0 12px 30px rgba(17,24,39,.22);white-space:normal;text-align:left}
+.help-tip.wide{min-width:360px;max-width:520px}
 .help:hover .help-tip{display:block}
 .metric-value{font-size:30px;font-weight:800;line-height:1.1;margin-top:10px}
 .metric-sub{font-size:13px;color:#38465e;margin-top:8px}
@@ -126,7 +129,7 @@ h1{margin:10px 0 10px;font-size:34px;line-height:1.15}
   </div>
 
   <div class="section">
-    <h2>AI 文本播报摘要</h2>
+    <div class="section-head"><div class="section-head-main"><h2 data-section-title="broadcast"></h2><span id="help-broadcast"></span></div></div>
     <div class="panel broadcast">
       <h3 id="broadcastHeadline">加载中...</h3>
       <p id="broadcastText">正在生成播报摘要...</p>
@@ -135,32 +138,32 @@ h1{margin:10px 0 10px;font-size:34px;line-height:1.15}
   </div>
 
   <div class="section">
-    <h2>多周期清算带指标</h2>
+    <div class="section-head"><div class="section-head-main"><h2 data-section-title="indicators"></h2><span id="help-indicators"></span></div></div>
     <div class="grid4" id="indicators"></div>
   </div>
 
   <div class="section">
-    <h2>多空风险评分</h2>
+    <div class="section-head"><div class="section-head-main"><h2 data-section-title="scores"></h2><span id="help-scores"></span></div></div>
     <div class="grid3" id="scores"></div>
   </div>
 
   <div class="section">
-    <h2>关键清算区间</h2>
+    <div class="section-head"><div class="section-head-main"><h2 data-section-title="zones"></h2><span id="help-zones"></span></div></div>
     <div class="grid2" id="zones"></div>
   </div>
 
   <div class="section">
-    <h2>近几小时变化摘要</h2>
+    <div class="section-head"><div class="section-head-main"><h2 data-section-title="changes"></h2><span id="help-changes"></span></div></div>
     <div class="grid4" id="changes"></div>
   </div>
 
   <div class="section">
-    <h2>按交易所拆分的分析卡片</h2>
+    <div class="section-head"><div class="section-head-main"><h2 data-section-title="exchanges"></h2><span id="help-exchanges"></span></div></div>
     <div class="grid3" id="exchangeCards"></div>
   </div>
 
   <div class="section">
-    <h2>简单回测 / 命中统计</h2>
+    <div class="section-head"><div class="section-head-main"><h2 data-section-title="backtest"></h2><span id="help-backtest"></span></div></div>
     <div class="panel card">
       <div class="backtest">
         <div>
@@ -210,6 +213,45 @@ function indicatorFormula(label){
 }
 function helpBubble(label){
   return '<span class="help">?<span class="help-tip">'+esc(indicatorFormula(label))+'</span></span>';
+}
+
+function sectionHelpText(key){
+  const text=String(key||'');
+  if(text==='broadcast') return '这个区块是把整页分析结果压缩成适合快速阅读和播报的摘要，不是重新计算一套独立信号，而是把当前价格、主导风险方向、关键清算区位置、多周期推动指标、最近数小时的变化以及回测命中情况合并成一句结论和几条要点。它的价值在于帮助你先抓住“现在市场最值得盯什么”，再决定要不要继续下钻看每张卡片。这里如果写的是偏上冲挤空，通常意味着上方空头清算更密集、价格更容易被拉向上方风险区；如果写的是偏下探踩踏，通常说明下方多头清算更密集、价格一旦转弱更容易加速。它适合做盘前预判、盘中速览和消息播报，但不适合脱离下面的结构卡片单独使用，真正做交易时还是要结合关键价位距离、变化斜率和交易所拆分一起看。';
+  if(text==='indicators') return '多周期清算带指标关注的是 1 天、7 天、30 天三个时间尺度里最值得警惕的清算堆积结构。这里既看重合，也看迁移，还看现价与主带距离和多空压力偏向。重合强度高，说明不同周期的高风险带集中在相近价格附近，这种位置更容易成为“被价格反复试探的磁吸区”。迁移速度快，说明筹码和杠杆分布正在换手，旧的风险带可能失效，新的主风险带正在生成。现价到主清算带距离近，说明价格接近高敏感区，波动放大的概率更高。多空压力偏向为正，通常意味着上方空头清算带更重，更容易出现向上挤压；为负则意味着下方多头清算带更重，更容易出现向下踩踏。这个区块更适合判断方向和结构，不是直接给进出场点，而是告诉你市场现在最可能朝哪一边去释放杠杆。';
+  if(text==='scores') return '多空风险评分把复杂的清算分布、现价与关键区距离、资金费率状态以及最近实际强平情况压缩成几项 0 到 100 的风险刻度。空头被挤压风险高，不代表价格一定马上上涨，而是代表一旦向上突破，上方空头更容易被连续清算，从而推高波动；多头被踩踏风险高也同理，代表向下跌破后更容易触发连锁踩踏。短线波动放大风险则更像一个“环境变量”，它高时说明市场已经处在容易扩张的阶段，此时任何方向的突破都更可能走得更快。看这个区块不要只看绝对分数，更要看多空两边的分差：分差越大，说明结构越单边；分差很小，说明市场更可能维持震荡、来回扫流动性。如果你只看一个数字而不看分差、现价位置和关键区距离，就很容易把“风险高”误解成“必然马上发生”。';
+  if(text==='zones') return '关键清算区间是这页里最接近实战价格地图的部分，它直接告诉你上方和下方有哪些价格带最容易成为波动触发点。上方最近强清算区更适合观察挤空触发，下方最近强清算区更适合观察踩踏触发；而即时压力带、即时支撑带则离现价更近，偏向短线交易盯盘使用。这里最重要的不是单纯记住某个价格，而是看“离现价还有多远”“对应强度有多大”“这个区间属于上方还是下方”。距离近但强度弱，往往只是噪声；距离适中但强度大，往往更值得提前设预案。价格靠近这些区间时，应该联动看上面的多周期指标和下面的变化折线：如果结构方向、分数偏向和关键区位置一致，信号会更扎实；如果互相冲突，通常意味着市场仍在震荡整理，贸然追单的性价比不高。';
+  if(text==='changes') return '近几小时变化摘要不是看静态快照，而是看过去 24 小时里结构怎么演变。20、50、80、100、200、300 点推动指数分别衡量不同距离带内，上方清算压力和下方清算压力的相对强弱；数值向上，通常表示价格更容易被上方结构牵引，数值向下则说明下方踩踏压力更重。4 小时清算量折线用于判断市场是否已经进入强制去杠杆阶段，若它快速抬升，说明波动环境正在变差。资金费率变化则帮助区分当前是多头过热还是空头过热。这里最关键的是看趋势而不是只看最新值：如果多个点位指数同步抬升，代表推动方向在扩散；如果只有近端 20 或 50 点抬升，而远端仍平，往往只是短线扫流动性；如果近端和远端同时转弱，再配合清算量放大，通常意味着结构已经从震荡切到趋势释放。';
+  if(text==='exchanges') return '按交易所拆分的分析卡片用来回答一个重要问题：风险究竟集中在哪家交易所、哪边仓位、什么价位。不同交易所的用户结构、杠杆偏好和流动性分布并不一样，所以同样是 ETH，某家交易所可能上方空头更重，另一家则可能下方多头更重。这里的标记价格、OI 美元值、资金费率、多空比、近 1 小时清算额和关注价位，组合起来能帮助你判断“谁在主导市场节奏”。如果主导交易所和总盘面方向一致，信号可信度通常更高；如果总盘面偏上，但主导交易所的空头风险并不高，说明上冲可能缺乏持续性。交易所拆分尤其适合在异动时用来查源头，看看是单家平台在先动，还是全市场都在同步调整，这对判断真假突破很有帮助。';
+  if(text==='backtest') return '简单回测 / 命中统计是为了给前面的结构判断一个历史参照，而不是制造“未来一定会复制过去”的错觉。这里通常会统计过去 24 小时或最近一段样本里，当系统识别出当前这类热区结构后，后续一段时间命中 ±20、±50、±100 区间的概率，以及平均最大偏移。命中率高，说明这种结构过去更容易引发价格去试探这些区间；命中率低，则说明当前结构虽然看起来有压力，但历史上并不稳定。需要注意的是，回测样本越少、市场环境越变化、交易所结构越不一致，这些统计值的参考意义就越弱。所以看回测时要重点留意样本量、预测窗口和加权误差，不要把它当成直接下单按钮，而应该把它理解为“当前结构在最近市场环境里是否真的有用”的质量检查。';
+  return '这个问号用于解释当前区块的数据来源、计算思路和解读方式。分析页里的每一块都不是孤立数字，而是把页面数据源、交易所快照、资金费率、强平事件和关键区距离拼在一起做结构化展示。正确的用法不是只盯一个值，而是横向比不同区块、纵向比最近 24 小时变化，再结合现价位置判断市场更可能向上挤空、向下踩踏，还是继续震荡。';
+}
+
+function sectionTitleText(key){
+  const titles={
+    broadcast:'AI 文本播报摘要',
+    indicators:'多周期清算带指标',
+    scores:'多空风险评分',
+    zones:'关键清算区间',
+    changes:'近几小时变化摘要',
+    exchanges:'按交易所拆分的分析卡片',
+    backtest:'简单回测 / 命中统计'
+  };
+  return titles[key]||'分析区块';
+}
+
+function sectionHelpBubble(key){
+  return '<span class="help">?<span class="help-tip wide">'+esc(sectionHelpText(key))+'</span></span>';
+}
+
+function mountSectionHelp(){
+  const pairs=[['help-broadcast','broadcast'],['help-indicators','indicators'],['help-scores','scores'],['help-zones','zones'],['help-changes','changes'],['help-exchanges','exchanges'],['help-backtest','backtest']];
+  pairs.forEach(([id,key])=>{
+    const el=document.getElementById(id);
+    if(el) el.innerHTML=sectionHelpBubble(key);
+    const title=document.querySelector('[data-section-title=\"'+key+'\"]');
+    if(title) title.textContent=sectionTitleText(key);
+  });
 }
 
 function formatTrendValue(v,unit){
@@ -322,6 +364,7 @@ async function load(){
   ].map(it=>'<div class="rate"><div class="k">'+it[0]+'</div><div class="v">'+it[1]+'</div></div>').join('');
 }
 
+mountSectionHelp();
 load();
 setInterval(load,30000);
 </script>
