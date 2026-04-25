@@ -4311,7 +4311,7 @@ func (a *App) syncBinanceOrderBook(ctx context.Context, symbol string) {
 		if !a.waitExchangeRetry(ctx, "binance", 0) {
 			return
 		}
-		if err := a.runBinanceWS(ctx, symbol); err != nil && a.debug {
+		if err := a.runBinanceWS(ctx, symbol); err != nil && a.debug && !errors.Is(err, errResnapshot) {
 			log.Printf("binance ws err: %v", err)
 		}
 		if !a.waitExchangeRetry(ctx, "binance", 2*time.Second) {
@@ -4436,7 +4436,7 @@ func (a *App) syncBybitOrderBook(ctx context.Context, symbol string) {
 		if !a.waitExchangeRetry(ctx, "bybit", 0) {
 			return
 		}
-		if err := a.runBybitWS(ctx, symbol); err != nil && a.debug {
+		if err := a.runBybitWS(ctx, symbol); err != nil && a.debug && !errors.Is(err, errResnapshot) {
 			log.Printf("bybit ws err: %v", err)
 		}
 		if !a.waitExchangeRetry(ctx, "bybit", 2*time.Second) {
@@ -4565,7 +4565,7 @@ func (a *App) syncOKXOrderBook(ctx context.Context, instID string) {
 		if !a.waitExchangeRetry(ctx, "okx", 0) {
 			return
 		}
-		if err := a.runOKXWS(ctx, instID); err != nil && a.debug {
+		if err := a.runOKXWS(ctx, instID); err != nil && a.debug && !errors.Is(err, errResnapshot) {
 			log.Printf("okx ws err: %v", err)
 		}
 		if !a.waitExchangeRetry(ctx, "okx", 2*time.Second) {
