@@ -16,11 +16,63 @@ import (
 const (
 	bybitLiquidationTopicCharLimit = 18000
 	okxLiquidationBatchSize        = 80
+	wsKeepaliveReadTimeout         = 75 * time.Second
+	wsKeepalivePingInterval        = 20 * time.Second
+	wsKeepaliveWriteTimeout        = 10 * time.Second
 )
 
 type okxLiquidationInstrument struct {
 	InstID string
 	CtVal  float64
+}
+
+func startWSKeepalive(ctx context.Context, conn *websocket.Conn, readTimeout, pingInterval time.Duration) func() {
+	if readTimeout <= 0 {
+		readTimeout = wsKeepaliveReadTimeout
+	}
+	if pingInterval <= 0 {
+		pingInterval = wsKeepalivePingInterval
+	}
+
+	resetDeadline := func() {
+		_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
+	}
+	resetDeadline()
+	conn.SetPongHandler(func(string) error {
+		resetDeadline()
+		return nil
+	})
+	conn.SetPingHandler(func(appData string) error {
+		resetDeadline()
+		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(wsKeepaliveWriteTimeout))
+	})
+
+	stop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(pingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stop:
+				return
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, []byte("keepalive"), time.Now().Add(wsKeepaliveWriteTimeout)); err != nil {
+					_ = conn.Close()
+					return
+				}
+			}
+		}
+	}()
+
+	return func() {
+		select {
+		case <-stop:
+		default:
+			close(stop)
+		}
+	}
 }
 
 func normalizeLiquidationEventSymbol(exchange, symbol string) string {
@@ -326,6 +378,8 @@ func (a *App) runBinanceAllLiquidationsConn(ctx context.Context, wsURL string) (
 		return err
 	}
 	defer conn.Close()
+	stopKeepalive := startWSKeepalive(ctx, conn, wsKeepaliveReadTimeout, wsKeepalivePingInterval)
+	defer stopKeepalive()
 
 	a.noteLiquidationWSConnected("binance")
 	defer func() {
@@ -346,6 +400,7 @@ func (a *App) runBinanceAllLiquidationsConn(ctx context.Context, wsURL string) (
 		if err = conn.ReadJSON(&raw); err != nil {
 			return err
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(wsKeepaliveReadTimeout))
 		msgs := []map[string]any{}
 		switch payload := raw.(type) {
 		case map[string]any:
@@ -467,6 +522,8 @@ func (a *App) runBybitLiquidationBatch(ctx context.Context, category string, top
 		return err
 	}
 	defer conn.Close()
+	stopKeepalive := startWSKeepalive(ctx, conn, wsKeepaliveReadTimeout, wsKeepalivePingInterval)
+	defer stopKeepalive()
 
 	sub := map[string]any{"op": "subscribe", "args": topics}
 	if err = conn.WriteJSON(sub); err != nil {
@@ -492,6 +549,7 @@ func (a *App) runBybitLiquidationBatch(ctx context.Context, category string, top
 		if err = conn.ReadJSON(&msg); err != nil {
 			return err
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(wsKeepaliveReadTimeout))
 		dataArr, ok := msg["data"].([]any)
 		if !ok {
 			continue
@@ -570,6 +628,8 @@ func (a *App) runOKXLiquidationBatch(ctx context.Context, instruments []okxLiqui
 		return err
 	}
 	defer conn.Close()
+	stopKeepalive := startWSKeepalive(ctx, conn, wsKeepaliveReadTimeout, wsKeepalivePingInterval)
+	defer stopKeepalive()
 
 	args := make([]map[string]string, 0, len(instruments))
 	ctValByInst := make(map[string]float64, len(instruments))
@@ -605,6 +665,7 @@ func (a *App) runOKXLiquidationBatch(ctx context.Context, instruments []okxLiqui
 		if err = conn.ReadJSON(&msg); err != nil {
 			return err
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(wsKeepaliveReadTimeout))
 		dataArr, ok := msg["data"].([]any)
 		if !ok {
 			continue
