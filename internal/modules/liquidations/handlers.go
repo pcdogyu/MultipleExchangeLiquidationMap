@@ -83,6 +83,11 @@ func (s *service) handleLiquidations(w http.ResponseWriter, r *http.Request) {
 		FilterField: filterField,
 		MinValue:    minValue,
 	})
+	periodSummary := s.core.LiquidationPeriodSummary(liqmap.LiquidationListOptions{
+		Symbol:      symbol,
+		FilterField: filterField,
+		MinValue:    minValue,
+	})
 
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"page":              page,
@@ -93,6 +98,7 @@ func (s *service) handleLiquidations(w http.ResponseWriter, r *http.Request) {
 		"min_value":         minValue,
 		"available_symbols": s.core.LiquidationSymbols(300),
 		"ws_status":         s.core.LiquidationWSStatuses(),
+		"period_summary":    periodSummary,
 	})
 }
 
