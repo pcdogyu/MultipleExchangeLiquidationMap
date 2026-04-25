@@ -20,6 +20,7 @@ body{margin:0;background:radial-gradient(circle at top left,#fff8ee,transparent 
 .theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:var(--navInk);cursor:pointer}
 .theme-toggle button.label{cursor:default;opacity:.92}
 .theme-toggle button.active{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.18);color:#fff}
+.nav-right>a[href="/config"]:not(.nav-upgrade){display:none}
 .wrap{max-width:1380px;margin:0 auto;padding:22px 18px 40px}
 .layout{display:grid;grid-template-columns:minmax(0,1.04fr) minmax(0,.96fr);gap:14px;align-items:start}
 .panel{background:rgba(255,253,248,.92);border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow);padding:18px}
@@ -71,6 +72,12 @@ th{color:var(--muted);font-weight:600}
     </div>
   </div>
   <div class="nav-right">
+    <div class="theme-toggle">
+      <button class="label" type="button">主题</button>
+      <button id="themeDark" type="button" onclick="setTheme('dark')">深色</button>
+      <button id="themeLight" type="button" onclick="setTheme('light')">浅色</button>
+    </div>
+    <a href="/config" class="nav-upgrade">升级</a>
     <a href="/config">调整参数</a>
   </div>
 </div>
@@ -228,7 +235,7 @@ th{color:var(--muted);font-weight:600}
 
 <script>
 let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawWorkInterval={{.NotifyWorkIntervalMin}},rawOffInterval={{.NotifyOffIntervalMin}},rawWorkExpr={{printf "%q" .WorkTimeExpr}},rawEnabled={{.NotifyEnabled}},rawGroup1Enabled={{.Group1Enabled}},rawGroup2Enabled={{.Group2Enabled}},rawGroup3Enabled={{.Group3Enabled}},rawGroup4Enabled={{.Group4Enabled}},rawGroup5Enabled={{.Group5Enabled}},tokenDirty=false,channelDirty=false;
-function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}}
+function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
 function maskInput(v){v=String(v||'');if(!v)return '';if(v.length<=8)return '*'.repeat(v.length);return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}
 function syncInputs(){
