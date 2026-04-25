@@ -24,6 +24,32 @@ type LiquidationWSStatus struct {
 	PauseReason      string `json:"pause_reason,omitempty"`
 }
 
+type LiquidationPeriodBucket struct {
+	Label          string  `json:"label"`
+	Hours          int     `json:"hours"`
+	TotalUSD       float64 `json:"total_usd"`
+	LongUSD        float64 `json:"long_usd"`
+	ShortUSD       float64 `json:"short_usd"`
+	DominantSide   string  `json:"dominant_side"`
+	PricePush      string  `json:"price_push"`
+	PricePushLabel string  `json:"price_push_label"`
+	BalanceRatio   float64 `json:"balance_ratio"`
+}
+
+type LiquidationPeriodPattern struct {
+	Code         string  `json:"code"`
+	Label        string  `json:"label"`
+	TrendBias    string  `json:"trend_bias"`
+	Score        float64 `json:"score"`
+	Summary      string  `json:"summary"`
+	PatternCount int     `json:"pattern_count"`
+}
+
+type LiquidationPeriodSummary struct {
+	Buckets []LiquidationPeriodBucket `json:"buckets"`
+	Pattern LiquidationPeriodPattern  `json:"pattern"`
+}
+
 type liquidationWSState struct {
 	Exchange         string
 	ActiveConns      int
