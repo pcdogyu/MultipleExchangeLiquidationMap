@@ -25,7 +25,7 @@ func Analysis() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "analysis",
 		FallbackHTML: liqmap.AnalysisHTMLFallback(),
-		Preferred:    []string{file("analysis_page_utf8.html"), file("analysis_page_fixed.html")},
+		Preferred:    []string{file("analysis_page_utf8.html")},
 	}
 }
 
@@ -33,7 +33,7 @@ func Monitor() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "monitor",
 		FallbackHTML: liqmap.MonitorHTML(),
-		Preferred:    []string{file(".monitor_mismatch_dom.html")},
+		Preferred:    []string{file("monitor_page_utf8.html")},
 	}
 }
 
@@ -41,7 +41,7 @@ func Bookmap() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "map",
 		FallbackHTML: liqmap.MapHTML(),
-		Preferred:    []string{file("map_page_fixed.html"), file("map_page.html")},
+		Preferred:    []string{file("map_page_fixed.html")},
 	}
 }
 
