@@ -654,7 +654,29 @@ func (m *WebDataSourceManager) appendStepLog(step, result, detail string) {
 	if message == "" {
 		message = "-"
 	}
-	log.Printf("webdatasource progress: t+%ds | step+%ds | %s | %s", totalSec, stepSec, message, entry.Result)
+	log.Printf("webdatasource progress: t+%ds | step+%ds | %s | %s",
+		totalSec,
+		stepSec,
+		compactConsoleLogText(message, 140),
+		compactConsoleLogText(entry.Result, 24),
+	)
+}
+
+func compactConsoleLogText(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "-"
+	}
+	s = strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(s)
+	s = strings.Join(strings.Fields(s), " ")
+	if max <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "..."
 }
 
 func (m *WebDataSourceManager) snapshotStepLogs() (string, []WebDataSourceStepLog) {
@@ -900,7 +922,7 @@ func (m *WebDataSourceManager) runLoggedStep(ctx context.Context, progress *webD
 func (m *WebDataSourceManager) startProgressLogger(ctx context.Context, progress *webDataSourceProgress) func() {
 	done := make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
+		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -915,7 +937,11 @@ func (m *WebDataSourceManager) startProgressLogger(ctx context.Context, progress
 				}
 				totalSec := int(time.Since(progress.startedAt).Seconds())
 				stepSec := int(time.Since(progress.stepSince).Seconds())
-				log.Printf("webdatasource progress: t+%ds | step+%ds | %s", totalSec, stepSec, msg)
+				log.Printf("webdatasource waiting: t+%ds | step+%ds | %s",
+					totalSec,
+					stepSec,
+					compactConsoleLogText(msg, 96),
+				)
 			}
 		}
 	}()
