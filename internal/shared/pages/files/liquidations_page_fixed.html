@@ -176,6 +176,26 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04
   <div class="status-grid" id="wsStatusGrid"></div>
 
   <div class="panel">
+    <div class="section-head">
+      <div>
+        <h3 class="section-title">四周期多空清算结构</h3>
+        <div class="small">统计过去 1H / 4H / 12H / 24H 的多空清算额，鼠标移动到卡片上可查看总清算金额、多单清算量和空单清算量。</div>
+      </div>
+      <div id="patternBox" class="pattern-card">
+        <div class="k">四周期 16 种形态判断</div>
+        <div class="v">加载中...</div>
+        <div class="pattern-summary">正在计算当前多空清算结构。</div>
+      </div>
+    </div>
+    <div id="periodGrid" class="period-grid">
+      <div class="period-card">
+        <div class="period-total">--</div>
+        <div class="period-sub">加载中...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
     <div class="pager">
       <div id="meta" class="small">加载中...</div>
       <div class="small">页面每 5 秒自动刷新</div>
