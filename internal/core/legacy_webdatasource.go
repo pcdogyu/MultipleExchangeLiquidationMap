@@ -461,8 +461,24 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) err
 	progress.setAction("Capture completed")
 	m.appendStepLog("Capture finished", "success", fmt.Sprintf("records=%d", totalRecords))
 	m.finishRunState("success", "", totalRecords)
+	m.triggerAnalysisBacktestAfterWebDataSourceCapture()
 	m.triggerTelegramAfterWebDataSourceCapture()
 	return nil
+}
+
+func (m *WebDataSourceManager) triggerAnalysisBacktestAfterWebDataSourceCapture() {
+	snapshot, err := m.app.BuildAnalysisSnapshot()
+	if err != nil {
+		if m.app.debug {
+			log.Printf("analysis snapshot after webdatasource capture failed: %v", err)
+		}
+		return
+	}
+	if err := m.app.recordAnalysisDirectionSignal(snapshot); err != nil {
+		if m.app.debug {
+			log.Printf("record analysis direction signal after webdatasource capture failed: %v", err)
+		}
+	}
 }
 
 func (m *WebDataSourceManager) triggerTelegramAfterWebDataSourceCapture() {

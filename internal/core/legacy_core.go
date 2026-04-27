@@ -436,9 +436,6 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 			errs = append(errs, msg)
 		} else {
 			a.recordTelegramSendHistory(sendMode, 5, "analysis-text", "success", "")
-			if err := a.recordAnalysisDirectionSignal(snapshot); err != nil && a.debug {
-				log.Printf("record analysis direction signal failed: %v", err)
-			}
 		}
 	}
 

@@ -178,7 +178,7 @@ func Init(db *sql.DB) error {
 			analysis_generated_at INTEGER NOT NULL,
 			headline TEXT NOT NULL DEFAULT '',
 			summary TEXT NOT NULL DEFAULT '',
-			verify_horizon_min INTEGER NOT NULL DEFAULT 15
+			verify_horizon_min INTEGER NOT NULL DEFAULT 5
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_analysis_direction_signals_ts ON analysis_direction_signals(signal_ts DESC);`,
 		`CREATE INDEX IF NOT EXISTS idx_analysis_direction_signals_symbol_ts ON analysis_direction_signals(symbol, signal_ts DESC);`,
@@ -188,6 +188,9 @@ func Init(db *sql.DB) error {
 			return err
 		}
 	}
+	_ = execWithBusyRetry(db, `UPDATE analysis_direction_signals
+		SET verify_horizon_min=5
+		WHERE verify_horizon_min IS NULL OR verify_horizon_min<>5`)
 	_ = ensureColumn(db, "market_state", "long_short_ratio", "REAL")
 	_ = ensureColumn(db, "oi_snapshots", "long_short_ratio", "REAL")
 	return nil
