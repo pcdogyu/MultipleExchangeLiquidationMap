@@ -144,6 +144,22 @@ function amountYi(n){
   if(!isFinite(v)) return '-';
   return (v/1e8).toFixed(2);
 }
+function signedAmountYiDiff(longValue,shortValue){
+  const diff=Number(longValue||0)-Number(shortValue||0);
+  if(!isFinite(diff)) return '-';
+  if(diff>0) return '+'+amountYi(diff);
+  if(diff<0) return '-'+amountYi(Math.abs(diff));
+  return '0.00';
+}
+function formatHeatReportDateTime(ts){
+  const d=new Date(ts||Date.now());
+  const y=d.getFullYear();
+  const m=d.getMonth()+1;
+  const day=d.getDate();
+  const hh=String(d.getHours()).padStart(2,'0');
+  const mm=String(d.getMinutes()).padStart(2,'0');
+  return y+'.'+m+'.'+day+' '+hh+':'+mm;
+}
 
 function biasClassByText(v){
   const s=String(v||'');
@@ -192,29 +208,124 @@ function fundingDirectionLabel(v){
   return '中性';
 }
 
-function buildHeatBandsFromModel(model){
+function roundMonitorPrice1(v){
+  const n=Number(v);
+  if(!(isFinite(n)&&n>0)) return 0;
+  return Math.round(n*10)/10;
+}
+
+function buildMonitorModelPoints(model){
   if(!model||!Array.isArray(model.prices)||!Array.isArray(model.intensity_grid)||!model.prices.length) return [];
   const rows=model.prices.length;
   const cols=((model.intensity_grid&&model.intensity_grid[0])?model.intensity_grid[0].length:0);
   if(rows<1||cols<1) return [];
-  const cp=Number(model.current_price||0);
-  if(!(cp>0)) return [];
   const pts=[];
   for(let ri=0;ri<rows;ri++){
     const p=Number(model.prices[ri]||0);
     if(!(p>0)) continue;
     let sum=0;
     for(let ci=0;ci<cols;ci++) sum+=Math.max(0,Number((model.intensity_grid[ri]||[])[ci]||0));
-    if(sum>0) pts.push({price:p,notional:sum});
+    if(sum>0) pts.push({price:p,total:sum});
   }
+  return pts;
+}
+
+function buildMonitorWebGroups(map){
+  if(!map||!map.has_data||!Array.isArray(map.points)||!map.points.length) return [];
+  const groups=new Map();
+  for(const pt of map.points){
+    const price=Number(pt&&pt.price||0);
+    const val=Number(pt&&pt.liq_value||0);
+    if(!(price>0&&val>0)) continue;
+    const side=String(pt&&pt.side||'').toLowerCase()==='short'?'short':'long';
+    const key=side+'|'+price.toFixed(4);
+    let g=groups.get(key);
+    if(!g){
+      g={side:side,price:price,total:0};
+      groups.set(key,g);
+    }
+    g.total+=val;
+  }
+  return Array.from(groups.values()).sort(function(a,b){return Number(a.price||0)-Number(b.price||0);});
+}
+
+function chooseMonitorPeak(points,anchorPrice,side){
+  const cp=roundMonitorPrice1(anchorPrice);
+  if(!(cp>0)||!Array.isArray(points)||!points.length) return {price:0,v:0,cum:0};
+  const dir=side==='up'?'up':'down';
+  const peak={price:0,v:0,cum:0};
+  for(const pt of points){
+    const price=Number(pt&&pt.price||0);
+    const total=Number((pt&&(pt.total!=null?pt.total:pt.notional))||0);
+    if(!(price>0&&total>0)) continue;
+    if(dir==='up'&&price<cp) continue;
+    if(dir==='down'&&price>cp) continue;
+    if(total>peak.v){
+      peak.price=price;
+      peak.v=total;
+      continue;
+    }
+    if(total===peak.v&&peak.price>0){
+      const priceDist=Math.abs(price-cp);
+      const peakDist=Math.abs(peak.price-cp);
+      if(priceDist<peakDist||(priceDist===peakDist&&price<peak.price)){
+        peak.price=price;
+      }
+    }
+  }
+  if(!(peak.price>0&&peak.v>0)) return peak;
+  for(const pt of points){
+    const price=Number(pt&&pt.price||0);
+    const total=Number((pt&&(pt.total!=null?pt.total:pt.notional))||0);
+    if(!(price>0&&total>0)) continue;
+    if(dir==='up'&&price>=cp&&price<=peak.price) peak.cum+=total;
+    if(dir==='down'&&price<=cp&&price>=peak.price) peak.cum+=total;
+  }
+  if(peak.cum<peak.v) peak.cum=peak.v;
+  return peak;
+}
+
+function buildHeatBandsFromModel(model,anchorPrice){
+  const pts=buildMonitorModelPoints(model);
   if(!pts.length) return [];
+  const cp=roundMonitorPrice1(anchorPrice||(model&&model.current_price));
+  if(!(cp>0)) return [];
   const desired=[10,20,30,40,50,60,70,80,90,100,150,200,250,300];
   return desired.map(function(band){
     let upNotional=0,downNotional=0;
     for(const pt of pts){
       const dist=pt.price-cp;
-      if(dist>=0&&dist<=band) upNotional+=pt.notional;
-      if(dist<=0&&Math.abs(dist)<=band) downNotional+=pt.notional;
+      if(dist>=0&&dist<=band) upNotional+=pt.total;
+      if(dist<=0&&Math.abs(dist)<=band) downNotional+=pt.total;
+    }
+    return {
+      band:band,
+      up_price:cp+band,
+      up_notional_usd:upNotional,
+      down_price:cp-band,
+      down_notional_usd:downNotional
+    };
+  });
+}
+
+function buildHeatBandsFromWebMap(map,anchorPrice){
+  if(!map||!map.has_data||!Array.isArray(map.points)||!map.points.length) return [];
+  const cp=roundMonitorPrice1(anchorPrice||(map&&map.current_price));
+  if(!(cp>0)) return [];
+  const groups=buildMonitorWebGroups(map);
+  if(!groups.length) return [];
+  const desired=[10,20,30,40,50,60,70,80,90,100,150,200,250,300];
+  return desired.map(function(band){
+    let upNotional=0,downNotional=0;
+    const upBound=cp+band;
+    const downBound=cp-band;
+    for(const g of groups){
+      const price=Number(g&&g.price||0);
+      const total=Number(g&&g.total||0);
+      const side=String(g&&g.side||'').toLowerCase()==='short'?'short':'long';
+      if(!(price>0&&total>0)) continue;
+      if(side==='short'&&price>=cp&&price<=upBound) upNotional+=total;
+      if(side==='long'&&price<=cp&&price>=downBound) downNotional+=total;
     }
     return {
       band:band,
@@ -234,52 +345,39 @@ function windowKeyForDays(days){
   return '';
 }
 
-function buildPeakSummaryFromModel(model){
-  if(!model||!Array.isArray(model.prices)||!Array.isArray(model.intensity_grid)||!model.prices.length) return null;
-  const rows=model.prices.length;
-  const cols=((model.intensity_grid&&model.intensity_grid[0])?model.intensity_grid[0].length:0);
-  const cp=Number(model.current_price||0);
-  if(rows<1||cols<1||!(cp>0)) return null;
-  const up={price:0,v:0};
-  const down={price:0,v:0};
-  for(let ri=0;ri<rows;ri++){
-    const p=Number(model.prices[ri]||0);
-    if(!(p>0)) continue;
-    let sum=0;
-    for(let ci=0;ci<cols;ci++) sum+=Math.max(0,Number((model.intensity_grid[ri]||[])[ci]||0));
-    if(!(sum>0)) continue;
-    if(p>=cp&&sum>up.v) up.price=p,up.v=sum;
-    if(p<=cp&&sum>down.v) down.price=p,down.v=sum;
-  }
-  return {source:'model',up:up,down:down};
+function buildPeakSummaryFromModel(model,anchorPrice){
+  const pts=buildMonitorModelPoints(model);
+  const cp=roundMonitorPrice1(anchorPrice||(model&&model.current_price));
+  if(!(cp>0)||!pts.length) return null;
+  return {
+    source:'model',
+    up:chooseMonitorPeak(pts,cp,'up'),
+    down:chooseMonitorPeak(pts,cp,'down')
+  };
 }
 
-function buildPeakSummaryFromWebMap(map){
+function buildPeakSummaryFromWebMap(map,anchorPrice){
   if(!map||!map.has_data||!Array.isArray(map.points)||!map.points.length) return null;
-  const groups=new Map();
-  for(const pt of map.points){
-    const price=Number(pt.price||0),val=Number(pt.liq_value||0);
-    if(!(price>0&&val>0)) continue;
-    const side=String(pt.side||'').toLowerCase()==='short'?'short':'long';
-    const key=side+'|'+price.toFixed(4);
-    let g=groups.get(key);
-    if(!g){
-      g={side:side,price:price,total:0};
-      groups.set(key,g);
-    }
-    g.total+=val;
+  const cp=roundMonitorPrice1(anchorPrice||(map&&map.current_price));
+  if(!(cp>0)) return null;
+  const groups=buildMonitorWebGroups(map);
+  if(!groups.length) return null;
+  const upPoints=[];
+  const downPoints=[];
+  for(const g of groups){
+    if(g.side==='short') upPoints.push(g);
+    if(g.side==='long') downPoints.push(g);
   }
-  const up={price:0,v:0};
-  const down={price:0,v:0};
-  for(const g of groups.values()){
-    if(g.side==='short'&&g.total>up.v) up.price=g.price,up.v=g.total;
-    if(g.side==='long'&&g.total>down.v) down.price=g.price,down.v=g.total;
-  }
-  return {source:'webdatasource',up:up,down:down};
+  return {
+    source:'webdatasource',
+    up:chooseMonitorPeak(upPoints,cp,'up'),
+    down:chooseMonitorPeak(downPoints,cp,'down')
+  };
 }
 
-function resolveMonitorPeaks(){
-  return buildPeakSummaryFromWebMap(monitorWebMap)||buildPeakSummaryFromModel(monitorLiqMapData)||{source:'none',up:{price:0,v:0},down:{price:0,v:0}};
+function resolveMonitorPeaks(anchorPrice){
+  const cp=roundMonitorPrice1(anchorPrice||(monitorLiqMapData&&monitorLiqMapData.current_price)||(monitorWebMap&&monitorWebMap.current_price));
+  return buildPeakSummaryFromWebMap(monitorWebMap,cp)||buildPeakSummaryFromModel(monitorLiqMapData,cp)||{source:'none',up:{price:0,v:0,cum:0},down:{price:0,v:0,cum:0}};
 }
 
 function renderTopCards(d){
@@ -320,16 +418,18 @@ function renderTopCards(d){
 function renderHeatReport(d){
   const wrap=document.getElementById('heatReport');
   if(!wrap) return;
-  const bands=buildHeatBandsFromModel(monitorLiqMapData);
+  const anchorPrice=Number(d.current_price||0);
+  const webBands=buildHeatBandsFromWebMap(monitorWebMap,anchorPrice);
+  const bands=webBands.length?webBands:buildHeatBandsFromModel(monitorLiqMapData,anchorPrice);
   if(!bands.length){
     wrap.innerHTML='<div class="hint">暂无数据</div>';
     return;
   }
-  const peaks=resolveMonitorPeaks();
-  const topUp=(peaks&&peaks.up)||{price:0,v:0};
-  const topDown=(peaks&&peaks.down)||{price:0,v:0};
+  const peaks=resolveMonitorPeaks(anchorPrice);
+  const topUp=(peaks&&peaks.up)||{price:0,v:0,cum:0};
+  const topDown=(peaks&&peaks.down)||{price:0,v:0,cum:0};
   const hot={20:true,50:true,80:true,100:true,200:true,300:true};
-  const dateText=new Date(d.generated_at||Date.now()).toLocaleDateString('zh-CN').split('/').join('.');
+  const dateText=formatHeatReportDateTime(d.generated_at||Date.now());
   let html='<table class="heat-report-table"><thead>'+
     '<tr class="title"><th colspan="6">ETH 清算雷区速报（'+dateText+'）</th></tr>'+
     '<tr class="spot"><th>ETH现价</th><th colspan="5" class="price">'+fmtHeatPrice(d.current_price)+'</th></tr>'+
@@ -346,6 +446,42 @@ function renderHeatReport(d){
   }
   const longestDiffClass=topDown.v>topUp.v?'diff-long':(topUp.v>topDown.v?'diff-short':'diff-flat');
   html+='<tr class="longest"><td>最长柱</td><td class="up-cell">'+fmtHeatPrice(topUp.price)+'</td><td class="up-cell">'+amountYi(topUp.v)+'</td><td class="down-cell">'+fmtHeatPrice(topDown.price)+'</td><td class="down-cell">'+amountYi(topDown.v)+'</td><td class="diff-cell '+longestDiffClass+'">'+amountYi(Math.abs(topDown.v-topUp.v))+'</td></tr></tbody></table>';
+  wrap.innerHTML=html;
+}
+
+function renderHeatReport(d){
+  const wrap=document.getElementById('heatReport');
+  if(!wrap) return;
+  const anchorPrice=Number(d.current_price||0);
+  const webBands=buildHeatBandsFromWebMap(monitorWebMap,anchorPrice);
+  const bands=webBands.length?webBands:buildHeatBandsFromModel(monitorLiqMapData,anchorPrice);
+  if(!bands.length){
+    wrap.innerHTML='<div class="hint">鏆傛棤鏁版嵁</div>';
+    return;
+  }
+  const peaks=resolveMonitorPeaks(anchorPrice);
+  const topUp=(peaks&&peaks.up)||{price:0,v:0,cum:0};
+  const topDown=(peaks&&peaks.down)||{price:0,v:0,cum:0};
+  const hot={20:true,50:true,80:true,100:true,200:true,300:true};
+  const dateText=formatHeatReportDateTime(d.generated_at||Date.now());
+  let html='<table class="heat-report-table"><thead>'+
+    '<tr class="title"><th colspan="6">ETH 娓呯畻闆峰尯閫熸姤锛?+dateText+'锛?/th></tr>'+
+    '<tr class="spot"><th>ETH鐜颁环</th><th colspan="5" class="price">'+fmtHeatPrice(d.current_price)+'</th></tr>'+
+    '<tr class="group"><th rowspan="2">鑼冨洿</th><th colspan="2" class="down">涓嬫柟澶氬崟</th><th colspan="2">涓婃柟绌哄崟</th><th rowspan="2">宸€硷紙浜匡級</th></tr>'+
+    '<tr class="sub"><th class="down">浠锋牸</th><th class="down">瑙勬ā锛堜嚎锛?/th><th>浠锋牸</th><th>瑙勬ā锛堜嚎锛?/th></tr>'+
+    '</thead><tbody>';
+  for(let i=0;i<bands.length;i++){
+    const b=bands[i];
+    const up=Number(b.up_notional_usd||0);
+    const down=Number(b.down_notional_usd||0);
+    const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
+    const diffClass=down>up?'diff-long':(up>down?'diff-short':'diff-flat');
+    html+='<tr class="'+cls+'"><td>'+b.band+'鐐瑰唴</td><td class="down-cell">'+fmtHeatPrice(b.down_price)+'</td><td class="down-cell">'+amountYi(down)+'</td><td class="up-cell">'+fmtHeatPrice(b.up_price)+'</td><td class="up-cell">'+amountYi(up)+'</td><td class="diff-cell '+diffClass+'">'+signedAmountYiDiff(down,up)+'</td></tr>';
+  }
+  const topUpCum=Number(topUp.cum||0);
+  const topDownCum=Number(topDown.cum||0);
+  const longestDiffClass=topDownCum>topUpCum?'diff-long':(topUpCum>topDownCum?'diff-short':'diff-flat');
+  html+='<tr class="longest"><td>鏈€闀挎煴</td><td class="down-cell">'+fmtHeatPrice(topDown.price)+'</td><td class="down-cell">'+amountYi(topDownCum)+'</td><td class="up-cell">'+fmtHeatPrice(topUp.price)+'</td><td class="up-cell">'+amountYi(topUpCum)+'</td><td class="diff-cell '+longestDiffClass+'">'+signedAmountYiDiff(topDownCum,topUpCum)+'</td></tr></tbody></table>';
   wrap.innerHTML=html;
 }
 
@@ -422,6 +558,35 @@ function renderCore(d){
     metricRow('方向',String(nearestSide||'-'));
 }
 
+function renderCore(d){
+  const c=((d.analytics||{}).core_zone)||{};
+  const el=document.getElementById('coreZone');
+  if(!el) return;
+  const peaks=resolveMonitorPeaks(Number(d.current_price||0));
+  const cp=Number(d.current_price||0);
+  const up=(peaks&&peaks.up&&peaks.up.v>0)?peaks.up:{price:Number(c.up_price||0),v:Number(c.up_notional_usd||0),cum:Number(c.up_notional_usd||0)};
+  const down=(peaks&&peaks.down&&peaks.down.v>0)?peaks.down:{price:Number(c.down_price||0),v:Number(c.down_notional_usd||0),cum:Number(c.down_notional_usd||0)};
+  let nearestSide=String(c.nearest_side||'-');
+  let nearestPrice=Number(c.nearest_strong_price||0);
+  let nearestDist=Number(c.nearest_distance||0);
+  const upDist=(cp>0&&up.price>0)?Math.abs(up.price-cp):Infinity;
+  const downDist=(cp>0&&down.price>0)?Math.abs(cp-down.price):Infinity;
+  if(upDist<downDist){
+    nearestSide='涓婃柟寮哄尯';
+    nearestPrice=up.price;
+    nearestDist=upDist;
+  }else if(downDist<Infinity){
+    nearestSide='涓嬫柟寮哄尯';
+    nearestPrice=down.price;
+    nearestDist=downDist;
+  }
+  el.innerHTML=
+    metricRow('涓婃柟鏈€闀挎煴',fmtPrice(up.price)+' / '+fmtAmount(up.cum||up.v),'warn')+
+    metricRow('涓嬫柟鏈€闀挎煴',fmtPrice(down.price)+' / '+fmtAmount(down.cum||down.v),'good')+
+    metricRow('鏈€杩戝己鍖?,fmtPrice(nearestPrice)+' / '+(isFinite(Number(nearestDist))?Number(nearestDist).toFixed(1):'-')+'鐐?,biasClassByText(nearestSide))+
+    metricRow('鏂瑰悜',String(nearestSide||'-'));
+}
+
 function renderContrib(d){
   const rows=((d.analytics||{}).exchange_contrib)||[];
   const el=document.getElementById('exchangeContrib');
@@ -446,6 +611,71 @@ function renderAlerts(d){
     metricRow('近1分钟清算',fmtAmount(a.recent_1m_usd),'warn')+
     metricRow('Binance / Bybit / OKX',fmtAmount(a.recent_1m_binance_usd)+' / '+fmtAmount(a.recent_1m_bybit_usd)+' / '+fmtAmount(a.recent_1m_okx_usd))+
     metricRow('建议',String(a.suggestion||'-'));
+}
+
+function renderHeatReport(d){
+  const wrap=document.getElementById('heatReport');
+  if(!wrap) return;
+  const anchorPrice=Number(d.current_price||0);
+  const webBands=buildHeatBandsFromWebMap(monitorWebMap,anchorPrice);
+  const bands=webBands.length?webBands:buildHeatBandsFromModel(monitorLiqMapData,anchorPrice);
+  if(!bands.length){
+    wrap.innerHTML='<div class="hint">暂无数据</div>';
+    return;
+  }
+  const peaks=resolveMonitorPeaks(anchorPrice);
+  const topUp=(peaks&&peaks.up)||{price:0,v:0,cum:0};
+  const topDown=(peaks&&peaks.down)||{price:0,v:0,cum:0};
+  const hot={20:true,50:true,80:true,100:true,200:true,300:true};
+  const dateText=formatHeatReportDateTime(d.generated_at||Date.now());
+  let html='<table class="heat-report-table"><thead>'+
+    '<tr class="title"><th colspan="6">ETH 清算雷区速报（'+dateText+'）</th></tr>'+
+    '<tr class="spot"><th>ETH现价</th><th colspan="5" class="price">'+fmtHeatPrice(d.current_price)+'</th></tr>'+
+    '<tr class="group"><th rowspan="2">范围</th><th colspan="2" class="down">下方多单</th><th colspan="2">上方空单</th><th rowspan="2">差值（亿）</th></tr>'+
+    '<tr class="sub"><th class="down">价格</th><th class="down">规模（亿）</th><th>价格</th><th>规模（亿）</th></tr>'+
+    '</thead><tbody>';
+  for(let i=0;i<bands.length;i++){
+    const b=bands[i];
+    const up=Number(b.up_notional_usd||0);
+    const down=Number(b.down_notional_usd||0);
+    const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
+    const diffClass=down>up?'diff-long':(up>down?'diff-short':'diff-flat');
+    html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="down-cell">'+fmtHeatPrice(b.down_price)+'</td><td class="down-cell">'+amountYi(down)+'</td><td class="up-cell">'+fmtHeatPrice(b.up_price)+'</td><td class="up-cell">'+amountYi(up)+'</td><td class="diff-cell '+diffClass+'">'+signedAmountYiDiff(down,up)+'</td></tr>';
+  }
+  const topUpCum=Number(topUp.cum||0);
+  const topDownCum=Number(topDown.cum||0);
+  const longestDiffClass=topDownCum>topUpCum?'diff-long':(topUpCum>topDownCum?'diff-short':'diff-flat');
+  html+='<tr class="longest"><td>最长柱</td><td class="down-cell">'+fmtHeatPrice(topDown.price)+'</td><td class="down-cell">'+amountYi(topDownCum)+'</td><td class="up-cell">'+fmtHeatPrice(topUp.price)+'</td><td class="up-cell">'+amountYi(topUpCum)+'</td><td class="diff-cell '+longestDiffClass+'">'+signedAmountYiDiff(topDownCum,topUpCum)+'</td></tr></tbody></table>';
+  wrap.innerHTML=html;
+}
+
+function renderCore(d){
+  const c=((d.analytics||{}).core_zone)||{};
+  const el=document.getElementById('coreZone');
+  if(!el) return;
+  const peaks=resolveMonitorPeaks(Number(d.current_price||0));
+  const cp=Number(d.current_price||0);
+  const up=(peaks&&peaks.up&&peaks.up.v>0)?peaks.up:{price:Number(c.up_price||0),v:Number(c.up_notional_usd||0),cum:Number(c.up_notional_usd||0)};
+  const down=(peaks&&peaks.down&&peaks.down.v>0)?peaks.down:{price:Number(c.down_price||0),v:Number(c.down_notional_usd||0),cum:Number(c.down_notional_usd||0)};
+  let nearestSide=String(c.nearest_side||'-');
+  let nearestPrice=Number(c.nearest_strong_price||0);
+  let nearestDist=Number(c.nearest_distance||0);
+  const upDist=(cp>0&&up.price>0)?Math.abs(up.price-cp):Infinity;
+  const downDist=(cp>0&&down.price>0)?Math.abs(cp-down.price):Infinity;
+  if(upDist<downDist){
+    nearestSide='上方强区';
+    nearestPrice=up.price;
+    nearestDist=upDist;
+  }else if(downDist<Infinity){
+    nearestSide='下方强区';
+    nearestPrice=down.price;
+    nearestDist=downDist;
+  }
+  el.innerHTML=
+    metricRow('上方最长柱',fmtPrice(up.price)+' / '+fmtAmount(up.cum||up.v),'warn')+
+    metricRow('下方最长柱',fmtPrice(down.price)+' / '+fmtAmount(down.cum||down.v),'good')+
+    metricRow('最近强区',fmtPrice(nearestPrice)+' / '+(isFinite(Number(nearestDist))?Number(nearestDist).toFixed(1):'-')+'点',biasClassByText(nearestSide))+
+    metricRow('方向',String(nearestSide||'-'));
 }
 
 async function load(opts){

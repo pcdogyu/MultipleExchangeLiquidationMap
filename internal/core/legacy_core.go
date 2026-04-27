@@ -5355,6 +5355,22 @@ function amountYi(n){
   if(!isFinite(v)) return '-';
   return (v/1e8).toFixed(2);
 }
+function signedAmountYiDiff(longValue,shortValue){
+  const diff=Number(longValue||0)-Number(shortValue||0);
+  if(!isFinite(diff)) return '-';
+  if(diff>0) return '+'+amountYi(diff);
+  if(diff<0) return '-'+amountYi(Math.abs(diff));
+  return '0.00';
+}
+function formatHeatReportDateTime(ts){
+  const d=new Date(ts||Date.now());
+  const y=d.getFullYear();
+  const m=d.getMonth()+1;
+  const day=d.getDate();
+  const hh=String(d.getHours()).padStart(2,'0');
+  const mm=String(d.getMinutes()).padStart(2,'0');
+  return y+'.'+m+'.'+day+' '+hh+':'+mm;
+}
 
 function biasClassByText(v){
   const s=String(v||'');
@@ -5665,6 +5681,42 @@ function renderHeatReport(d){
   wrap.innerHTML=html;
 }
 
+function renderHeatReport(d){
+  const wrap=document.getElementById('heatReport');
+  if(!wrap) return;
+  const anchorPrice=Number(d.current_price||monitorDisplayPrice||0);
+  const webBands=buildHeatBandsFromWebMap(monitorWebMap,anchorPrice);
+  const bands=webBands.length?webBands:buildHeatBandsFromModel(monitorLiqMapData,anchorPrice);
+  if(!bands.length){
+    wrap.innerHTML='<div class="hint">閺嗗倹妫ら弫鐗堝祦</div>';
+    return;
+  }
+  const peaks=resolveMonitorPeaks(anchorPrice);
+  const topUp=(peaks&&peaks.up)||{price:0,v:0,cum:0};
+  const topDown=(peaks&&peaks.down)||{price:0,v:0,cum:0};
+  const hot={20:true,50:true,80:true,100:true,200:true,300:true};
+  const dateText=formatHeatReportDateTime(d.generated_at||Date.now());
+  let html='<table class="heat-report-table"><thead>'+
+    '<tr class="title"><th colspan="6">ETH 濞撳懐鐣婚梿宄板隘闁喐濮ら敍?+dateText+'閿?/th></tr>'+
+    '<tr class="spot"><th>ETH閻滈鐜?/th><th colspan="5" class="price">'+fmtHeatPrice(d.current_price)+'</th></tr>'+
+    '<tr class="group"><th rowspan="2">閼煎啫娲?/th><th colspan="2" class="down">娑撳鏌熸径姘礋</th><th colspan="2">娑撳﹥鏌熺粚鍝勫礋</th><th rowspan="2">瀹割喖鈧》绱欐禍鍖＄礆</th></tr>'+
+    '<tr class="sub"><th class="down">娴犻攱鐗?/th><th class="down">鐟欏嫭膩閿涘牅鍤庨敍?/th><th>娴犻攱鐗?/th><th>鐟欏嫭膩閿涘牅鍤庨敍?/th></tr>'+
+    '</thead><tbody>';
+  for(let i=0;i<bands.length;i++){
+    const b=bands[i];
+    const up=Number(b.up_notional_usd||0);
+    const down=Number(b.down_notional_usd||0);
+    const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
+    const diffClass=down>up?'diff-long':(up>down?'diff-short':'diff-flat');
+    html+='<tr class="'+cls+'"><td>'+b.band+'閻愮懓鍞?/td><td class="down-cell">'+fmtHeatPrice(b.down_price)+'</td><td class="down-cell">'+amountYi(down)+'</td><td class="up-cell">'+fmtHeatPrice(b.up_price)+'</td><td class="up-cell">'+amountYi(up)+'</td><td class="diff-cell '+diffClass+'">'+signedAmountYiDiff(down,up)+'</td></tr>';
+  }
+  const topUpCum=Number(topUp.cum||0);
+  const topDownCum=Number(topDown.cum||0);
+  const longestDiffClass=topDownCum>topUpCum?'diff-long':(topUpCum>topDownCum?'diff-short':'diff-flat');
+  html+='<tr class="longest"><td>閺堚偓闂€鎸庣叴閸愬懏鈧鍣?/td><td class="down-cell">'+fmtHeatPrice(topDown.price)+'</td><td class="down-cell">'+amountYi(topDownCum)+'</td><td class="up-cell">'+fmtHeatPrice(topUp.price)+'</td><td class="up-cell">'+amountYi(topUpCum)+'</td><td class="diff-cell '+longestDiffClass+'">'+signedAmountYiDiff(topDownCum,topUpCum)+'</td></tr></tbody></table>';
+  wrap.innerHTML=html;
+}
+
 function renderImbalance(d){
   const rows=((d.analytics||{}).imbalance_stats)||[];
   const el=document.getElementById('imbalanceStats');
@@ -5738,6 +5790,35 @@ function renderCore(d){
     metricRow('鏂瑰悜',String(nearestSide||'-'));
 }
 
+function renderCore(d){
+  const c=((d.analytics||{}).core_zone)||{};
+  const el=document.getElementById('coreZone');
+  if(!el) return;
+  const peaks=resolveMonitorPeaks(Number(d.current_price||monitorDisplayPrice||0));
+  const cp=Number(d.current_price||0);
+  const up=(peaks&&peaks.up&&peaks.up.v>0)?peaks.up:{price:Number(c.up_price||0),v:Number(c.up_notional_usd||0),cum:Number(c.up_notional_usd||0)};
+  const down=(peaks&&peaks.down&&peaks.down.v>0)?peaks.down:{price:Number(c.down_price||0),v:Number(c.down_notional_usd||0),cum:Number(c.down_notional_usd||0)};
+  let nearestSide=String(c.nearest_side||'-');
+  let nearestPrice=Number(c.nearest_strong_price||0);
+  let nearestDist=Number(c.nearest_distance||0);
+  const upDist=(cp>0&&up.price>0)?Math.abs(up.price-cp):Infinity;
+  const downDist=(cp>0&&down.price>0)?Math.abs(cp-down.price):Infinity;
+  if(upDist<downDist){
+    nearestSide='娑撳﹥鏌熷鍝勫隘';
+    nearestPrice=up.price;
+    nearestDist=upDist;
+  }else if(downDist<Infinity){
+    nearestSide='娑撳鏌熷鍝勫隘';
+    nearestPrice=down.price;
+    nearestDist=downDist;
+  }
+  el.innerHTML=
+    metricRow('娑撳﹥鏌熼張鈧梹鎸庣叴',fmtPrice(up.price)+' / '+fmtAmount(up.cum||up.v),'warn')+
+    metricRow('娑撳鏌熼張鈧梹鎸庣叴',fmtPrice(down.price)+' / '+fmtAmount(down.cum||down.v),'good')+
+    metricRow('閺堚偓鏉╂垵宸遍崠?,fmtPrice(nearestPrice)+' / '+(isFinite(Number(nearestDist))?Number(nearestDist).toFixed(1):'-')+'閻?,biasClassByText(nearestSide))+
+    metricRow('閺傜懓鎮?,String(nearestSide||'-'));
+}
+
 function renderContrib(d){
   const rows=((d.analytics||{}).exchange_contrib)||[];
   const el=document.getElementById('exchangeContrib');
@@ -5762,6 +5843,71 @@ function renderAlerts(d){
     metricRow('杩?鍒嗛挓娓呯畻',fmtAmount(a.recent_1m_usd),'warn')+
     metricRow('Binance / Bybit / OKX',fmtAmount(a.recent_1m_binance_usd)+' / '+fmtAmount(a.recent_1m_bybit_usd)+' / '+fmtAmount(a.recent_1m_okx_usd))+
     metricRow('寤鸿',String(a.suggestion||'-'));
+}
+
+function renderHeatReport(d){
+  const wrap=document.getElementById('heatReport');
+  if(!wrap) return;
+  const anchorPrice=Number(d.current_price||monitorDisplayPrice||0);
+  const webBands=buildHeatBandsFromWebMap(monitorWebMap,anchorPrice);
+  const bands=webBands.length?webBands:buildHeatBandsFromModel(monitorLiqMapData,anchorPrice);
+  if(!bands.length){
+    wrap.innerHTML='<div class="hint">暂无数据</div>';
+    return;
+  }
+  const peaks=resolveMonitorPeaks(anchorPrice);
+  const topUp=(peaks&&peaks.up)||{price:0,v:0,cum:0};
+  const topDown=(peaks&&peaks.down)||{price:0,v:0,cum:0};
+  const hot={20:true,50:true,80:true,100:true,200:true,300:true};
+  const dateText=formatHeatReportDateTime(d.generated_at||Date.now());
+  let html='<table class="heat-report-table"><thead>'+
+    '<tr class="title"><th colspan="6">ETH 清算雷区速报（'+dateText+'）</th></tr>'+
+    '<tr class="spot"><th>ETH现价</th><th colspan="5" class="price">'+fmtHeatPrice(d.current_price)+'</th></tr>'+
+    '<tr class="group"><th rowspan="2">范围</th><th colspan="2" class="down">下方多单</th><th colspan="2">上方空单</th><th rowspan="2">差值（亿）</th></tr>'+
+    '<tr class="sub"><th class="down">价格</th><th class="down">规模（亿）</th><th>价格</th><th>规模（亿）</th></tr>'+
+    '</thead><tbody>';
+  for(let i=0;i<bands.length;i++){
+    const b=bands[i];
+    const up=Number(b.up_notional_usd||0);
+    const down=Number(b.down_notional_usd||0);
+    const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
+    const diffClass=down>up?'diff-long':(up>down?'diff-short':'diff-flat');
+    html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="down-cell">'+fmtHeatPrice(b.down_price)+'</td><td class="down-cell">'+amountYi(down)+'</td><td class="up-cell">'+fmtHeatPrice(b.up_price)+'</td><td class="up-cell">'+amountYi(up)+'</td><td class="diff-cell '+diffClass+'">'+signedAmountYiDiff(down,up)+'</td></tr>';
+  }
+  const topUpCum=Number(topUp.cum||0);
+  const topDownCum=Number(topDown.cum||0);
+  const longestDiffClass=topDownCum>topUpCum?'diff-long':(topUpCum>topDownCum?'diff-short':'diff-flat');
+  html+='<tr class="longest"><td>最长柱</td><td class="down-cell">'+fmtHeatPrice(topDown.price)+'</td><td class="down-cell">'+amountYi(topDownCum)+'</td><td class="up-cell">'+fmtHeatPrice(topUp.price)+'</td><td class="up-cell">'+amountYi(topUpCum)+'</td><td class="diff-cell '+longestDiffClass+'">'+signedAmountYiDiff(topDownCum,topUpCum)+'</td></tr></tbody></table>';
+  wrap.innerHTML=html;
+}
+
+function renderCore(d){
+  const c=((d.analytics||{}).core_zone)||{};
+  const el=document.getElementById('coreZone');
+  if(!el) return;
+  const peaks=resolveMonitorPeaks(Number(d.current_price||monitorDisplayPrice||0));
+  const cp=Number(d.current_price||0);
+  const up=(peaks&&peaks.up&&peaks.up.v>0)?peaks.up:{price:Number(c.up_price||0),v:Number(c.up_notional_usd||0),cum:Number(c.up_notional_usd||0)};
+  const down=(peaks&&peaks.down&&peaks.down.v>0)?peaks.down:{price:Number(c.down_price||0),v:Number(c.down_notional_usd||0),cum:Number(c.down_notional_usd||0)};
+  let nearestSide=String(c.nearest_side||'-');
+  let nearestPrice=Number(c.nearest_strong_price||0);
+  let nearestDist=Number(c.nearest_distance||0);
+  const upDist=(cp>0&&up.price>0)?Math.abs(up.price-cp):Infinity;
+  const downDist=(cp>0&&down.price>0)?Math.abs(cp-down.price):Infinity;
+  if(upDist<downDist){
+    nearestSide='上方强区';
+    nearestPrice=up.price;
+    nearestDist=upDist;
+  }else if(downDist<Infinity){
+    nearestSide='下方强区';
+    nearestPrice=down.price;
+    nearestDist=downDist;
+  }
+  el.innerHTML=
+    metricRow('上方最长柱',fmtPrice(up.price)+' / '+fmtAmount(up.cum||up.v),'warn')+
+    metricRow('下方最长柱',fmtPrice(down.price)+' / '+fmtAmount(down.cum||down.v),'good')+
+    metricRow('最近强区',fmtPrice(nearestPrice)+' / '+(isFinite(Number(nearestDist))?Number(nearestDist).toFixed(1):'-')+'点',biasClassByText(nearestSide))+
+    metricRow('方向',String(nearestSide||'-'));
 }
 
 async function load(opts){
