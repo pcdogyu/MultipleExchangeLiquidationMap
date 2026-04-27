@@ -2523,6 +2523,58 @@ func (a *App) buildAnalysisSnapshot() (AnalysisSnapshot, error) {
 	if err != nil {
 		return AnalysisSnapshot{}, err
 	}
+	{
+	instantBand20 := bandRowOrDefault(dash.Bands, dash.CurrentPrice, 20)
+	factorBase := analysisScoreFromSnapshotBase(analysisScoreSnapshot{
+		CurrentPrice: dash.CurrentPrice,
+		Bands:        dash.Bands,
+		CoreZone:     dash.Analytics.CoreZone,
+		AvgFunding:   dash.Analytics.Market.AvgFunding,
+	})
+	factorShort, factorLong := analysisApplyMomentumTilt(factorBase.ShortRisk, factorBase.LongRisk, a.analysisShortTermMomentumTilt(defaultSymbol, dash.CurrentPrice))
+	factorDirection, factorConfidence := analysisDirectionAndConfidence(factorShort, factorLong)
+	factorTitle, factorBias := analysisOverviewHeadline(factorShort, factorLong)
+
+	nowTS := time.Now().UnixMilli()
+	fourHour := int64((4 * time.Hour) / time.Millisecond)
+	recent4h := a.sumLiquidationNotionalSince(defaultSymbol, nowTS-fourHour)
+
+	changes := a.buildAnalysisChangeCharts(defaultSymbol, 24)
+
+	keyZones := []AnalysisKeyZone{
+		{Name: "上方最近强清算区", Side: "up", Price: dash.Analytics.CoreZone.UpPrice, Distance: nearestZoneDistance(dash.CurrentPrice, dash.Analytics.CoreZone.UpPrice), NotionalUSD: dash.Analytics.CoreZone.UpNotionalUSD, Note: "更适合观察短线挤空触发点。"},
+		{Name: "下方最近强清算区", Side: "down", Price: dash.Analytics.CoreZone.DownPrice, Distance: nearestZoneDistance(dash.CurrentPrice, dash.Analytics.CoreZone.DownPrice), NotionalUSD: dash.Analytics.CoreZone.DownNotionalUSD, Note: "更适合观察短线踩踏触发点。"},
+		{Name: "上方即时压力带", Side: "up", Price: instantBand20.UpPrice, Distance: nearestZoneDistance(dash.CurrentPrice, instantBand20.UpPrice), NotionalUSD: instantBand20.UpNotionalUSD, Note: "离现价最近，适合盯短线突破。"},
+		{Name: "下方即时支撑带", Side: "down", Price: instantBand20.DownPrice, Distance: nearestZoneDistance(dash.CurrentPrice, instantBand20.DownPrice), NotionalUSD: instantBand20.DownNotionalUSD, Note: "离现价最近，适合盯短线跌破。"},
+	}
+
+	overview := AnalysisOverview{
+		Title:      factorTitle,
+		Bias:       factorBias,
+		Direction:  factorDirection,
+		Confidence: factorConfidence,
+		Summary: fmt.Sprintf(
+			"当前价格 %.1f，近端上方风险 %.0f 分、下方风险 %.0f 分；主导交易所为 %s，提示 %s。",
+			dash.CurrentPrice, factorShort, factorLong, dash.Analytics.DominantExchange, dash.Analytics.Alert.Level,
+		),
+	}
+	backtest := a.buildBacktestSummary(defaultSymbol, 60, 24, 25)
+
+	return AnalysisSnapshot{
+		Symbol:        dash.Symbol,
+		GeneratedAt:   time.Now().UnixMilli(),
+		CurrentPrice:  dash.CurrentPrice,
+		Overview:      overview,
+		Broadcast:     buildBroadcastSummary(dash.CurrentPrice, overview, factorShort, factorLong, keyZones, dash),
+		Indicators:    a.buildAnalysisIndicators(dash.CurrentPrice),
+		RiskScores:    []AnalysisRiskScore{{Label: "空头被挤压风险", Score: factorShort, Tone: scoreTone(factorShort)}, {Label: "多头被踩踏风险", Score: factorLong, Tone: scoreTone(factorLong)}, {Label: "短线波动放大风险", Score: clamp(recent4h/1_200_000*100, 0, 100), Tone: scoreTone(clamp(recent4h/1_200_000*100, 0, 100))}},
+		KeyZones:      keyZones,
+		Changes:       changes,
+		ExchangeCards: a.buildExchangeCards(defaultSymbol, dash.States, nowTS),
+		Backtest:      backtest,
+		Dashboard:     dash,
+	}, nil
+	}
 
 	b20 := bandRowOrDefault(dash.Bands, dash.CurrentPrice, 20)
 	b50 := bandRowOrDefault(dash.Bands, dash.CurrentPrice, 50)
@@ -2639,6 +2691,16 @@ func (a *App) analysisShortTermMomentumTilt(symbol string, currentPrice float64)
 	if len(history) == 0 || currentPrice <= 0 {
 		return 0
 	}
+	replayHistory := make([]analysisScoreSnapshot, 0, len(history))
+	for _, snap := range history {
+		replayHistory = append(replayHistory, analysisScoreSnapshot{
+			TS:           snap.TS,
+			CurrentPrice: snap.Current,
+			UpByBand:     snap.UpByBand,
+			DownByBand:   snap.DownByBand,
+		})
+	}
+	return analysisShortTermMomentumTiltFromSnapshots(replayHistory)
 	latest := history[len(history)-1]
 	push20 := analysisBandPushScore(latest.UpByBand[20], latest.DownByBand[20])
 	push50 := analysisBandPushScore(latest.UpByBand[50], latest.DownByBand[50])
