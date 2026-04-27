@@ -41,13 +41,31 @@ func (s *service) handleBacktest(w http.ResponseWriter, r *http.Request) {
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	hours := 24
+	hours := 720
 	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 168 {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 24*90 {
 			hours = n
 		}
 	}
-	resp, err := s.core.AnalysisBacktest(hours)
+	minConfidence := 90.0
+	if raw := strings.TrimSpace(r.URL.Query().Get("min_confidence")); raw != "" {
+		if n, err := strconv.ParseFloat(raw, 64); err == nil && n >= 0 && n <= 100 {
+			minConfidence = n
+		}
+	}
+	horizons := []int{5, 15, 30, 60}
+	if raw := strings.TrimSpace(r.URL.Query().Get("horizons")); raw != "" {
+		parsed := make([]int, 0, 4)
+		for _, part := range strings.Split(raw, ",") {
+			if n, err := strconv.Atoi(strings.TrimSpace(part)); err == nil && n > 0 {
+				parsed = append(parsed, n)
+			}
+		}
+		if len(parsed) > 0 {
+			horizons = parsed
+		}
+	}
+	resp, err := s.core.AnalysisBacktest(hours, minConfidence, horizons)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
