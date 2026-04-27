@@ -55,6 +55,18 @@ func Run() {
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	core.StartBackgroundJobs(rootCtx)
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-rootCtx.Done():
+				return
+			case <-ticker.C:
+				log.Printf("heartbeat: server alive addr=%s", liqmap.DefaultServerAddr)
+			}
+		}
+	}()
 
 	mux := app.NewRouter(core, debug)
 	srv := &http.Server{Addr: liqmap.DefaultServerAddr, Handler: mux}
