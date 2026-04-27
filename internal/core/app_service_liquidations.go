@@ -246,9 +246,11 @@ func (a *App) LiquidationPeriodSummary(opts LiquidationListOptions) LiquidationP
 	)
 	if err != nil {
 		buckets := a.emptyLiquidationPeriodBuckets(hours)
+		syncSignals := a.buildLiquidationSyncSignals(buckets)
 		return LiquidationPeriodSummary{
-			Buckets: buckets,
-			Pattern: a.buildLiquidationPattern(buckets),
+			Buckets:     buckets,
+			Pattern:     a.buildLiquidationPattern(buckets),
+			SyncSignals: syncSignals,
 		}
 	}
 
@@ -282,10 +284,12 @@ func (a *App) LiquidationPeriodSummary(opts LiquidationListOptions) LiquidationP
 			BalanceRatio:   balanceRatio,
 		})
 	}
+	syncSignals := a.buildLiquidationSyncSignals(buckets)
 
 	return LiquidationPeriodSummary{
-		Buckets: buckets,
-		Pattern: a.buildLiquidationPattern(buckets),
+		Buckets:     buckets,
+		Pattern:     a.buildLiquidationPattern(buckets),
+		SyncSignals: syncSignals,
 	}
 }
 

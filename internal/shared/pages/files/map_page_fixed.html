@@ -73,7 +73,7 @@ canvas{width:100%;height:760px;display:block;border:1px solid #e5e7eb;border-rad
     <div class="menu">
       <a href="/">清算热区</a>
       <a href="/config">模型配置</a>
-      <a href="/monitor">雷区监控</a>
+      <a href="/monitor">热区监控</a>
       <a href="/map" class="active">盘口汇总</a>
       <a href="/liquidations">强平清算</a>
       <a href="/bubbles">气泡图</a>
@@ -117,16 +117,16 @@ canvas{width:100%;height:760px;display:block;border:1px solid #e5e7eb;border-rad
     <div class="tune">
       <label>半衰期
         <select id="halfLifeSel">
-          <option value="60">60秒</option>
-          <option value="120">120秒</option>
-          <option value="180">180秒</option>
+          <option value="60">60 秒</option>
+          <option value="120">120 秒</option>
+          <option value="180">180 秒</option>
         </select>
       </label>
       <label>滚动窗口
         <select id="rollWinSel">
-          <option value="3">3分钟</option>
-          <option value="5">5分钟</option>
-          <option value="10">10分钟</option>
+          <option value="3">3 分钟</option>
+          <option value="5">5 分钟</option>
+          <option value="10">10 分钟</option>
         </select>
       </label>
     </div>
@@ -134,7 +134,7 @@ canvas{width:100%;height:760px;display:block;border:1px solid #e5e7eb;border-rad
   <div class="panel">
     <div class="row" style="justify-content:flex-start">
       <h3 id="mergeTitle" style="margin:0">合并盘口统计</h3>
-      <div id="mergeHint" class="small">基于成交与 OI 估计</div>
+      <div id="mergeHint" class="small">基于成交与 OI 估算</div>
     </div>
     <div id="mergeStats" class="merge-grid"></div>
     <canvas id="depthChart" width="1600" height="312"></canvas>
@@ -187,7 +187,7 @@ function updateDepthMemory(){const m=orderbook&&orderbook.merged;if(!m)return;co
 function resetDepthMemory(){depthMemory.bidGhost={};depthMemory.askGhost={};depthMemory.bidMax={};depthMemory.askMax={};depthMemory.lastUpdate=0;depthState=null;depthEvents.bidTrack={};depthEvents.askTrack={};depthEvents.bidList=[];depthEvents.askList=[];persistedEvents={bid:[],ask:[]};}
 
 function renderActive(){document.querySelectorAll('button[data-mode]').forEach(b=>b.classList.toggle('active',(b.dataset.mode||'')===currentMode));}
-function renderMergedPanel(){const el=document.getElementById('mergeStats');const m=orderbook&&orderbook.merged;const t=document.getElementById('mergeTitle');const h=document.getElementById('mergeHint');if(t)t.textContent=currentMode==='weighted'?'加权盘口统计':'合并盘口统计';if(h)h.textContent=currentMode==='weighted'?'基于成交与 OI 估计':'多交易所合并盘口与价差';if(!m){el.innerHTML='<div class="small">暂无盘口数据</div>';return;}const spread=Number(m.best_ask||0)-Number(m.best_bid||0);el.innerHTML='<div class="merge-card"><div class="merge-label">Best Bid</div><div class="merge-val">'+fmtPrice(m.best_bid)+'</div></div><div class="merge-card"><div class="merge-label">Best Ask</div><div class="merge-val">'+fmtPrice(m.best_ask)+'</div></div><div class="merge-card"><div class="merge-label">Mid / Spread</div><div class="merge-val">'+fmtPrice(m.mid)+' <span style="font-size:12px;color:#64748b">('+fmtPrice(spread)+')</span></div></div>';}
+function renderMergedPanel(){const el=document.getElementById('mergeStats');const m=orderbook&&orderbook.merged;const t=document.getElementById('mergeTitle');const h=document.getElementById('mergeHint');if(t)t.textContent=currentMode==='weighted'?'加权盘口统计':'合并盘口统计';if(h)h.textContent=currentMode==='weighted'?'基于成交与 OI 估算':'多交易所合并盘口与价差';if(!m){el.innerHTML='<div class="small">暂无盘口数据</div>';return;}const spread=Number(m.best_ask||0)-Number(m.best_bid||0);el.innerHTML='<div class="merge-card"><div class="merge-label">Best Bid</div><div class="merge-val">'+fmtPrice(m.best_bid)+'</div></div><div class="merge-card"><div class="merge-label">Best Ask</div><div class="merge-val">'+fmtPrice(m.best_ask)+'</div></div><div class="merge-card"><div class="merge-label">Mid / Spread</div><div class="merge-val">'+fmtPrice(m.mid)+' <span style="font-size:12px;color:#64748b">('+fmtPrice(spread)+')</span></div></div>';}
 function eventTable(list){if(!list||!list.length)return '<div class="small">暂无事件</div>';let h='<table><thead><tr><th>价格</th><th>峰值</th><th>持续时间</th><th>时间</th></tr></thead><tbody>';for(const e of list.slice(0,8)){h+='<tr><td>'+fmtPrice(e.price)+'</td><td>'+fmtAmount(e.peak)+'</td><td>'+fmtDur(e.dur_ms)+'</td><td>'+fmtEventTime(e.ts)+'</td></tr>';}return h+'</tbody></table>';}
 function renderEventTables(){const be=document.getElementById('bidEvents'),ae=document.getElementById('askEvents');if(be)be.innerHTML=eventTable(persistedEvents.bid||[]);if(ae)ae.innerHTML=eventTable(persistedEvents.ask||[]);}
 function setPersistedEvents(rows){const cutoff=Date.now()-60*60*1000;const bid=[],ask=[];for(const r of (rows||[])){const ts=Number(r.event_ts||0);if(ts<cutoff)continue;const side=(r.side||'').toLowerCase();const item={price:Number(r.price||0),peak:Number(r.peak||0),dur_ms:Number(r.duration_ms||0),ts:ts};if(side==='bid')bid.push(item);if(side==='ask')ask.push(item);}persistedEvents.bid=bid.slice(0,8);persistedEvents.ask=ask.slice(0,8);}

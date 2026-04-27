@@ -453,7 +453,7 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 			a.recordTelegramSendHistory(sendMode, 6, "liquidations-structure-image", "success", "")
 		}
 		if err := a.sendTelegramText(a.buildLiquidationPatternQuestionAttachment()); err != nil {
-			msg := fmt.Sprintf("鍙戦€佸け璐? %v", err)
+			msg := fmt.Sprintf("閸欐垿鈧礁銇戠拹? %v", err)
 			a.recordTelegramSendHistory(sendMode, 6, "liquidations-pattern-text", "failed", msg)
 			errs = append(errs, msg)
 		} else {
@@ -1430,34 +1430,7 @@ func (a *App) buildTelegramThirtyDayTextV3(monitor HeatReportData, monitorBands 
 }
 
 func (a *App) buildTelegramThirtyDayTextV4(monitor HeatReportData, monitorBands []HeatReportBand, webMap WebDataSourceMapResponse) string {
-	monitor = a.alignTelegramTextHeatReport(monitor, webMap)
-	bandBySize := func(band int) HeatReportBand {
-		if len(monitorBands) > 0 {
-			return heatBandBySize(monitorBands, band)
-		}
-		return heatReportBandBySize(monitor, band)
-	}
-	lines := []string{
-		fmt.Sprintf("<b>ETH 闆峰尯閫熸姤 | 鐜颁环$%s</b>", formatPrice1(monitor.CurrentPrice)),
-		fmt.Sprintf("鎬诲鍗?b>%s浜?/b>|鎬荤┖鍗?b>%s浜?/b>", formatYi1(monitor.LongTotalUSD), formatYi1(monitor.ShortTotalUSD)),
-		"",
-		"<b>澶氬崟鏈€闀挎煴</b>",
-		fmt.Sprintf("浠锋牸$%s | 璺濈幇浠?b>%s鐐?/b>", formatPrice1(monitor.LongPeak.Price), formatPointDistance(monitor.LongPeak.Distance)),
-		fmt.Sprintf("鍗曟煴%s浜?| 绱<b>%s浜?/b>", formatYi1(monitor.LongPeak.SingleUSD), formatYi1(monitor.LongPeak.CumulativeUSD)),
-		"",
-		"<b>绌哄崟鏈€闀挎煴</b>",
-		fmt.Sprintf("浠锋牸$%s | 璺濈幇浠?b>%s鐐?/b>", formatPrice1(monitor.ShortPeak.Price), formatPointDistance(monitor.ShortPeak.Distance)),
-		fmt.Sprintf("鍗曟煴%s浜?| 绱<b>%s浜?/b>", formatYi1(monitor.ShortPeak.SingleUSD), formatYi1(monitor.ShortPeak.CumulativeUSD)),
-		"",
-		"澶氱┖澶辫　姒傝",
-		buildTelegramImbalanceLine(bandBySize(20)),
-		buildTelegramImbalanceLine(bandBySize(50)),
-		buildTelegramImbalanceLine(bandBySize(80)),
-		buildTelegramImbalanceLine(bandBySize(100)),
-		buildTelegramImbalanceLine(bandBySize(200)),
-		buildTelegramImbalanceLine(bandBySize(300)),
-	}
-	return strings.Join(lines, "\n")
+	return a.buildTelegramThirtyDayTextSafe(monitor, monitorBands, webMap)
 }
 
 func escTelegramHTML(s string) string {
@@ -2717,6 +2690,18 @@ func (a *App) buildAnalysisSnapshot() (AnalysisSnapshot, error) {
 	shortRiskScore = clamp(shortRiskScore+nearUpBonus, 0, 100)
 	longRiskScore = clamp(longRiskScore+nearDownBonus, 0, 100)
 
+	// Add a short-term momentum correction so the overview respects recent price moves
+	// instead of relying only on liquidation structure farther away from spot.
+	shortTermTilt := a.analysisShortTermMomentumTilt(defaultSymbol, dash.CurrentPrice)
+	if shortTermTilt > 0 {
+		shortRiskScore = clamp(shortRiskScore+shortTermTilt, 0, 100)
+		longRiskScore = clamp(longRiskScore-shortTermTilt*0.55, 0, 100)
+	} else if shortTermTilt < 0 {
+		downTilt := -shortTermTilt
+		longRiskScore = clamp(longRiskScore+downTilt, 0, 100)
+		shortRiskScore = clamp(shortRiskScore-downTilt*0.55, 0, 100)
+	}
+
 	bias := "区间内多空风险相对均衡"
 	title := "当前市场更像震荡蓄能"
 	if shortRiskScore-longRiskScore >= 8 {
@@ -2776,6 +2761,51 @@ func (a *App) buildAnalysisSnapshot() (AnalysisSnapshot, error) {
 		Backtest:      backtest,
 		Dashboard:     dash,
 	}, nil
+}
+
+func (a *App) analysisShortTermMomentumTilt(symbol string, currentPrice float64) float64 {
+	history := a.loadAnalysisBandHistory(symbol, 24)
+	if len(history) == 0 || currentPrice <= 0 {
+		return 0
+	}
+	latest := history[len(history)-1]
+	push20 := analysisBandPushScore(latest.UpByBand[20], latest.DownByBand[20])
+	push50 := analysisBandPushScore(latest.UpByBand[50], latest.DownByBand[50])
+	pushTilt := clamp(push20*0.20+push50*0.08, -18, 18)
+
+	nowTS := time.Now().UnixMilli()
+	change5m := analysisSnapshotPriceChangePct(history, nowTS, currentPrice, 5*time.Minute)
+	change15m := analysisSnapshotPriceChangePct(history, nowTS, currentPrice, 15*time.Minute)
+	change30m := analysisSnapshotPriceChangePct(history, nowTS, currentPrice, 30*time.Minute)
+	priceTilt := clamp(change5m*10+change15m*7+change30m*5, -24, 24)
+
+	return clamp(pushTilt+priceTilt, -24, 24)
+}
+
+func analysisSnapshotPriceChangePct(history []analysisBandHistorySnapshot, latestTS int64, latestPrice float64, lookback time.Duration) float64 {
+	if len(history) < 2 || latestPrice <= 0 || lookback <= 0 {
+		return 0
+	}
+	targetTS := latestTS - lookback.Milliseconds()
+	pastPrice := 0.0
+	for i := len(history) - 2; i >= 0; i-- {
+		if history[i].TS <= targetTS && history[i].Current > 0 {
+			pastPrice = history[i].Current
+			break
+		}
+	}
+	if pastPrice <= 0 {
+		for i := len(history) - 2; i >= 0; i-- {
+			if history[i].Current > 0 {
+				pastPrice = history[i].Current
+				break
+			}
+		}
+	}
+	if pastPrice <= 0 {
+		return 0
+	}
+	return ((latestPrice - pastPrice) / pastPrice) * 100
 }
 
 func (a *App) buildHeatFromLiquidationEvents(symbol string, currentPrice float64, cutoff int64) ([]BandRow, []any, []any, error) {

@@ -75,6 +75,14 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,
 .pattern-card .k{font-size:12px;color:var(--muted)}
 .pattern-card .v{margin-top:8px;font-size:18px;font-weight:800}
 .pattern-summary{margin-top:8px;font-size:13px;line-height:1.7;color:var(--ink)}
+.sync-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px}
+.sync-signal{border:1px solid var(--line);border-radius:14px;padding:12px;background:rgba(255,255,255,.82)}
+.sync-signal .k{font-size:12px;color:var(--muted)}
+.sync-signal .v{margin-top:6px;font-size:16px;font-weight:800}
+.sync-signal .desc{margin-top:6px;font-size:12px;line-height:1.6;color:var(--ink)}
+.sync-signal.up .v{color:var(--good)}
+.sync-signal.down .v{color:var(--bad)}
+.sync-signal.mixed .v{color:var(--accent)}
 .table-wrap{overflow:auto}
 table{width:100%;border-collapse:collapse;min-width:920px}
 th,td{border-bottom:1px solid #e5e7eb;padding:10px 12px;text-align:center;font-size:13px;white-space:nowrap}
@@ -109,6 +117,7 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04
   .controls{width:100%}
   .field{min-width:calc(50% - 5px)}
   .period-grid{grid-template-columns:1fr}
+  .sync-summary{grid-template-columns:1fr}
 }
 </style>
 </head>
@@ -324,6 +333,37 @@ function renderPeriodSummary(summary){
     '<div class="k">四周期 16 种形态判断</div>'+
     '<div class="v">'+esc(pattern.code||'----')+' · '+esc(fmtPatternBias(pattern.trend_bias))+'</div>'+
     '<div class="pattern-summary">'+esc(pattern.label||'')+'。'+esc(pattern.summary||'')+'</div>';
+}
+function fmtSyncState(signal){
+  const active=!!(signal&&signal.active);
+  const direction=String(signal&&signal.direction||'neutral');
+  if(!active) return String(signal&&signal.label||'未确认');
+  return String(signal&&signal.label||'已确认')+' · '+(direction==='up'?'上推':'下压');
+}
+function syncSignalClass(signal){
+  if(!signal||!signal.active) return 'sync-signal';
+  return 'sync-signal '+(String(signal.direction||'neutral')==='up'?'up':'down');
+}
+function alignmentClass(alignment){
+  if(alignment==='up_resonance') return 'sync-signal up';
+  if(alignment==='down_resonance') return 'sync-signal down';
+  return 'sync-signal mixed';
+}
+const baseRenderPeriodSummary=renderPeriodSummary;
+renderPeriodSummary=function(summary){
+  baseRenderPeriodSummary(summary);
+  const patternBox=document.getElementById('patternBox');
+  const syncSignals=summary&&summary.sync_signals?summary.sync_signals:null;
+  if(!patternBox||!syncSignals) return;
+  const shortSync=syncSignals.short_term_sync||{};
+  const continuationSync=syncSignals.continuation_sync||{};
+  const overallAlignment=String(syncSignals.overall_alignment||'mixed');
+  patternBox.innerHTML+=
+    '<div class="sync-summary">'+
+      '<div class="'+syncSignalClass(shortSync)+'"><div class="k">短期方向确认</div><div class="v">'+esc(fmtSyncState(shortSync))+'</div><div class="desc">'+esc(shortSync.reason||'')+'</div></div>'+
+      '<div class="'+syncSignalClass(continuationSync)+'"><div class="k">方向延续</div><div class="v">'+esc(fmtSyncState(continuationSync))+'</div><div class="desc">'+esc(continuationSync.reason||'')+'</div></div>'+
+      '<div class="'+alignmentClass(overallAlignment)+'"><div class="k">共振状态</div><div class="v">'+esc(syncSignals.overall_label||'同步信号混合')+'</div><div class="desc">'+esc(syncSignals.overall_reason||'')+'</div></div>'+
+    '</div>';
 }
 function renderRows(rows){
   const body=document.getElementById('tableBody');

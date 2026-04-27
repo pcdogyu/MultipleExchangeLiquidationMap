@@ -45,9 +45,31 @@ type LiquidationPeriodPattern struct {
 	PatternCount int     `json:"pattern_count"`
 }
 
+type LiquidationSyncSignal struct {
+	Active          bool    `json:"active"`
+	Direction       string  `json:"direction"`
+	Label           string  `json:"label"`
+	Reason          string  `json:"reason"`
+	FirstPeriod     string  `json:"first_period"`
+	SecondPeriod    string  `json:"second_period"`
+	ThresholdRatio  float64 `json:"threshold_ratio"`
+	FirstEffective  string  `json:"first_effective"`
+	SecondEffective string  `json:"second_effective"`
+}
+
+type LiquidationSyncSignals struct {
+	ShortTermSync    LiquidationSyncSignal `json:"short_term_sync"`
+	Continuation     LiquidationSyncSignal `json:"continuation_sync"`
+	OverallAlignment string                `json:"overall_alignment"`
+	OverallLabel     string                `json:"overall_label"`
+	OverallReason    string                `json:"overall_reason"`
+	ThresholdRatio   float64               `json:"threshold_ratio"`
+}
+
 type LiquidationPeriodSummary struct {
-	Buckets []LiquidationPeriodBucket `json:"buckets"`
-	Pattern LiquidationPeriodPattern  `json:"pattern"`
+	Buckets     []LiquidationPeriodBucket `json:"buckets"`
+	Pattern     LiquidationPeriodPattern  `json:"pattern"`
+	SyncSignals LiquidationSyncSignals    `json:"sync_signals"`
 }
 
 type liquidationWSState struct {
