@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var webDataSourceCaptureMinutes = []int{10, 25, 40, 55}
+var webDataSourceCaptureMinutes = []int{0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}
 
 func (a *App) nextTelegramAutoNotifyTS(now time.Time) (int64, bool) {
 	settings := a.loadSettings()

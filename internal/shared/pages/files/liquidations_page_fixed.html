@@ -152,6 +152,7 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04
           <div class="symbol-picker">
             <input id="symbolSearch" type="text" placeholder="搜索币对，例如 ETH / BTC / SOL" oninput="filterSymbolOptions()">
             <select id="symbolSel" onchange="applyFilters()">
+              <option value="ETHUSDT">ETHUSDT</option>
               <option value="ALL">全部币对</option>
             </select>
           </div>
@@ -225,8 +226,8 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04
 <script>
 let page=1;
 let pageSize=50;
-let currentSymbol='ALL';
-let availableSymbols=['ALL'];
+let currentSymbol='ETHUSDT';
+let availableSymbols=['ALL','ETHUSDT'];
 
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
@@ -376,8 +377,14 @@ function syncSymbolOptions(symbols){
     next.push(value);
   }
   availableSymbols=next;
-  const prev=String(currentSymbol||'ALL').toUpperCase();
-  currentSymbol=next.includes(prev)?prev:'ALL';
+  const prev=String(currentSymbol||'ETHUSDT').toUpperCase();
+  if(next.includes(prev)){
+    currentSymbol=prev;
+  }else if(next.includes('ETHUSDT')){
+    currentSymbol='ETHUSDT';
+  }else{
+    currentSymbol=next.includes('ALL')?'ALL':(next[0]||'ALL');
+  }
   filterSymbolOptions();
 }
 function filterFieldLabel(value){

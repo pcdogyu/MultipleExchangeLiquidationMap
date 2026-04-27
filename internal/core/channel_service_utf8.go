@@ -14,7 +14,7 @@ func buildChannelPlannedPushDetail(previewOnly bool) string {
 }
 
 func buildWebDataSourceImmediatePushDetail(previewOnly bool) string {
-	detail := "webdatasource 按每小时 10 / 25 / 40 / 55 分抓取，成功后立即推送 Telegram。"
+	detail := "webdatasource 按每 5 分钟抓取一次，成功后立即推送 Telegram。"
 	if previewOnly {
 		detail += " 当前为预览排程，自动通知尚未开启。"
 	}
@@ -67,7 +67,7 @@ func (a *App) listChannelPlannedPushesUTF8(hours int) []ChannelPlannedPushRow {
 			PushTS:      captureTS,
 			CaptureTS:   captureTS,
 			Period:      "webdatasource-immediate",
-			IntervalMin: 15,
+			IntervalMin: 5,
 			Detail:      webDetail,
 		})
 		cursor = captureAt.Add(time.Minute)

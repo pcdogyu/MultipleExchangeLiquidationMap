@@ -278,7 +278,7 @@ function esc(v){return String(v||'').replace(/[&<>"]/g,s=>({'&':'&amp;','<':'&lt
 function sendModeLabel(v){if(v==='test')return '测试';if(v==='auto')return '自动';if(v==='manual')return '手动';return String(v||'-');}
 function sourceLabel(v){if(v==='channel')return '消息通道';if(v==='webdatasource')return '页面数据源';return String(v||'-');}
 function typeLabel(v){if(v==='push')return '推送';if(v==='capture')return '抓取';return String(v||'-');}
-function periodLabel(v){if(v==='work-hours')return '工作时间';if(v==='off-hours')return '非工作时间';if(v==='webdatasource-immediate')return 'webdatasource 15 分钟';return String(v||'-');}
+function periodLabel(v){if(v==='work-hours')return '工作时间';if(v==='off-hours')return '非工作时间';if(v==='webdatasource-immediate')return 'webdatasource 5 分钟';return String(v||'-');}
 
 initTheme();
 document.getElementById('token').addEventListener('input',()=>{tokenDirty=true;});
