@@ -165,6 +165,14 @@ th{color:var(--muted);font-weight:600}
             </span>
             <input id="group5-enabled" type="checkbox">
           </label>
+          <label class="group-switch">
+            <span>
+              <strong>Group 6</strong>
+              <div class="small">Liquidation structure image + text</div>
+              <span class="tag">/liquidations</span>
+            </span>
+            <input id="group6-enabled" type="checkbox">
+          </label>
         </div>
       </div>
 
@@ -234,7 +242,7 @@ th{color:var(--muted);font-weight:600}
 </div>
 
 <script>
-let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawWorkInterval={{.NotifyWorkIntervalMin}},rawOffInterval={{.NotifyOffIntervalMin}},rawWorkExpr={{printf "%q" .WorkTimeExpr}},rawEnabled={{.NotifyEnabled}},rawGroup1Enabled={{.Group1Enabled}},rawGroup2Enabled={{.Group2Enabled}},rawGroup3Enabled={{.Group3Enabled}},rawGroup4Enabled={{.Group4Enabled}},rawGroup5Enabled={{.Group5Enabled}},tokenDirty=false,channelDirty=false;
+let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawWorkInterval={{.NotifyWorkIntervalMin}},rawOffInterval={{.NotifyOffIntervalMin}},rawWorkExpr={{printf "%q" .WorkTimeExpr}},rawEnabled={{.NotifyEnabled}},rawGroup1Enabled={{.Group1Enabled}},rawGroup2Enabled={{.Group2Enabled}},rawGroup3Enabled={{.Group3Enabled}},rawGroup4Enabled={{.Group4Enabled}},rawGroup5Enabled={{.Group5Enabled}},rawGroup6Enabled={{.Group6Enabled}},tokenDirty=false,channelDirty=false;
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
 function maskInput(v){v=String(v||'');if(!v)return '';if(v.length<=8)return '*'.repeat(v.length);return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}
@@ -251,6 +259,7 @@ function syncInputs(){
   document.getElementById('group3-enabled').checked=!!rawGroup3Enabled;
   document.getElementById('group4-enabled').checked=!!rawGroup4Enabled;
   document.getElementById('group5-enabled').checked=!!rawGroup5Enabled;
+  document.getElementById('group6-enabled').checked=!!rawGroup6Enabled;
 }
 function currentValue(i,raw){const next=String((i&&i.value)||'').trim();return next!==''?next:raw;}
 function intValue(id,fallback){const el=document.getElementById(id);const raw=String((el&&el.value)||'').trim();const v=Number(raw);return Number.isFinite(v)&&v>0?Math.floor(v):fallback;}
@@ -287,7 +296,8 @@ async function save(){
     group2_enabled:document.getElementById('group2-enabled').checked,
     group3_enabled:document.getElementById('group3-enabled').checked,
     group4_enabled:document.getElementById('group4-enabled').checked,
-    group5_enabled:document.getElementById('group5-enabled').checked
+    group5_enabled:document.getElementById('group5-enabled').checked,
+    group6_enabled:document.getElementById('group6-enabled').checked
   };
   const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(r.ok){
@@ -296,6 +306,32 @@ async function save(){
   msg.textContent='保存失败: '+await r.text();
 }
 async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='正在触发测试发送...';const r=await fetch('/api/channel/test',{method:'POST'});const text=String(await r.text().catch(()=>'' )||'').trim();if(r.ok){msg.textContent=text==='already running'?'已有测试发送进行中，请稍后查看下方历史':'测试发送已触发，约 30-60 秒后查看下方历史';await loadHistory();setTimeout(loadHistory,5000);setTimeout(loadHistory,20000);return;}msg.textContent='测试发送失败: '+(text||('HTTP '+r.status));}
+async function saveLegacy(){
+  const msg=document.getElementById('msg');
+  msg.textContent='Saving...';
+  const workInterval=intValue('notify-work-interval',rawWorkInterval||rawInterval||15);
+  const offInterval=intValue('notify-off-interval',rawOffInterval||workInterval);
+  const body={
+    telegram_bot_token:currentValue(document.getElementById('token'),rawToken),
+    telegram_channel:currentValue(document.getElementById('channel'),rawChannel),
+    notify_interval_min:workInterval,
+    notify_work_interval_min:workInterval,
+    notify_off_interval_min:offInterval,
+    work_time_expr:String((document.getElementById('work-time-expr').value||'').trim()),
+    notify_enabled:document.getElementById('notify-enabled').checked,
+    group1_enabled:document.getElementById('group1-enabled').checked,
+    group2_enabled:document.getElementById('group2-enabled').checked,
+    group3_enabled:document.getElementById('group3-enabled').checked,
+    group4_enabled:document.getElementById('group4-enabled').checked,
+    group5_enabled:document.getElementById('group5-enabled').checked,
+    group6_enabled:document.getElementById('group6-enabled').checked
+  };
+  const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok){
+    rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;rawGroup1Enabled=body.group1_enabled;rawGroup2Enabled=body.group2_enabled;rawGroup3Enabled=body.group3_enabled;rawGroup4Enabled=body.group4_enabled;rawGroup5Enabled=body.group5_enabled;rawGroup6Enabled=body.group6_enabled;tokenDirty=false;channelDirty=false;syncInputs();await loadSchedule();msg.textContent='Saved';return;
+  }
+  msg.textContent='Save failed: '+await r.text();
+}
 window.addEventListener('load',async()=>{await loadFooter();await loadHistory();await loadTimeline();await loadSchedule();});
 </script>
 </body>

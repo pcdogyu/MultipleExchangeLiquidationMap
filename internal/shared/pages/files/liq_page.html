@@ -1,21 +1,466 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ǿƽ����</title>
-<style>body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}.nav-left,.nav-right{display:flex;align-items:center;gap:20px}.brand{font-size:18px;font-weight:700;color:#eef3f9}.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.upgrade{color:#fff;font-weight:700;text-decoration:none}.wrap{max-width:1200px;margin:0 auto;padding:22px}.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:center;font-size:13px}.row{display:flex;gap:8px;align-items:center}.btn{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:8px 12px;border-radius:8px;cursor:pointer}.btn.primary{background:#22c55e;color:#fff;border-color:#22c55e}.small{font-size:12px;color:#64748b}.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}.upgrade-modal.show{display:flex}.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}.upgrade-title{font-size:14px;font-weight:700}.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">��������</a><a href="/config">ģ������</a><a href="/map">�̿ڻ���</a><a href="/liquidations" class="active">ǿƽ����</a><a href="/bubbles">����ͼ</a><a href="/channel">��Ϣͨ��</a></div></div><div class="nav-right"><a href="#" class="upgrade" onclick="return doUpgrade(event)">����</a></div></div>
-<div class="wrap"><div class="panel"><div class="row" style="justify-content:space-between"><h2 style="margin:0">ETH ǿƽ���㣨Binance / Bybit / OKX��</h2><div class="row"><button id="filterBtn" class="btn" onclick="toggleFilter()">����С��</button><button class="btn" onclick="prev()">��һҳ</button><button class="btn" onclick="next()">��һҳ</button><button class="btn primary" onclick="load()">ˢ��</button></div></div><div id="meta" class="small" style="margin:8px 0 10px 0"></div><div id="table"></div></div></div>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>强平清算</title>
+<style>
+:root{--bg:#f5f7fb;--ink:#172033;--muted:#64748b;--panel:#fff;--line:#dce3ec;--nav:#0b1220;--nav-border:#243145;--nav-ink:#eef3f9;--accent:#2563eb;--good:#16a34a;--warn:#d97706;--bad:#dc2626}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
+.nav{height:56px;background:var(--nav);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
+.nav-left,.nav-right{display:flex;align-items:center;gap:20px}
+.brand{font-size:18px;font-weight:700;color:var(--nav-ink)}
+.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}
+.menu a.active{color:#fff;font-weight:700}
+.upgrade{color:#fff;font-weight:700;text-decoration:none}
+.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}
+.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}
+.theme-toggle button.label{cursor:default;opacity:.92}
+.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}
+.wrap{max-width:1360px;margin:0 auto;padding:22px}
+.panel{border:1px solid var(--line);background:var(--panel);margin:14px 0;padding:16px;border-radius:14px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap}
+.title-wrap h2{margin:0;font-size:28px}
+.small{font-size:12px;color:var(--muted)}
+.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.field{display:grid;gap:6px;min-width:150px}
+.field label{font-size:12px;color:var(--muted)}
+.field select,.field input{height:38px;border:1px solid #cbd5e1;border-radius:10px;padding:0 12px;background:#fff;color:var(--ink)}
+.symbol-picker{display:grid;gap:8px}
+.btn{height:38px;background:#fff;color:var(--ink);border:1px solid #cbd5e1;padding:0 14px;border-radius:10px;cursor:pointer}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+.status-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.status-card{border:1px solid var(--line);border-radius:14px;padding:14px;background:linear-gradient(180deg,rgba(255,255,255,.98),rgba(248,250,252,.95))}
+.status-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.status-actions{display:flex;align-items:center;gap:8px}
+.status-name{font-size:18px;font-weight:800;text-transform:uppercase}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;font-size:12px;font-weight:700}
+.badge.ok{background:rgba(22,163,74,.12);color:var(--good)}
+.badge.wait{background:rgba(217,119,6,.12);color:var(--warn)}
+.badge.down{background:rgba(220,38,38,.12);color:var(--bad)}
+.retry-btn{height:30px;padding:0 12px;border-radius:999px;border:1px solid #cbd5e1;background:#fff;color:var(--ink);font-size:12px;font-weight:700;cursor:pointer}
+.retry-btn[disabled]{opacity:.5;cursor:not-allowed}
+.status-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.kv{padding:10px 12px;border-radius:12px;background:#fff;border:1px solid var(--line)}
+.kv .k{font-size:12px;color:var(--muted)}
+.kv .v{font-size:18px;font-weight:800;margin-top:4px}
+.status-foot{margin-top:10px;min-height:18px;word-break:break-word}
+.section-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}
+.section-title{margin:0;font-size:22px;font-weight:800}
+.period-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:14px}
+.period-card{position:relative;border:1px solid var(--line);border-radius:16px;padding:14px;background:var(--panel);overflow:visible;box-shadow:0 1px 2px rgba(15,23,42,.04);transition:transform .16s ease,box-shadow .16s ease}
+.period-card:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(15,23,42,.12)}
+.period-card.long-dominant{border-color:rgba(22,163,74,.28);background:linear-gradient(180deg,rgba(22,163,74,.08),rgba(255,255,255,.98))}
+.period-card.short-dominant{border-color:rgba(220,38,38,.28);background:linear-gradient(180deg,rgba(220,38,38,.08),rgba(255,255,255,.98))}
+.period-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.period-label{font-size:13px;color:var(--muted);font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.period-badge{display:inline-flex;align-items:center;padding:5px 10px;border-radius:999px;font-size:12px;font-weight:700}
+.period-card.long-dominant .period-badge{background:rgba(22,163,74,.14);color:var(--good)}
+.period-card.short-dominant .period-badge{background:rgba(220,38,38,.14);color:var(--bad)}
+.period-total{margin-top:14px;font-size:30px;font-weight:800}
+.period-sub{margin-top:6px;font-size:12px;color:var(--muted)}
+.period-push{margin-top:12px;font-size:13px;font-weight:700;line-height:1.5}
+.period-bar{display:flex;height:10px;border-radius:999px;overflow:hidden;background:#e2e8f0;margin-top:14px}
+.period-bar-long{background:rgba(22,163,74,.78)}
+.period-bar-short{background:rgba(220,38,38,.78)}
+.period-foot{margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted)}
+.period-tip{position:absolute;left:50%;top:-10px;transform:translate(-50%,-100%);display:none;min-width:220px;padding:12px 14px;border-radius:14px;border:1px solid var(--line);background:#fff;box-shadow:0 18px 40px rgba(15,23,42,.18);z-index:4;pointer-events:none}
+.period-card:hover .period-tip{display:block}
+.period-tip-title{font-size:12px;color:var(--muted);margin-bottom:8px}
+.period-tip-row{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px}
+.period-tip-row+.period-tip-row{margin-top:6px}
+.pattern-card{width:100%;border:1px solid var(--line);border-radius:16px;padding:14px;background:linear-gradient(180deg,rgba(37,99,235,.06),rgba(255,255,255,.96))}
+.pattern-card .k{font-size:12px;color:var(--muted)}
+.pattern-card .v{margin-top:8px;font-size:18px;font-weight:800}
+.pattern-summary{margin-top:8px;font-size:13px;line-height:1.7;color:var(--ink)}
+.table-wrap{overflow:auto}
+table{width:100%;border-collapse:collapse;min-width:920px}
+th,td{border-bottom:1px solid #e5e7eb;padding:10px 12px;text-align:center;font-size:13px;white-space:nowrap}
+th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.side-long{color:var(--bad);font-weight:700}
+.side-short{color:var(--good);font-weight:700}
+.pager{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:var(--muted);text-align:center}
+.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}
+.upgrade-modal.show{display:flex}
+.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}
+.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}
+.upgrade-title{font-size:14px;font-weight:700}
+.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}
+.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}
+.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}
+[data-theme="dark"]{--bg:#000;--ink:#f8fafc;--muted:#cbd5e1;--panel:#000;--line:#263041}
+[data-theme="dark"] .field select,[data-theme="dark"] .field input,[data-theme="dark"] .btn,[data-theme="dark"] .kv,[data-theme="dark"] .status-card,[data-theme="dark"] .retry-btn,[data-theme="dark"] .period-card,[data-theme="dark"] .pattern-card,[data-theme="dark"] .period-tip{background:#000;color:#f8fafc;border-color:#475569}
+[data-theme="dark"] .period-card.long-dominant{background:linear-gradient(180deg,rgba(22,163,74,.14),rgba(0,0,0,.98))}
+[data-theme="dark"] .period-card.short-dominant{background:linear-gradient(180deg,rgba(220,38,38,.14),rgba(0,0,0,.98))}
+[data-theme="dark"] .pattern-card{background:linear-gradient(180deg,rgba(37,99,235,.16),rgba(0,0,0,.98))}
+[data-theme="dark"] .period-tip{background:#020617}
+[data-theme="dark"] th,[data-theme="dark"] td{border-bottom-color:#263041}
+[data-theme="dark"] .title-wrap h2,[data-theme="dark"] .status-name,[data-theme="dark"] .kv .v,[data-theme="dark"] .section-title,[data-theme="dark"] .period-total,[data-theme="dark"] .pattern-card .v{color:#f8fafc}
+@media (max-width:1080px){
+  .status-grid{grid-template-columns:1fr}
+  .period-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:880px){
+  .menu{display:none}
+  .topbar{flex-direction:column}
+  .controls{width:100%}
+  .field{min-width:calc(50% - 5px)}
+  .period-grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="nav">
+  <div class="nav-left">
+    <div class="brand">ETH Liquidation Map</div>
+    <div class="menu">
+      <a href="/">清算热区</a>
+      <a href="/config">模型配置</a>
+      <a href="/monitor">雷区监控</a>
+      <a href="/map">盘口汇总</a>
+      <a href="/liquidations" class="active">强平清算</a>
+      <a href="/bubbles">气泡图</a>
+      <a href="/webdatasource">页面数据源</a>
+      <a href="/channel">消息通道</a>
+      <a href="/analysis">日内分析</a>
+    </div>
+  </div>
+  <div class="nav-right">
+    <div class="theme-toggle">
+      <button class="label" type="button">主题</button>
+      <button id="themeDark" onclick="setTheme('dark')">深色</button>
+      <button id="themeLight" onclick="setTheme('light')">浅色</button>
+    </div>
+    <a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="panel">
+    <div class="topbar">
+      <div class="title-wrap">
+        <h2>全市场强平清算</h2>
+        <div class="small">接收 Binance / Bybit / OKX 的清算消息，并支持按币对、数量或金额筛选。</div>
+      </div>
+      <div class="controls">
+        <div class="field">
+          <label for="symbolSel">币对</label>
+          <div class="symbol-picker">
+            <input id="symbolSearch" type="text" placeholder="搜索币对，例如 ETH / BTC / SOL" oninput="filterSymbolOptions()">
+            <select id="symbolSel" onchange="applyFilters()">
+              <option value="ALL">全部币对</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="filterField">筛选字段</label>
+          <select id="filterField" onchange="applyFilters()">
+            <option value="notional_usd">金额 USD</option>
+            <option value="qty">数量</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="minValue">最小阈值</label>
+          <input id="minValue" type="number" min="0" step="0.0001" value="0" onkeydown="handleEnter(event)">
+        </div>
+        <button class="btn" onclick="prev()">上一页</button>
+        <button class="btn" onclick="next()">下一页</button>
+        <button class="btn primary" onclick="load()">刷新</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="status-grid" id="wsStatusGrid"></div>
+
+  <div class="panel">
+    <div class="section-head">
+      <div>
+        <h3 class="section-title">四周期多空清算结构</h3>
+        <div class="small">统计过去 1H / 4H / 12H / 24H 的多空清算额。卡片徽标按方向显示：多单更大记为“空”，空单更大记为“多”，并额外给出对应价格方向。</div>
+      </div>
+      <div id="patternBox" class="pattern-card">
+        <div class="k">四周期 16 种形态判断</div>
+        <div class="v">加载中...</div>
+        <div class="pattern-summary">正在计算当前多空清算结构。</div>
+      </div>
+    </div>
+    <div id="periodGrid" class="period-grid">
+      <div class="period-card">
+        <div class="period-total">--</div>
+        <div class="period-sub">加载中...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="pager">
+      <div id="meta" class="small">加载中...</div>
+      <div class="small">页面每 5 秒自动刷新</div>
+    </div>
+    <div class="table-wrap" style="margin-top:12px">
+      <table>
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>交易所</th>
+            <th>币对</th>
+            <th>方向</th>
+            <th>价格</th>
+            <th>数量</th>
+            <th>金额 USD</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody">
+          <tr><td colspan="7" class="small">加载中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <script>
-let page=1,pageSize=25,filterSmall=false;
-function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1})}
-function fmtQty(n){return Number(n).toLocaleString('zh-CN',{maximumFractionDigits:4})}
-function fmtAmt(n){n=Number(n);if(!isFinite(n))return '-';return n.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});}
-function fmtTime(ts){try{return new Date(Number(ts||0)).toLocaleString('zh-CN',{hour12:false});}catch(_){return '-';}}
-function render(rows){if(!rows||!rows.length){document.getElementById('table').innerHTML='<div class="small">��������</div>';return;}let h='<table><thead><tr><th>ʱ��</th><th>������</th><th>����</th><th>�۸�</th><th>����</th><th>��� (USD)</th></tr></thead><tbody>';for(const r of rows){h+='<tr><td>'+fmtTime(r.event_ts)+'</td><td>'+String(r.exchange||'').toUpperCase()+'</td><td>'+r.side+'</td><td>'+fmtPrice(r.price)+'</td><td>'+fmtQty(r.qty)+'</td><td>'+fmtAmt(r.notional_usd)+'</td></tr>';}h+='</tbody></table>';document.getElementById('table').innerHTML=h;}
-function toggleFilter(){filterSmall=!filterSmall;const b=document.getElementById('filterBtn');if(b)b.textContent=filterSmall?'��ʾȫ��':'����С��';load();}
-async function load(){const r=await fetch('/api/liquidations?page='+page+'&limit='+pageSize);const d=await r.json();let rows=(d.rows||[]);if(filterSmall)rows=rows.filter(x=>Number(x.qty||0)>=1);document.getElementById('meta').textContent='�� '+d.page+' ҳ | ÿҳ '+d.page_size+' ��'+(filterSmall?' | �ѹ���С�� 1 ETH �ļ�¼':'');render(rows);}
+let page=1;
+let pageSize=50;
+let currentSymbol='ALL';
+let availableSymbols=['ALL'];
+
+function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
+function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
+function esc(s){return String(s==null?'':s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
+function fmtPrice(n){const v=Number(n||0);return isFinite(v)&&v>0?v.toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1}):'-';}
+function fmtQty(n){const v=Number(n||0);return isFinite(v)?v.toLocaleString('zh-CN',{maximumFractionDigits:4}):'-';}
+function fmtAmt(n){const v=Number(n||0);if(!isFinite(v)) return '-';if(Math.abs(v)>=1e6) return (v/1e6).toFixed(2)+'M';return v.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function fmtTime(ts){const v=Number(ts||0);if(!v) return '-';return new Date(v).toLocaleString('zh-CN',{hour12:false});}
+function statusBadge(item){
+  if(item.connected) return ['在线','ok'];
+  if(Number(item.paused_until||0)>Date.now()) return ['暂停','down'];
+  if(Number(item.last_event_ts||0)>0) return ['等待重连','wait'];
+  return ['未连接','down'];
+}
+function renderWSStatus(items){
+  const grid=document.getElementById('wsStatusGrid');
+  if(!Array.isArray(items)||!items.length){
+    grid.innerHTML='<div class="panel small">暂无 ws 状态</div>';
+    return;
+  }
+  grid.innerHTML=items.map(item=>{
+    const badge=statusBadge(item);
+    const lastError=String(item.last_error||'').trim();
+    const pauseReason=String(item.pause_reason||'').trim();
+    const foot=pauseReason?('暂停原因：'+esc(pauseReason)):(lastError?('最近错误：'+esc(lastError)):'最近无错误');
+    const subscribed=Number(item.subscribed_topics);
+    const exchange=String(item.exchange||'').toLowerCase();
+    const paused=Number(item.paused_until||0)>Date.now();
+    return '<div class="status-card">'+
+      '<div class="status-top"><div class="status-name">'+esc(String(item.exchange||'-').toUpperCase())+'</div><div class="status-actions"><span class="badge '+badge[1]+'">'+badge[0]+'</span><button class="retry-btn" onclick="retryExchange(\''+esc(exchange)+'\')"'+(paused?'':' disabled')+'>重试</button></div></div>'+
+      '<div class="status-meta">'+
+        '<div class="kv"><div class="k">活跃连接</div><div class="v">'+Number(item.active_conns||0)+'</div></div>'+
+        '<div class="kv"><div class="k">订阅主题</div><div class="v">'+(subscribed<0?'ALL':subscribed)+'</div></div>'+
+        '<div class="kv"><div class="k">最近消息</div><div class="v" style="font-size:14px">'+esc(fmtTime(item.last_event_ts))+'</div></div>'+
+        '<div class="kv"><div class="k">模式</div><div class="v" style="font-size:14px">'+esc(item.mode||'-')+'</div></div>'+
+      '</div>'+
+      '<div class="status-foot small">'+foot+'</div>'+
+    '</div>';
+  }).join('');
+}
+function fmtPeriodDominant(side){
+  return side==='short'?'多':'空';
+}
+function fmtPatternBias(bias){
+  switch(String(bias||'')){
+    case 'up_strong': return '强上推';
+    case 'up': return '偏上推';
+    case 'up_light': return '轻微偏上';
+    case 'down_strong': return '强下压';
+    case 'down': return '偏下压';
+    case 'down_light': return '轻微偏下';
+    default: return '震荡分歧';
+  }
+}
+function fmtPushDirection(push){
+  switch(String(push||'')){
+    case 'up': return '方向：偏多（价格更易向上推动）';
+    case 'down': return '方向：偏空（价格更易向下推动）';
+    default: return '方向：中性（价格暂时均衡）';
+  }
+}
+function renderPeriodSummary(summary){
+  const grid=document.getElementById('periodGrid');
+  const patternBox=document.getElementById('patternBox');
+  const buckets=Array.isArray(summary&&summary.buckets)?summary.buckets:[];
+  if(!buckets.length){
+    grid.innerHTML='<div class="period-card"><div class="period-total">--</div><div class="period-sub">暂无周期清算统计</div></div>';
+    patternBox.innerHTML='<div class="k">四周期 16 种形态判断</div><div class="v">暂无数据</div><div class="pattern-summary">尚未计算出当前多空结构。</div>';
+    return;
+  }
+  grid.innerHTML=buckets.map(bucket=>{
+    const total=Number(bucket.total_usd||0);
+    const longUSD=Number(bucket.long_usd||0);
+    const shortUSD=Number(bucket.short_usd||0);
+    const longPct=total>0?Math.max(0,Math.min(100,longUSD/total*100)):50;
+    const shortPct=Math.max(0,100-longPct);
+    const dominant=String(bucket.dominant_side||'long').toLowerCase();
+    const cls=dominant==='short'?'short-dominant':'long-dominant';
+    return '<div class="period-card '+cls+'">'+
+      '<div class="period-tip">'+
+        '<div class="period-tip-title">'+esc(bucket.label||'-')+' 统计明细</div>'+
+        '<div class="period-tip-row"><span>总清算金额</span><strong>'+esc(fmtAmt(total))+'</strong></div>'+
+        '<div class="period-tip-row"><span>多单清算量</span><strong>'+esc(fmtAmt(longUSD))+'</strong></div>'+
+        '<div class="period-tip-row"><span>空单清算量</span><strong>'+esc(fmtAmt(shortUSD))+'</strong></div>'+
+      '</div>'+
+      '<div class="period-top"><div class="period-label">'+esc(bucket.label||'-')+'</div><span class="period-badge">'+esc(fmtPeriodDominant(dominant))+'</span></div>'+
+      '<div class="period-total">'+esc(fmtAmt(total))+'</div>'+
+      '<div class="period-sub">总清算金额</div>'+
+      '<div class="period-push">'+esc(fmtPushDirection(bucket.price_push||''))+'</div>'+
+      '<div class="period-bar"><div class="period-bar-long" style="width:'+longPct.toFixed(2)+'%"></div><div class="period-bar-short" style="width:'+shortPct.toFixed(2)+'%"></div></div>'+
+      '<div class="period-foot"><span>多 '+esc(fmtAmt(longUSD))+'</span><span>空 '+esc(fmtAmt(shortUSD))+'</span></div>'+
+    '</div>';
+  }).join('');
+  const pattern=summary&&summary.pattern?summary.pattern:{};
+  patternBox.innerHTML=
+    '<div class="k">四周期 16 种形态判断</div>'+
+    '<div class="v">'+esc(pattern.code||'----')+' · '+esc(fmtPatternBias(pattern.trend_bias))+'</div>'+
+    '<div class="pattern-summary">'+esc(pattern.label||'')+'。'+esc(pattern.summary||'')+'</div>';
+}
+function renderRows(rows){
+  const body=document.getElementById('tableBody');
+  if(!Array.isArray(rows)||!rows.length){
+    body.innerHTML='<tr><td colspan="7" class="small">暂无符合条件的清算记录</td></tr>';
+    return;
+  }
+  body.innerHTML=rows.map(row=>{
+    const side=String(row.side||'').toLowerCase();
+    const sideClass=side==='long'?'side-long':'side-short';
+    const sideText=side==='long'?'多头被清算':'空头被清算';
+    return '<tr>'+
+      '<td>'+esc(fmtTime(row.event_ts))+'</td>'+
+      '<td>'+esc(String(row.exchange||'').toUpperCase())+'</td>'+
+      '<td>'+esc(row.symbol||'-')+'</td>'+
+      '<td class="'+sideClass+'">'+esc(sideText)+'</td>'+
+      '<td>'+esc(fmtPrice(row.price))+'</td>'+
+      '<td>'+esc(fmtQty(row.qty))+'</td>'+
+      '<td>'+esc(fmtAmt(row.notional_usd))+'</td>'+
+    '</tr>';
+  }).join('');
+}
+function getSymbolSearchValue(){
+  return String(document.getElementById('symbolSearch')?.value||'').trim().toUpperCase();
+}
+function renderSymbolOptions(list){
+  const select=document.getElementById('symbolSel');
+  const items=Array.isArray(list)&&list.length?list:['ALL'];
+  select.innerHTML=items.map(value=>'<option value="'+esc(value)+'">'+(value==='ALL'?'全部币对':esc(value))+'</option>').join('');
+  if(items.includes(currentSymbol)){
+    select.value=currentSymbol;
+    return;
+  }
+  select.value=items.includes('ALL')?'ALL':items[0];
+}
+function filterSymbolOptions(){
+  const keyword=getSymbolSearchValue();
+  const filtered=availableSymbols.filter(value=>value==='ALL' || !keyword || value.includes(keyword));
+  renderSymbolOptions(filtered);
+}
+function syncSymbolOptions(symbols){
+  const normalized=['ALL'].concat((Array.isArray(symbols)?symbols:[]).filter(Boolean));
+  const next=[];
+  const seen=new Set();
+  for(const item of normalized){
+    const value=String(item).trim().toUpperCase();
+    if(!value||seen.has(value)) continue;
+    seen.add(value);
+    next.push(value);
+  }
+  availableSymbols=next;
+  const prev=String(currentSymbol||'ALL').toUpperCase();
+  currentSymbol=next.includes(prev)?prev:'ALL';
+  filterSymbolOptions();
+}
+function filterFieldLabel(value){
+  return value==='qty'?'数量':'金额 USD';
+}
+function buildQuery(){
+  const filterField=String(document.getElementById('filterField').value||'notional_usd');
+  const minValue=Math.max(0,Number(document.getElementById('minValue').value||0));
+  const params=new URLSearchParams();
+  params.set('page',String(page));
+  params.set('limit',String(pageSize));
+  params.set('symbol',currentSymbol||'ALL');
+  params.set('filter_field',filterField);
+  params.set('min_value',String(minValue));
+  return {params,filterField,minValue};
+}
+function applyFilters(){
+  currentSymbol=String(document.getElementById('symbolSel').value||'ALL').toUpperCase();
+  page=1;
+  load();
+}
+function handleEnter(event){
+  if(event.key==='Enter'){
+    applyFilters();
+  }
+}
+async function load(){
+  const {params,filterField,minValue}=buildQuery();
+  const resp=await fetch('/api/liquidations?'+params.toString()).catch(()=>null);
+  if(!resp){
+    document.getElementById('meta').textContent='无法连接 /api/liquidations';
+    renderRows([]);
+    renderWSStatus([]);
+    renderPeriodSummary(null);
+    return;
+  }
+  const data=await resp.json().catch(()=>null);
+  if(!data){
+    document.getElementById('meta').textContent='清算接口返回了无效 JSON';
+    renderRows([]);
+    renderWSStatus([]);
+    renderPeriodSummary(null);
+    return;
+  }
+  syncSymbolOptions(data.available_symbols||[]);
+  renderWSStatus(data.ws_status||[]);
+  renderPeriodSummary(data.period_summary||null);
+  renderRows(data.rows||[]);
+  const symbolText=currentSymbol==='ALL'?'全部币对':currentSymbol;
+  const filterText=minValue>0?(' | '+filterFieldLabel(filterField)+' ≥ '+minValue):'';
+  document.getElementById('meta').textContent='第 '+Number(data.page||page)+' 页 | 每页 '+Number(data.page_size||pageSize)+' 条 | 币对：'+symbolText+filterText;
+}
 function prev(){if(page>1){page--;load();}}
 function next(){page++;load();}
-async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='姝ｅ湪瑙﹀彂鍗囩骇...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='瑙﹀彂澶辫触: '+d.error;return;}foot.textContent='宸茶Е鍙戯紝姝ｅ湪鎵ц...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'鍗囩骇瀹屾垚骞跺凡閲嶅�?:'鍗囩骇瀹屾垚锛岄€€鍑虹爜 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='鍗囩骇杩涚▼宸茬粨鏉燂紙鐘舵€佹湭鐭ワ級锛岃妫€鏌ユ棩�?;return;}}foot.textContent='鍗囩骇浠嶅湪杩涜锛岃绋嶅悗鍐嶇湅';}
+async function retryExchange(exchange){
+  const target=String(exchange||'').trim().toLowerCase();
+  if(!target) return;
+  const resp=await fetch('/api/liquidations/retry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({exchange:target})}).catch(()=>null);
+  if(!resp||!resp.ok){
+    await load();
+    return;
+  }
+  setTimeout(load,300);
+  load();
+}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束，但状态未知，请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
 function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
 async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
-setInterval(load,5000);load();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();
-</script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽�?/button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>
+initTheme();
+load();
+setInterval(load,5000);
+(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();
+</script>
+
+<div id="upgradeModal" class="upgrade-modal">
+  <div class="upgrade-card">
+    <div class="upgrade-head">
+      <div class="upgrade-title">升级过程</div>
+      <button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button>
+    </div>
+    <pre id="upgradeLog" class="upgrade-log"></pre>
+    <div id="upgradeFoot" class="upgrade-foot">等待开始...</div>
+  </div>
+</div>
+<div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
+</body>
+</html>

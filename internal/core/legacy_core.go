@@ -1,4 +1,4 @@
-﻿package liqmap
+package liqmap
 
 import (
 	"bytes"
@@ -398,7 +398,7 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 	}
 
 	if settings.Group3Enabled {
-		text := a.buildTelegramThirtyDayTextV4(monitorReport, monitorBands, webMap)
+		text := a.buildTelegramThirtyDayTextSafe(monitorReport, monitorBands, webMap)
 		if err := a.sendTelegramText(text); err != nil {
 			msg := fmt.Sprintf("鍙戦€佸け璐? %v", err)
 			a.recordTelegramSendHistory(sendMode, 3, "monitor-30d-text", "failed", msg)
@@ -430,12 +430,34 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 			msg := fmt.Sprintf("鐢熸垚鏃ュ唴鍒嗘瀽澶辫触: %v", err)
 			a.recordTelegramSendHistory(sendMode, 5, "analysis-text", "failed", msg)
 			errs = append(errs, msg)
-		} else if err := a.sendTelegramText(a.buildAnalysisTelegramText(snapshot)); err != nil {
+		} else if err := a.sendTelegramText(a.buildAnalysisTelegramTextSafe(snapshot)); err != nil {
 			msg := fmt.Sprintf("鍙戦€佸け璐? %v", err)
 			a.recordTelegramSendHistory(sendMode, 5, "analysis-text", "failed", msg)
 			errs = append(errs, msg)
 		} else {
 			a.recordTelegramSendHistory(sendMode, 5, "analysis-text", "success", "")
+		}
+	}
+
+	if settings.Group6Enabled {
+		structureImage, err := a.captureLiquidationsStructureScreenshotJPEG()
+		if err != nil {
+			msg := fmt.Sprintf("鍙浘澶辫触: %v", err)
+			a.recordTelegramSendHistory(sendMode, 6, "liquidations-structure-image", "failed", msg)
+			errs = append(errs, msg)
+		} else if err := a.sendTelegramPhoto("", structureImage); err != nil {
+			msg := fmt.Sprintf("鍙戦€佸け璐? %v", err)
+			a.recordTelegramSendHistory(sendMode, 6, "liquidations-structure-image", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 6, "liquidations-structure-image", "success", "")
+		}
+		if err := a.sendTelegramText(a.buildLiquidationPatternQuestionAttachment()); err != nil {
+			msg := fmt.Sprintf("鍙戦€佸け璐? %v", err)
+			a.recordTelegramSendHistory(sendMode, 6, "liquidations-pattern-text", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 6, "liquidations-pattern-text", "success", "")
 		}
 	}
 
@@ -6606,4 +6628,3 @@ bindWeightSumLive();
 reloadCfg();
 loadFooter();
 </script><div id="upgradeModal" class="upgrade-modal"><div class="upgrade-card"><div class="upgrade-head"><div class="upgrade-title">鍗囩骇杩囩▼</div><button class="upgrade-close" onclick="closeUpgradeModal()">鍏抽棴</button></div><pre id="upgradeLog" class="upgrade-log"></pre><div id="upgradeFoot" class="upgrade-foot">绛夊緟寮€濮?..</div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div></body></html>`
-
