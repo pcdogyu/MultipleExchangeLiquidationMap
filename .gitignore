@@ -19,9 +19,11 @@ pem/
 fetch_coinglass_liq_v14.py
 coinglass_profile/
 coinglass_profile_inspect/
+coinglass_profile_runtime_*/
 .claude/
 *.bak
 *.bak_edit
 *.exe~
 playload/
 webdatasource_exports/
+.vscode/
