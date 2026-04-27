@@ -3,6 +3,7 @@ package liqmap
 type AnalysisOverview struct {
 	Title      string  `json:"title"`
 	Bias       string  `json:"bias"`
+	Direction  string  `json:"direction"`
 	Confidence float64 `json:"confidence"`
 	Summary    string  `json:"summary"`
 }
@@ -95,4 +96,57 @@ type AnalysisSnapshot struct {
 	ExchangeCards []ExchangeAnalysisCard `json:"exchange_cards"`
 	Backtest      AnalysisBacktest       `json:"backtest"`
 	Dashboard     Dashboard              `json:"dashboard"`
+}
+
+type AnalysisSignalRecord struct {
+	ID                int64   `json:"id"`
+	SignalTS          int64   `json:"signal_ts"`
+	Symbol            string  `json:"symbol"`
+	SourceGroup       int     `json:"source_group"`
+	Direction         string  `json:"direction"`
+	SignalPrice       float64 `json:"signal_price"`
+	AnalysisGenerated int64   `json:"analysis_generated_at"`
+	Headline          string  `json:"headline"`
+	Summary           string  `json:"summary"`
+	VerifyHorizonMin  int     `json:"verify_horizon_min"`
+}
+
+type AnalysisSignalResult struct {
+	ID                int64   `json:"id"`
+	SignalTS          int64   `json:"signal_ts"`
+	Symbol            string  `json:"symbol"`
+	SourceGroup       int     `json:"source_group"`
+	Direction         string  `json:"direction"`
+	SignalPrice       float64 `json:"signal_price"`
+	AnalysisGenerated int64   `json:"analysis_generated_at"`
+	Headline          string  `json:"headline"`
+	Summary           string  `json:"summary"`
+	VerifyHorizonMin  int     `json:"verify_horizon_min"`
+	VerifyDueTS       int64   `json:"verify_due_ts"`
+	VerifyClosePrice  float64 `json:"verify_close_price,omitempty"`
+	Result            string  `json:"result"`
+	DeltaPrice        float64 `json:"delta_price,omitempty"`
+	DeltaPct          float64 `json:"delta_pct,omitempty"`
+}
+
+type AnalysisBacktestSummary struct {
+	WindowHours  int     `json:"window_hours"`
+	TotalSignals int     `json:"total_signals"`
+	CorrectCount int     `json:"correct_count"`
+	WrongCount   int     `json:"wrong_count"`
+	PendingCount int     `json:"pending_count"`
+	NoDataCount  int     `json:"no_data_count"`
+	CorrectRate  float64 `json:"correct_rate"`
+}
+
+type AnalysisBacktestPageResponse struct {
+	Candles []map[string]any        `json:"candles"`
+	Signals []AnalysisSignalResult  `json:"signals"`
+	Summary AnalysisBacktestSummary `json:"summary"`
+}
+
+type AnalysisBacktestHistoryResponse struct {
+	Page    int                    `json:"page"`
+	Limit   int                    `json:"limit"`
+	Signals []AnalysisSignalResult `json:"signals"`
 }

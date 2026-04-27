@@ -168,6 +168,20 @@ func Init(db *sql.DB) error {
 			error_text TEXT NOT NULL DEFAULT ''
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_telegram_send_history_sent_at ON telegram_send_history(sent_at DESC);`,
+		`CREATE TABLE IF NOT EXISTS analysis_direction_signals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			signal_ts INTEGER NOT NULL,
+			symbol TEXT NOT NULL,
+			source_group INTEGER NOT NULL,
+			direction TEXT NOT NULL,
+			signal_price REAL NOT NULL,
+			analysis_generated_at INTEGER NOT NULL,
+			headline TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			verify_horizon_min INTEGER NOT NULL DEFAULT 15
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_analysis_direction_signals_ts ON analysis_direction_signals(signal_ts DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_analysis_direction_signals_symbol_ts ON analysis_direction_signals(symbol, signal_ts DESC);`,
 	}
 	for _, stmt := range stmts {
 		if err := execWithBusyRetry(db, stmt); err != nil {

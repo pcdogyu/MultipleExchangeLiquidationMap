@@ -13,7 +13,15 @@ type stubServices struct {
 	rows []liqmap.EventRow
 }
 
-func (s stubServices) ListLiquidations(limit, offset int, startTS, endTS int64) []liqmap.EventRow {
+func (s stubServices) QueryLiquidations(opts liqmap.LiquidationListOptions) []liqmap.EventRow {
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = len(s.rows)
+	}
+	offset := opts.Offset
+	if offset < 0 {
+		offset = 0
+	}
 	if offset >= len(s.rows) {
 		return nil
 	}
@@ -23,15 +31,41 @@ func (s stubServices) ListLiquidations(limit, offset int, startTS, endTS int64) 
 	}
 	out := make([]liqmap.EventRow, 0, end-offset)
 	for _, row := range s.rows[offset:end] {
-		if startTS > 0 && row.EventTS < startTS {
+		if opts.StartTS > 0 && row.EventTS < opts.StartTS {
 			continue
 		}
-		if endTS > 0 && row.EventTS > endTS {
+		if opts.EndTS > 0 && row.EventTS > opts.EndTS {
 			continue
+		}
+		switch opts.FilterField {
+		case "qty":
+			if row.Qty < opts.MinValue {
+				continue
+			}
+		case "notional", "notional_usd", "amount":
+			if row.NotionalUSD < opts.MinValue {
+				continue
+			}
 		}
 		out = append(out, row)
 	}
 	return out
+}
+
+func (s stubServices) LiquidationPeriodSummary(opts liqmap.LiquidationListOptions) liqmap.LiquidationPeriodSummary {
+	return liqmap.LiquidationPeriodSummary{}
+}
+
+func (s stubServices) LiquidationSymbols(limit int) []string {
+	return []string{"ETHUSDT"}
+}
+
+func (s stubServices) LiquidationWSStatuses() []liqmap.LiquidationWSStatus {
+	return nil
+}
+
+func (s stubServices) RetryLiquidationExchange(exchange string) error {
+	return nil
 }
 
 func newTestService(rows []liqmap.EventRow) *service {

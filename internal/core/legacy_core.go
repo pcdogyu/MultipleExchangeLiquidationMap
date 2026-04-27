@@ -436,6 +436,9 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 			errs = append(errs, msg)
 		} else {
 			a.recordTelegramSendHistory(sendMode, 5, "analysis-text", "success", "")
+			if err := a.recordAnalysisDirectionSignal(snapshot); err != nil && a.debug {
+				log.Printf("record analysis direction signal failed: %v", err)
+			}
 		}
 	}
 
@@ -458,6 +461,21 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 			errs = append(errs, msg)
 		} else {
 			a.recordTelegramSendHistory(sendMode, 6, "liquidations-pattern-text", "success", "")
+		}
+	}
+
+	if settings.Group7Enabled {
+		bubblesImage, err := a.captureBubblesScreenshotJPEG()
+		if err != nil {
+			msg := fmt.Sprintf("閸欘亜娴樻径杈Е: %v", err)
+			a.recordTelegramSendHistory(sendMode, 7, "bubbles-5m-24h-image", "failed", msg)
+			errs = append(errs, msg)
+		} else if err := a.sendTelegramPhoto("", bubblesImage); err != nil {
+			msg := fmt.Sprintf("閸欐垿鈧礁銇戠拹? %v", err)
+			a.recordTelegramSendHistory(sendMode, 7, "bubbles-5m-24h-image", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 7, "bubbles-5m-24h-image", "success", "")
 		}
 	}
 
@@ -2727,8 +2745,18 @@ func (a *App) buildAnalysisSnapshot() (AnalysisSnapshot, error) {
 	}
 
 	overview := AnalysisOverview{
-		Title:      title,
-		Bias:       bias,
+		Title: title,
+		Bias:  bias,
+		Direction: func() string {
+			switch {
+			case shortRiskScore-longRiskScore >= 8:
+				return "up"
+			case longRiskScore-shortRiskScore >= 8:
+				return "down"
+			default:
+				return "flat"
+			}
+		}(),
 		Confidence: confidence,
 		Summary: fmt.Sprintf(
 			"当前价格 %.1f，近端上方风险 %.0f 分、下方风险 %.0f 分；主导交易所为 %s，提示 %s。",

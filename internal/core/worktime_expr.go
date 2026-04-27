@@ -84,7 +84,7 @@ func compileTimeExprRegex(expr string) (*regexp.Regexp, error) {
 }
 
 func validateWorkTimeExpr(expr string) error {
-	expr = strings.TrimSpace(expr)
+	expr = normalizeQuotedInput(expr)
 	if expr == "" {
 		return nil
 	}
@@ -98,7 +98,7 @@ func validateWorkTimeExpr(expr string) error {
 }
 
 func isWorkTime(now time.Time, expr string) bool {
-	expr = strings.TrimSpace(expr)
+	expr = normalizeQuotedInput(expr)
 	if expr == "" {
 		return true
 	}

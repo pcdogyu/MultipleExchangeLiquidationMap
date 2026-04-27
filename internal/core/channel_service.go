@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+var webDataSourceCaptureMinutes = []int{10, 25, 40, 55}
+
 func (a *App) nextTelegramAutoNotifyTS(now time.Time) (int64, bool) {
 	settings := a.loadSettings()
 	if !settings.NotifyEnabled {
@@ -32,12 +34,32 @@ func (a *App) nextTelegramAutoNotifyTS(now time.Time) (int64, bool) {
 	return baseTS + int64(intervalMin)*60*1000, true
 }
 
-func (a *App) nextWebDataSourceCaptureTS(now time.Time) (int64, bool) {
-	nextNotifyTS, ok := a.nextTelegramAutoNotifyTS(now)
-	if !ok {
-		return 0, false
+func latestScheduledWebDataSourceCaptureTS(now time.Time) int64 {
+	slot := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, now.Location())
+	minute := now.Minute()
+	for i := len(webDataSourceCaptureMinutes) - 1; i >= 0; i-- {
+		if minute >= webDataSourceCaptureMinutes[i] {
+			return slot.Add(time.Duration(webDataSourceCaptureMinutes[i]) * time.Minute).UnixMilli()
+		}
 	}
-	return nextNotifyTS - 5*60*1000, true
+	return slot.Add(-time.Hour).Add(time.Duration(webDataSourceCaptureMinutes[len(webDataSourceCaptureMinutes)-1]) * time.Minute).UnixMilli()
+}
+
+func nextScheduledWebDataSourceCaptureTS(now time.Time) int64 {
+	slot := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, now.Location())
+	minute := now.Minute()
+	second := now.Second()
+	nano := now.Nanosecond()
+	for _, m := range webDataSourceCaptureMinutes {
+		if minute < m || (minute == m && second == 0 && nano == 0) {
+			return slot.Add(time.Duration(m) * time.Minute).UnixMilli()
+		}
+	}
+	return slot.Add(time.Hour).Add(time.Duration(webDataSourceCaptureMinutes[0]) * time.Minute).UnixMilli()
+}
+
+func (a *App) nextWebDataSourceCaptureTS(now time.Time) (int64, bool) {
+	return nextScheduledWebDataSourceCaptureTS(now), true
 }
 
 func (a *App) loadSettings() ChannelSettings {
@@ -50,7 +72,7 @@ func (a *App) loadSettings() ChannelSettings {
 		NotifyIntervalMin:     workInterval,
 		NotifyWorkIntervalMin: workInterval,
 		NotifyOffIntervalMin:  offInterval,
-		WorkTimeExpr:          strings.TrimSpace(a.getSetting("notify_work_time_expr")),
+		WorkTimeExpr:          normalizeQuotedInput(a.getSetting("notify_work_time_expr")),
 		NotifyEnabled:         parseBoolSetting(a.getSetting("notify_enabled"), false),
 		Group1Enabled:         parseBoolSetting(a.getSetting("notify_group_1_enabled"), true),
 		Group2Enabled:         parseBoolSetting(a.getSetting("notify_group_2_enabled"), true),
@@ -58,6 +80,7 @@ func (a *App) loadSettings() ChannelSettings {
 		Group4Enabled:         parseBoolSetting(a.getSetting("notify_group_4_enabled"), true),
 		Group5Enabled:         parseBoolSetting(a.getSetting("notify_group_5_enabled"), true),
 		Group6Enabled:         parseBoolSetting(a.getSetting("notify_group_6_enabled"), true),
+		Group7Enabled:         parseBoolSetting(a.getSetting("notify_group_7_enabled"), true),
 	}
 }
 
@@ -85,7 +108,7 @@ func (a *App) saveSettings(req ChannelSettings) error {
 			offInterval = workInterval
 		}
 	}
-	workTimeExpr := strings.TrimSpace(req.WorkTimeExpr)
+	workTimeExpr := normalizeQuotedInput(req.WorkTimeExpr)
 	if err := validateWorkTimeExpr(workTimeExpr); err != nil {
 		return err
 	}
@@ -120,6 +143,9 @@ func (a *App) saveSettings(req ChannelSettings) error {
 		return err
 	}
 	if err := a.setSetting("notify_group_6_enabled", strconv.FormatBool(req.Group6Enabled)); err != nil {
+		return err
+	}
+	if err := a.setSetting("notify_group_7_enabled", strconv.FormatBool(req.Group7Enabled)); err != nil {
 		return err
 	}
 	return nil

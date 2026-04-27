@@ -29,6 +29,14 @@ func Analysis() sharedtypes.HTMLPage {
 	}
 }
 
+func AnalysisBacktest() sharedtypes.HTMLPage {
+	return sharedtypes.HTMLPage{
+		TemplateName: "analysis_backtest",
+		FallbackHTML: `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>日内回测</title></head><body style="font-family:Segoe UI,Microsoft YaHei,sans-serif;padding:24px"><h2>日内回测页面文件缺失</h2><p>请确认 <code>internal/shared/pages/files/analysis_backtest_page.html</code> 存在，然后刷新页面。</p></body></html>`,
+		Preferred:    []string{file("analysis_backtest_page.html")},
+	}
+}
+
 func Monitor() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "monitor",

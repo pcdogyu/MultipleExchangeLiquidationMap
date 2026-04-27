@@ -22,7 +22,7 @@ body{margin:0;background:radial-gradient(circle at top left,#fff8ee,transparent 
 .theme-toggle button.active{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.18);color:#fff}
 .nav-right>a[href="/config"]:not(.nav-upgrade){display:none}
 .wrap{max-width:1380px;margin:0 auto;padding:22px 18px 40px}
-.layout{display:grid;grid-template-columns:minmax(0,1.04fr) minmax(0,.96fr);gap:14px;align-items:start}
+.layout{display:grid;grid-template-columns:minmax(0,.95fr) minmax(0,1.25fr);gap:14px;align-items:start}
 .panel{background:rgba(255,253,248,.92);border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow);padding:18px}
 .section-title{margin:0 0 6px;font-size:17px}
 .small{font-size:12px;color:var(--muted);line-height:1.6}
@@ -69,6 +69,7 @@ th{color:var(--muted);font-weight:600}
       <a href="/webdatasource">页面数据源</a>
       <a href="/channel" class="active">消息通道</a>
       <a href="/analysis">日内分析</a>
+      <a href="/analysis-backtest">日内回测</a>
     </div>
   </div>
   <div class="nav-right">
@@ -86,7 +87,7 @@ th{color:var(--muted);font-weight:600}
   <div class="layout">
     <div class="panel">
       <h2 class="section-title">Telegram 消息通道</h2>
-      <div class="small">配置 Telegram Bot 与频道后，系统会按工作时间与非工作时间的频率自动推送。下方 5 组开关可单独控制每一组消息是否发送。</div>
+      <div class="small">配置 Telegram Bot 与频道后，系统会按工作时间与非工作时间的频率自动推送。下方 7 组开关可单独控制每一组消息是否发送。</div>
 
       <label class="switch-row" style="margin-top:14px">
         <span>
@@ -173,6 +174,14 @@ th{color:var(--muted);font-weight:600}
             </span>
             <input id="group6-enabled" type="checkbox">
           </label>
+          <label class="group-switch">
+            <span>
+              <strong>Group 7</strong>
+              <div class="small">Bubbles 5m dark 24h image</div>
+              <span class="tag">/bubbles</span>
+            </span>
+            <input id="group7-enabled" type="checkbox">
+          </label>
         </div>
       </div>
 
@@ -242,7 +251,7 @@ th{color:var(--muted);font-weight:600}
 </div>
 
 <script>
-let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawWorkInterval={{.NotifyWorkIntervalMin}},rawOffInterval={{.NotifyOffIntervalMin}},rawWorkExpr={{printf "%q" .WorkTimeExpr}},rawEnabled={{.NotifyEnabled}},rawGroup1Enabled={{.Group1Enabled}},rawGroup2Enabled={{.Group2Enabled}},rawGroup3Enabled={{.Group3Enabled}},rawGroup4Enabled={{.Group4Enabled}},rawGroup5Enabled={{.Group5Enabled}},rawGroup6Enabled={{.Group6Enabled}},tokenDirty=false,channelDirty=false;
+let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawWorkInterval={{.NotifyWorkIntervalMin}},rawOffInterval={{.NotifyOffIntervalMin}},rawWorkExpr={{printf "%q" .WorkTimeExpr}},rawEnabled={{.NotifyEnabled}},rawGroup1Enabled={{.Group1Enabled}},rawGroup2Enabled={{.Group2Enabled}},rawGroup3Enabled={{.Group3Enabled}},rawGroup4Enabled={{.Group4Enabled}},rawGroup5Enabled={{.Group5Enabled}},rawGroup6Enabled={{.Group6Enabled}},rawGroup7Enabled={{.Group7Enabled}},tokenDirty=false,channelDirty=false;
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
 function maskInput(v){v=String(v||'');if(!v)return '';if(v.length<=8)return '*'.repeat(v.length);return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}
@@ -260,6 +269,7 @@ function syncInputs(){
   document.getElementById('group4-enabled').checked=!!rawGroup4Enabled;
   document.getElementById('group5-enabled').checked=!!rawGroup5Enabled;
   document.getElementById('group6-enabled').checked=!!rawGroup6Enabled;
+  document.getElementById('group7-enabled').checked=!!rawGroup7Enabled;
 }
 function currentValue(i,raw){const next=String((i&&i.value)||'').trim();return next!==''?next:raw;}
 function intValue(id,fallback){const el=document.getElementById(id);const raw=String((el&&el.value)||'').trim();const v=Number(raw);return Number.isFinite(v)&&v>0?Math.floor(v):fallback;}
@@ -268,7 +278,7 @@ function esc(v){return String(v||'').replace(/[&<>"]/g,s=>({'&':'&amp;','<':'&lt
 function sendModeLabel(v){if(v==='test')return '测试';if(v==='auto')return '自动';if(v==='manual')return '手动';return String(v||'-');}
 function sourceLabel(v){if(v==='channel')return '消息通道';if(v==='webdatasource')return '页面数据源';return String(v||'-');}
 function typeLabel(v){if(v==='push')return '推送';if(v==='capture')return '抓取';return String(v||'-');}
-function periodLabel(v){if(v==='work-hours')return '工作时间';if(v==='off-hours')return '非工作时间';return String(v||'-');}
+function periodLabel(v){if(v==='work-hours')return '工作时间';if(v==='off-hours')return '非工作时间';if(v==='webdatasource-immediate')return 'webdatasource 15 分钟';return String(v||'-');}
 
 initTheme();
 document.getElementById('token').addEventListener('input',()=>{tokenDirty=true;});
@@ -297,11 +307,12 @@ async function save(){
     group3_enabled:document.getElementById('group3-enabled').checked,
     group4_enabled:document.getElementById('group4-enabled').checked,
     group5_enabled:document.getElementById('group5-enabled').checked,
-    group6_enabled:document.getElementById('group6-enabled').checked
+    group6_enabled:document.getElementById('group6-enabled').checked,
+    group7_enabled:document.getElementById('group7-enabled').checked
   };
   const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(r.ok){
-    rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;rawGroup1Enabled=body.group1_enabled;rawGroup2Enabled=body.group2_enabled;rawGroup3Enabled=body.group3_enabled;rawGroup4Enabled=body.group4_enabled;rawGroup5Enabled=body.group5_enabled;tokenDirty=false;channelDirty=false;syncInputs();await loadSchedule();msg.textContent='保存成功';return;
+    rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;rawGroup1Enabled=body.group1_enabled;rawGroup2Enabled=body.group2_enabled;rawGroup3Enabled=body.group3_enabled;rawGroup4Enabled=body.group4_enabled;rawGroup5Enabled=body.group5_enabled;rawGroup6Enabled=body.group6_enabled;rawGroup7Enabled=body.group7_enabled;tokenDirty=false;channelDirty=false;syncInputs();await loadSchedule();msg.textContent='保存成功';return;
   }
   msg.textContent='保存失败: '+await r.text();
 }
@@ -324,11 +335,12 @@ async function saveLegacy(){
     group3_enabled:document.getElementById('group3-enabled').checked,
     group4_enabled:document.getElementById('group4-enabled').checked,
     group5_enabled:document.getElementById('group5-enabled').checked,
-    group6_enabled:document.getElementById('group6-enabled').checked
+    group6_enabled:document.getElementById('group6-enabled').checked,
+    group7_enabled:document.getElementById('group7-enabled').checked
   };
   const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(r.ok){
-    rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;rawGroup1Enabled=body.group1_enabled;rawGroup2Enabled=body.group2_enabled;rawGroup3Enabled=body.group3_enabled;rawGroup4Enabled=body.group4_enabled;rawGroup5Enabled=body.group5_enabled;rawGroup6Enabled=body.group6_enabled;tokenDirty=false;channelDirty=false;syncInputs();await loadSchedule();msg.textContent='Saved';return;
+    rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;rawGroup1Enabled=body.group1_enabled;rawGroup2Enabled=body.group2_enabled;rawGroup3Enabled=body.group3_enabled;rawGroup4Enabled=body.group4_enabled;rawGroup5Enabled=body.group5_enabled;rawGroup6Enabled=body.group6_enabled;rawGroup7Enabled=body.group7_enabled;tokenDirty=false;channelDirty=false;syncInputs();await loadSchedule();msg.textContent='Saved';return;
   }
   msg.textContent='Save failed: '+await r.text();
 }
