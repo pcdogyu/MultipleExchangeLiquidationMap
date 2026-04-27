@@ -99,13 +99,13 @@ func buildLiquidationSyncSignal(first, second LiquidationPeriodBucket, activeLab
 
 	switch {
 	case firstEff == "neutral" && secondEff == "neutral":
-		signal.Reason = fmt.Sprintf("%s 与 %s 的差值占比都不足 %.0f%%，不计入有效方向。", signal.FirstPeriod, signal.SecondPeriod, liquidationSyncThresholdRatio*100)
+		signal.Reason = fmt.Sprintf("%s 与 %s 的差值占比都不足 %.0f%%，当前不计入有效方向。", signal.FirstPeriod, signal.SecondPeriod, liquidationSyncThresholdRatio*100)
 	case firstEff == "neutral":
 		signal.Reason = fmt.Sprintf("%s 的差值占比不足 %.0f%%，当前不计入有效方向。", signal.FirstPeriod, liquidationSyncThresholdRatio*100)
 	case secondEff == "neutral":
 		signal.Reason = fmt.Sprintf("%s 的差值占比不足 %.0f%%，当前不计入有效方向。", signal.SecondPeriod, liquidationSyncThresholdRatio*100)
 	case firstEff != secondEff:
-		signal.Reason = fmt.Sprintf("%s 为%s、%s 为%s，两周期方向不一致。", signal.FirstPeriod, liquidationsDirectionText(firstEff), signal.SecondPeriod, liquidationsDirectionText(secondEff))
+		signal.Reason = fmt.Sprintf("%s 为%s，%s 为%s，两周期方向不一致。", signal.FirstPeriod, liquidationsDirectionText(firstEff), signal.SecondPeriod, liquidationsDirectionText(secondEff))
 	default:
 		signal.Active = true
 		signal.Direction = firstEff
@@ -151,6 +151,15 @@ func liquidationsAlignmentText(alignment string) string {
 	}
 }
 
+func liquidationsAlignmentActive(alignment string) bool {
+	switch strings.ToLower(strings.TrimSpace(alignment)) {
+	case "up_resonance", "down_resonance":
+		return true
+	default:
+		return false
+	}
+}
+
 func buildLiquidationSyncAlertState(summary LiquidationPeriodSummary) liquidationSyncAlertState {
 	return liquidationSyncAlertState{
 		ShortActive:    summary.SyncSignals.ShortTermSync.Active,
@@ -182,13 +191,12 @@ func (a *App) saveLiquidationSyncAlertState(state liquidationSyncAlertState) err
 }
 
 func shouldSendLiquidationSyncAlert(prev, curr liquidationSyncAlertState) bool {
-	if curr.ShortActive && (!prev.ShortActive || prev.ShortDirection != curr.ShortDirection) {
+	prevAligned := liquidationsAlignmentActive(prev.Alignment)
+	currAligned := liquidationsAlignmentActive(curr.Alignment)
+	if prevAligned != currAligned {
 		return true
 	}
-	if curr.ContActive && (!prev.ContActive || prev.ContDirection != curr.ContDirection) {
-		return true
-	}
-	if (curr.Alignment == "up_resonance" || curr.Alignment == "down_resonance") && prev.Alignment != curr.Alignment {
+	if prevAligned && currAligned && prev.Alignment != curr.Alignment {
 		return true
 	}
 	return false
@@ -203,18 +211,35 @@ func (a *App) maybeSendLiquidationSyncAlert(sendMode string) error {
 		return a.saveLiquidationSyncAlertState(curr)
 	}
 
-	text := a.buildLiquidationSyncAlertText(summary, prev, curr)
+	text := a.buildLiquidationSyncAlertText(summary, prev, curr, false)
 	if err := a.sendTelegramText(text); err != nil {
-		a.recordTelegramSendHistory(sendMode, 6, "liquidations-sync-alert", "failed", err.Error())
+		a.recordTelegramSendHistory(sendMode, 8, "liquidations-sync-alert", "failed", err.Error())
 		return err
 	}
-	a.recordTelegramSendHistory(sendMode, 6, "liquidations-sync-alert", "success", "")
+	a.recordTelegramSendHistory(sendMode, 8, "liquidations-sync-alert", "success", "")
 	return a.saveLiquidationSyncAlertState(curr)
 }
 
-func (a *App) buildLiquidationSyncAlertText(summary LiquidationPeriodSummary, prev, curr liquidationSyncAlertState) string {
+func (a *App) sendLiquidationSyncAlertTest(sendMode string) error {
+	summary := a.LiquidationPeriodSummary(LiquidationListOptions{Symbol: defaultSymbol})
+	prev := a.loadLiquidationSyncAlertState()
+	curr := buildLiquidationSyncAlertState(summary)
+	text := a.buildLiquidationSyncAlertText(summary, prev, curr, true)
+	if err := a.sendTelegramText(text); err != nil {
+		a.recordTelegramSendHistory(sendMode, 8, "liquidations-sync-alert", "failed", err.Error())
+		return err
+	}
+	a.recordTelegramSendHistory(sendMode, 8, "liquidations-sync-alert", "success", "")
+	return nil
+}
+
+func (a *App) buildLiquidationSyncAlertText(summary LiquidationPeriodSummary, prev, curr liquidationSyncAlertState, isTest bool) string {
+	title := "<b>四周期同步报警</b>"
+	if isTest {
+		title = "<b>四周期同步报警测试</b>"
+	}
 	lines := []string{
-		"<b>四周期同步报警</b>",
+		title,
 		fmt.Sprintf("形态: <b>%s</b> / %s", escTelegramHTML(summary.Pattern.Code), escTelegramHTML(liquidationPatternTrendTitle(summary.Pattern.TrendBias))),
 		fmt.Sprintf("短期确认: <b>%s</b>", escTelegramHTML(formatSyncSignalHeadline(summary.SyncSignals.ShortTermSync))),
 		escTelegramHTML(summary.SyncSignals.ShortTermSync.Reason),
@@ -222,6 +247,7 @@ func (a *App) buildLiquidationSyncAlertText(summary LiquidationPeriodSummary, pr
 		escTelegramHTML(summary.SyncSignals.Continuation.Reason),
 		fmt.Sprintf("共振状态: <b>%s</b>", escTelegramHTML(liquidationsAlignmentText(summary.SyncSignals.OverallAlignment))),
 		escTelegramHTML(summary.SyncSignals.OverallReason),
+		escTelegramHTML(formatLiquidationSyncTransitionSummary(prev, curr, isTest)),
 		"",
 		"<b>周期摘要</b>",
 	}
@@ -262,6 +288,14 @@ func formatLiquidationSyncTransition(prev, curr liquidationSyncAlertState) strin
 		liquidationsAlignmentText(prev.Alignment),
 		liquidationsAlignmentText(curr.Alignment),
 	)
+}
+
+func formatLiquidationSyncTransitionSummary(prev, curr liquidationSyncAlertState, isTest bool) string {
+	prefix := "状态摘要:"
+	if isTest {
+		prefix = "测试摘要:"
+	}
+	return fmt.Sprintf("%s %s -> %s", prefix, liquidationsAlignmentText(prev.Alignment), liquidationsAlignmentText(curr.Alignment))
 }
 
 func liquidationStateLabel(active bool, direction string) string {

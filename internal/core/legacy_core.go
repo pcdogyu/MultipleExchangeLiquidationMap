@@ -476,6 +476,18 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 		}
 	}
 
+	if settings.Group8Enabled {
+		var err error
+		if isTest {
+			err = a.sendLiquidationSyncAlertTest(sendMode)
+		} else {
+			err = a.maybeSendLiquidationSyncAlert(sendMode)
+		}
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("liquidations sync alert: %v", err))
+		}
+	}
+
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, " | "))
 	}

@@ -15,6 +15,7 @@ type ChannelSettings struct {
 	Group5Enabled         bool   `json:"group5_enabled"`
 	Group6Enabled         bool   `json:"group6_enabled"`
 	Group7Enabled         bool   `json:"group7_enabled"`
+	Group8Enabled         bool   `json:"group8_enabled"`
 }
 
 type TelegramSendHistoryRow struct {

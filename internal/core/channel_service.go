@@ -81,6 +81,7 @@ func (a *App) loadSettings() ChannelSettings {
 		Group5Enabled:         parseBoolSetting(a.getSetting("notify_group_5_enabled"), true),
 		Group6Enabled:         parseBoolSetting(a.getSetting("notify_group_6_enabled"), true),
 		Group7Enabled:         parseBoolSetting(a.getSetting("notify_group_7_enabled"), true),
+		Group8Enabled:         parseBoolSetting(a.getSetting("notify_group_8_enabled"), true),
 	}
 }
 
@@ -146,6 +147,9 @@ func (a *App) saveSettings(req ChannelSettings) error {
 		return err
 	}
 	if err := a.setSetting("notify_group_7_enabled", strconv.FormatBool(req.Group7Enabled)); err != nil {
+		return err
+	}
+	if err := a.setSetting("notify_group_8_enabled", strconv.FormatBool(req.Group8Enabled)); err != nil {
 		return err
 	}
 	return nil
