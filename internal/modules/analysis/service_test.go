@@ -14,7 +14,7 @@ func (stubServices) AnalysisSnapshot() (liqmap.AnalysisSnapshot, error) {
 	return liqmap.AnalysisSnapshot{}, nil
 }
 
-func (stubServices) AnalysisBacktest(hours int) (liqmap.AnalysisBacktestPageResponse, error) {
+func (stubServices) AnalysisBacktest(hours int, minConfidence float64, horizons []int) (liqmap.AnalysisBacktestPageResponse, error) {
 	return liqmap.AnalysisBacktestPageResponse{}, nil
 }
 
