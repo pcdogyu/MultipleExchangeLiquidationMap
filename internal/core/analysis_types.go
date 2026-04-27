@@ -159,10 +159,10 @@ type AnalysisBacktestFactorSummary struct {
 }
 
 type AnalysisBacktestHorizonSummary struct {
-	HorizonMin int                          `json:"horizon_min"`
+	HorizonMin int                           `json:"horizon_min"`
 	Single     AnalysisBacktestFactorSummary `json:"single"`
 	Composite  AnalysisBacktestFactorSummary `json:"composite"`
-	Winner     string                       `json:"winner"`
+	Winner     string                        `json:"winner"`
 }
 
 type AnalysisBacktestHorizonResult struct {
@@ -175,12 +175,12 @@ type AnalysisBacktestHorizonResult struct {
 }
 
 type AnalysisBacktestFactorSignal struct {
-	Included      bool                           `json:"included"`
-	Direction     string                         `json:"direction"`
-	Confidence    float64                        `json:"confidence"`
-	SignalPrice   float64                        `json:"signal_price"`
-	ShortRisk     float64                        `json:"short_risk_score"`
-	LongRisk      float64                        `json:"long_risk_score"`
+	Included       bool                            `json:"included"`
+	Direction      string                          `json:"direction"`
+	Confidence     float64                         `json:"confidence"`
+	SignalPrice    float64                         `json:"signal_price"`
+	ShortRisk      float64                         `json:"short_risk_score"`
+	LongRisk       float64                         `json:"long_risk_score"`
 	HorizonResults []AnalysisBacktestHorizonResult `json:"horizon_results"`
 }
 
