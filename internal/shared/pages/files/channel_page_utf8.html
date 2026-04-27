@@ -108,6 +108,11 @@ th{color:var(--muted);font-weight:600}
           <input id="channel" autocomplete="off" placeholder="@mychannel 或 -100123456789">
           <div class="small">留空会保留当前已保存的频道或 Chat ID。</div>
         </div>
+        <div class="field" style="grid-column:1/-1">
+          <label>Telegram API Base URL</label>
+          <input id="api-base" autocomplete="off" placeholder="https://api.telegram.org">
+          <div class="small">Optional. Use a reachable Bot API or reverse proxy when this host cannot access Telegram directly.</div>
+        </div>
         <div class="field">
           <label>工作时间通知间隔（分钟）</label>
           <input id="notify-work-interval" type="number" min="1" step="1" placeholder="15">
@@ -259,11 +264,13 @@ th{color:var(--muted);font-weight:600}
 </div>
 
 <script>
-let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawInterval={{.NotifyIntervalMin}},rawWorkInterval={{.NotifyWorkIntervalMin}},rawOffInterval={{.NotifyOffIntervalMin}},rawWorkExpr={{printf "%q" .WorkTimeExpr}},rawEnabled={{.NotifyEnabled}},rawGroup1Enabled={{.Group1Enabled}},rawGroup2Enabled={{.Group2Enabled}},rawGroup3Enabled={{.Group3Enabled}},rawGroup4Enabled={{.Group4Enabled}},rawGroup5Enabled={{.Group5Enabled}},rawGroup6Enabled={{.Group6Enabled}},rawGroup7Enabled={{.Group7Enabled}},rawGroup8Enabled={{.Group8Enabled}},tokenDirty=false,channelDirty=false;
+let rawToken={{printf "%q" .TelegramBotToken}},rawChannel={{printf "%q" .TelegramChannel}},rawAPIBase={{printf "%q" .TelegramAPIBase}},rawInterval={{.NotifyIntervalMin}},rawWorkInterval={{.NotifyWorkIntervalMin}},rawOffInterval={{.NotifyOffIntervalMin}},rawWorkExpr={{printf "%q" .WorkTimeExpr}},rawEnabled={{.NotifyEnabled}},rawGroup1Enabled={{.Group1Enabled}},rawGroup2Enabled={{.Group2Enabled}},rawGroup3Enabled={{.Group3Enabled}},rawGroup4Enabled={{.Group4Enabled}},rawGroup5Enabled={{.Group5Enabled}},rawGroup6Enabled={{.Group6Enabled}},rawGroup7Enabled={{.Group7Enabled}},rawGroup8Enabled={{.Group8Enabled}},tokenDirty=false,channelDirty=false,apiBaseDirty=false;
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
 function maskInput(v){v=String(v||'');if(!v)return '';if(v.length<=8)return '*'.repeat(v.length);return v.slice(0,4)+'*'.repeat(v.length-8)+v.slice(-4);}
 function syncInputs(){
+  const b=document.getElementById('api-base');
+  if(!apiBaseDirty && b){b.value='';b.placeholder=rawAPIBase||'https://api.telegram.org';}
   const t=document.getElementById('token'),c=document.getElementById('channel'),w=document.getElementById('notify-work-interval'),o=document.getElementById('notify-off-interval'),x=document.getElementById('work-time-expr'),e=document.getElementById('notify-enabled');
   if(!tokenDirty){t.value='';t.placeholder=rawToken?maskInput(rawToken):'123456:ABC...';}
   if(!channelDirty){c.value='';c.placeholder=rawChannel?maskInput(rawChannel):'@mychannel 或 -100123456789';}
@@ -292,6 +299,7 @@ function periodLabel(v){if(v==='work-hours')return '工作时间';if(v==='off-ho
 initTheme();
 document.getElementById('token').addEventListener('input',()=>{tokenDirty=true;});
 document.getElementById('channel').addEventListener('input',()=>{channelDirty=true;});
+document.getElementById('api-base').addEventListener('input',()=>{apiBaseDirty=true;});
 syncInputs();
 
 async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}
@@ -306,6 +314,7 @@ async function save(){
   const body={
     telegram_bot_token:currentValue(document.getElementById('token'),rawToken),
     telegram_channel:currentValue(document.getElementById('channel'),rawChannel),
+    telegram_api_base:apiBaseDirty?String((document.getElementById('api-base').value||'').trim()):rawAPIBase,
     notify_interval_min:workInterval,
     notify_work_interval_min:workInterval,
     notify_off_interval_min:offInterval,
@@ -322,7 +331,7 @@ async function save(){
   };
   const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(r.ok){
-    rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;rawGroup1Enabled=body.group1_enabled;rawGroup2Enabled=body.group2_enabled;rawGroup3Enabled=body.group3_enabled;rawGroup4Enabled=body.group4_enabled;rawGroup5Enabled=body.group5_enabled;rawGroup6Enabled=body.group6_enabled;rawGroup7Enabled=body.group7_enabled;rawGroup8Enabled=body.group8_enabled;tokenDirty=false;channelDirty=false;syncInputs();await loadSchedule();msg.textContent='保存成功';return;
+    rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawAPIBase=body.telegram_api_base||'';rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;rawGroup1Enabled=body.group1_enabled;rawGroup2Enabled=body.group2_enabled;rawGroup3Enabled=body.group3_enabled;rawGroup4Enabled=body.group4_enabled;rawGroup5Enabled=body.group5_enabled;rawGroup6Enabled=body.group6_enabled;rawGroup7Enabled=body.group7_enabled;rawGroup8Enabled=body.group8_enabled;tokenDirty=false;channelDirty=false;apiBaseDirty=false;syncInputs();await loadSchedule();msg.textContent='保存成功';return;
   }
   msg.textContent='保存失败: '+await r.text();
 }
@@ -335,6 +344,7 @@ async function saveLegacy(){
   const body={
     telegram_bot_token:currentValue(document.getElementById('token'),rawToken),
     telegram_channel:currentValue(document.getElementById('channel'),rawChannel),
+    telegram_api_base:apiBaseDirty?String((document.getElementById('api-base').value||'').trim()):rawAPIBase,
     notify_interval_min:workInterval,
     notify_work_interval_min:workInterval,
     notify_off_interval_min:offInterval,
@@ -351,7 +361,7 @@ async function saveLegacy(){
   };
   const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(r.ok){
-    rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;rawGroup1Enabled=body.group1_enabled;rawGroup2Enabled=body.group2_enabled;rawGroup3Enabled=body.group3_enabled;rawGroup4Enabled=body.group4_enabled;rawGroup5Enabled=body.group5_enabled;rawGroup6Enabled=body.group6_enabled;rawGroup7Enabled=body.group7_enabled;rawGroup8Enabled=body.group8_enabled;tokenDirty=false;channelDirty=false;syncInputs();await loadSchedule();msg.textContent='Saved';return;
+    rawToken=body.telegram_bot_token;rawChannel=body.telegram_channel;rawAPIBase=body.telegram_api_base||'';rawInterval=workInterval;rawWorkInterval=workInterval;rawOffInterval=offInterval;rawWorkExpr=body.work_time_expr;rawEnabled=body.notify_enabled;rawGroup1Enabled=body.group1_enabled;rawGroup2Enabled=body.group2_enabled;rawGroup3Enabled=body.group3_enabled;rawGroup4Enabled=body.group4_enabled;rawGroup5Enabled=body.group5_enabled;rawGroup6Enabled=body.group6_enabled;rawGroup7Enabled=body.group7_enabled;rawGroup8Enabled=body.group8_enabled;tokenDirty=false;channelDirty=false;apiBaseDirty=false;syncInputs();await loadSchedule();msg.textContent='Saved';return;
   }
   msg.textContent='Save failed: '+await r.text();
 }

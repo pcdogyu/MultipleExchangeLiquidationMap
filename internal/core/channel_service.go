@@ -3,17 +3,29 @@ package liqmap
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
+	"net"
 	"net/http"
+	neturl "net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 )
 
 var webDataSourceCaptureMinutes = []int{0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}
+
+const (
+	defaultTelegramAPIBaseURL = "https://api.telegram.org"
+	telegramTextTimeout       = 20 * time.Second
+	telegramPhotoTimeout      = 45 * time.Second
+	telegramRequestAttempts   = 3
+	telegramRetryDelay        = 1500 * time.Millisecond
+)
 
 func (a *App) nextTelegramAutoNotifyTS(now time.Time) (int64, bool) {
 	settings := a.loadSettings()
@@ -69,6 +81,7 @@ func (a *App) loadSettings() ChannelSettings {
 	return ChannelSettings{
 		TelegramBotToken:      normalizeQuotedInput(a.getSetting("telegram_bot_token")),
 		TelegramChannel:       normalizeQuotedInput(a.getSetting("telegram_channel")),
+		TelegramAPIBase:       a.telegramAPIBaseURL(),
 		NotifyIntervalMin:     workInterval,
 		NotifyWorkIntervalMin: workInterval,
 		NotifyOffIntervalMin:  offInterval,
@@ -92,6 +105,10 @@ func (a *App) saveSettings(req ChannelSettings) error {
 		return err
 	}
 	if err := a.setSetting("telegram_channel", channel); err != nil {
+		return err
+	}
+	apiBase := normalizeQuotedInput(req.TelegramAPIBase)
+	if err := a.setSetting("telegram_api_base", apiBase); err != nil {
 		return err
 	}
 	workInterval := req.NotifyWorkIntervalMin
@@ -209,7 +226,6 @@ func (a *App) sendTelegramText(text string) error {
 		return fmt.Errorf("telegram bot token or channel is empty")
 	}
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
 	payload := map[string]string{
 		"chat_id":    channel,
 		"text":       text,
@@ -219,27 +235,7 @@ func (a *App) sendTelegramText(text string) error {
 	if err != nil {
 		return err
 	}
-
-	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(string(body)))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		if len(data) == 0 {
-			return fmt.Errorf("telegram api returned %s", resp.Status)
-		}
-		return fmt.Errorf("telegram api returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
-	}
-	return nil
+	return a.doTelegramRequest(fmt.Sprintf("/bot%s/sendMessage", token), "application/json", body, telegramTextTimeout)
 }
 
 func (a *App) sendTelegramPhoto(caption string, image []byte) error {
@@ -270,25 +266,121 @@ func (a *App) sendTelegramPhoto(caption string, image []byte) error {
 		return err
 	}
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendPhoto", token)
-	req, err := http.NewRequest(http.MethodPost, url, &body)
-	if err != nil {
-		return err
+	return a.doTelegramRequest(fmt.Sprintf("/bot%s/sendPhoto", token), mw.FormDataContentType(), body.Bytes(), telegramPhotoTimeout)
+}
+
+func (a *App) telegramAPIBaseURL() string {
+	if v := normalizeQuotedInput(a.getSetting("telegram_api_base")); v != "" {
+		return strings.TrimRight(v, "/")
 	}
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
+	if v := normalizeQuotedInput(os.Getenv("TELEGRAM_API_BASE_URL")); v != "" {
+		return strings.TrimRight(v, "/")
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		if len(data) == 0 {
-			return fmt.Errorf("telegram api returned %s", resp.Status)
+	return defaultTelegramAPIBaseURL
+}
+
+func (a *App) doTelegramRequest(path, contentType string, payload []byte, timeout time.Duration) error {
+	baseURL := a.telegramAPIBaseURL()
+	reqURL := baseURL + path
+	client := a.telegramHTTPClient(timeout)
+	var lastErr error
+	for attempt := 1; attempt <= telegramRequestAttempts; attempt++ {
+		req, err := http.NewRequest(http.MethodPost, reqURL, bytes.NewReader(payload))
+		if err != nil {
+			return err
 		}
-		return fmt.Errorf("telegram api returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
+		req.Header.Set("Content-Type", contentType)
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = wrapTelegramNetworkError(baseURL, err)
+			if attempt < telegramRequestAttempts && isTelegramRetryableError(err) {
+				time.Sleep(time.Duration(attempt) * telegramRetryDelay)
+				continue
+			}
+			return lastErr
+		}
+		data, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			if attempt < telegramRequestAttempts {
+				time.Sleep(time.Duration(attempt) * telegramRetryDelay)
+				continue
+			}
+			return readErr
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return nil
+		}
+		lastErr = buildTelegramStatusError(resp.Status, data)
+		if attempt < telegramRequestAttempts && isTelegramRetryableStatus(resp.StatusCode) {
+			time.Sleep(time.Duration(attempt) * telegramRetryDelay)
+			continue
+		}
+		return lastErr
 	}
-	return nil
+	return lastErr
+}
+
+func (a *App) telegramHTTPClient(timeout time.Duration) *http.Client {
+	if timeout <= 0 {
+		timeout = telegramTextTimeout
+	}
+	if a.httpClient == nil {
+		return &http.Client{Timeout: timeout}
+	}
+	clone := *a.httpClient
+	clone.Timeout = timeout
+	return &clone
+}
+
+func buildTelegramStatusError(status string, data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("telegram api returned %s", status)
+	}
+	return fmt.Errorf("telegram api returned %s: %s", status, strings.TrimSpace(string(data)))
+}
+
+func isTelegramRetryableStatus(code int) bool {
+	return code == http.StatusRequestTimeout || code == http.StatusTooManyRequests || code >= 500
+}
+
+func isTelegramRetryableError(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	var urlErr *neturl.Error
+	if errors.As(err, &urlErr) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"no such host",
+		"dial tcp",
+		"connectex",
+		"timeout",
+		"connection reset",
+		"forcibly closed",
+		"connection aborted",
+		"tls handshake timeout",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func wrapTelegramNetworkError(baseURL string, err error) error {
+	msg := fmt.Sprintf("telegram request failed via %s: %v", baseURL, err)
+	if baseURL == defaultTelegramAPIBaseURL {
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "no such host") || strings.Contains(lower, "connectex") || strings.Contains(lower, "connection aborted") || strings.Contains(lower, "timeout") {
+			msg += " (this host may not reach Telegram directly; set TELEGRAM_API_BASE_URL or setting telegram_api_base to a reachable Bot API / reverse proxy)"
+		}
+	}
+	return errors.New(msg)
 }
 
 func (a *App) recordTelegramSendHistory(sendMode string, groupIndex int, groupName, status, errorText string) {

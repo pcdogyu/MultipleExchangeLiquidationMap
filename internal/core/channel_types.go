@@ -3,6 +3,7 @@ package liqmap
 type ChannelSettings struct {
 	TelegramBotToken      string `json:"telegram_bot_token"`
 	TelegramChannel       string `json:"telegram_channel"`
+	TelegramAPIBase       string `json:"telegram_api_base"`
 	NotifyIntervalMin     int    `json:"notify_interval_min"`
 	NotifyWorkIntervalMin int    `json:"notify_work_interval_min"`
 	NotifyOffIntervalMin  int    `json:"notify_off_interval_min"`
