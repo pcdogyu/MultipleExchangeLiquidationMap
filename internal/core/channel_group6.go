@@ -27,8 +27,6 @@ func liquidationPatternTrendTitle(trend string) string {
 func (a *App) buildLiquidationPatternQuestionAttachment() string {
 	summary := a.LiquidationPeriodSummary(LiquidationListOptions{Symbol: defaultSymbol})
 	lines := []string{
-		"<b>已附截图：四周期多空清算结构</b>",
-		"",
 		"<b>四周期 16 种形态判断</b>",
 		fmt.Sprintf("%s / %s", escTelegramHTML(summary.Pattern.Code), escTelegramHTML(liquidationPatternTrendTitle(summary.Pattern.TrendBias))),
 		escTelegramHTML(strings.TrimSpace(summary.Pattern.Label + "。 " + summary.Pattern.Summary)),
