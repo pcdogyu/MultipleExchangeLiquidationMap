@@ -4072,6 +4072,17 @@ func normalizeLiquidationSide(raw string) string {
 	}
 }
 
+func invertLiquidationSide(raw string) string {
+	switch normalizeLiquidationSide(raw) {
+	case "long":
+		return "short"
+	case "short":
+		return "long"
+	default:
+		return strings.ToLower(strings.TrimSpace(raw))
+	}
+}
+
 func (a *App) insertLiquidationEvent(exchange, symbol, side, rawSide string, price, qty, markPrice float64, eventTS int64) {
 	if price <= 0 || qty <= 0 {
 		return
@@ -4298,7 +4309,7 @@ func (a *App) syncBybitLiquidations(ctx context.Context, symbol string) {
 				if !ok {
 					continue
 				}
-				side := fmt.Sprint(row["S"])
+				side := invertLiquidationSide(fmt.Sprint(row["S"]))
 				price := parseAnyFloat(row["p"])
 				qty := parseAnyFloat(row["v"])
 				if qty <= 0 {

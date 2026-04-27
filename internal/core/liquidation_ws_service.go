@@ -560,7 +560,7 @@ func (a *App) runBybitLiquidationBatch(ctx context.Context, category string, top
 				continue
 			}
 			symbol := fmt.Sprint(row["s"])
-			side := fmt.Sprint(row["S"])
+			side := invertLiquidationSide(fmt.Sprint(row["S"]))
 			price := parseAnyFloat(row["p"])
 			qty := parseAnyFloat(row["v"])
 			if qty <= 0 {
