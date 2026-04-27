@@ -20,7 +20,7 @@ body{margin:0;background:radial-gradient(circle at top left,#fff8ee,transparent 
 .theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:var(--navInk);cursor:pointer}
 .theme-toggle button.label{cursor:default;opacity:.92}
 .theme-toggle button.active{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.18);color:#fff}
-.wrap{max-width:1500px;margin:0 auto;padding:24px 18px 40px}
+.wrap{width:100%;max-width:none;margin:0;padding:24px 18px 40px}
 .hero{display:grid;grid-template-columns:1.15fr .85fr;gap:16px}
 .panel{background:rgba(255,253,248,.92);border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow);padding:20px}
 .hero-main{background:linear-gradient(140deg,rgba(194,106,45,.15),rgba(20,116,111,.08)),var(--card)}
@@ -207,6 +207,7 @@ const state={
   interval:'5m',
   chartWidth:1600,
   chartHeight:620,
+  manualSized:false,
   viewStart:0,
   viewCount:0,
   yZoom:1,
@@ -324,7 +325,16 @@ function updateChartMeta(){
   const visible=count?Math.min(state.viewCount,count):0;
   meta.textContent='最近 24 小时价格行情 | 周期 '+cfg.label+' | 数据源 '+state.chartSource+' | 总K线 '+count+' 根 | 当前视图 '+visible+' 根';
 }
+function syncChartWidthToViewport(force){
+  const viewport=document.getElementById('chartViewport');
+  if(!viewport)return;
+  const available=Math.max(900,Math.floor(viewport.clientWidth-26));
+  if(force||!state.manualSized||state.chartWidth<available){
+    state.chartWidth=available;
+  }
+}
 function applyCanvasSize(){
+  syncChartWidthToViewport(false);
   const c=document.getElementById('chart');
   c.style.width=state.chartWidth+'px';
   c.style.height=state.chartHeight+'px';
@@ -488,6 +498,7 @@ function resetViewState(){
   draw();
 }
 function adjustChartSize(type,delta){
+  state.manualSized=true;
   if(type==='width')state.chartWidth=clamp(state.chartWidth+delta,900,3600);
   if(type==='height')state.chartHeight=clamp(state.chartHeight+delta,420,1400);
   applyCanvasSize();
@@ -503,7 +514,11 @@ function bindControls(){
   document.getElementById('widthUpBtn').addEventListener('click',()=>adjustChartSize('width',180));
   document.getElementById('heightDownBtn').addEventListener('click',()=>adjustChartSize('height',-80));
   document.getElementById('heightUpBtn').addEventListener('click',()=>adjustChartSize('height',80));
-  document.getElementById('resetViewBtn').addEventListener('click',resetViewState);
+  document.getElementById('resetViewBtn').addEventListener('click',()=>{
+    state.manualSized=false;
+    syncChartWidthToViewport(true);
+    resetViewState();
+  });
 }
 async function reloadChartOnly(){
   try{
@@ -585,8 +600,9 @@ function bindChartInteractions(){
 initTheme();
 bindControls();
 bindChartInteractions();
+syncChartWidthToViewport(true);
 applyCanvasSize();
-window.addEventListener('resize',draw);
+window.addEventListener('resize',()=>{syncChartWidthToViewport(false);draw();});
 reloadAll();
 </script>
 </body>
