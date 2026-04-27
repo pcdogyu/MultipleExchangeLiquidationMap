@@ -33,18 +33,18 @@ table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--li
 </style></head><body>
 <div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor" class="active">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a><a href="/analysis-backtest">日内回测</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')" class="active">浅色</button></div><a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a></div></div>
 <div class="wrap">
-<div class="hero"><div class="hero-title">ETH 清算雷区监控（Beta）</div><div id="heroTime" class="hero-meta">2026/4/23 11:17:07</div></div>
+<div class="hero"><div class="hero-title">ETH 清算雷区监控（Beta）</div><div id="heroTime" class="hero-meta">加载中...</div></div>
 <div class="panel topbar"><div class="hint">按 0 / 1 / 7 / 3 快捷切换 日内 / 1天 / 7天 / 30天</div><div class="btns"><button data-days="0">日内</button><button data-days="1">1天</button><button data-days="7">7天</button><button data-days="30" class="active">30天</button></div></div>
 <div class="grid">
-<div class="panel"><h3>顶部结论卡</h3><div id="topCards" class="subgrid"><div class="card"><div class="label">ETH现价</div><div class="val ">2,338.0</div></div><div class="card"><div class="label">短线倾向</div><div class="val ">偏上杀</div></div><div class="card"><div class="label">20点内失衡</div><div class="val warn">66.35百万</div></div><div class="card"><div class="label">50点内判断</div><div class="val ">上方偏强</div></div></div></div>
+<div class="panel"><h3>顶部结论卡</h3><div id="topCards" class="subgrid"><div class="card"><div class="label">ETH现价</div><div class="val ">--</div></div><div class="card"><div class="label">短线倾向</div><div class="val ">加载中</div></div><div class="card"><div class="label">20点内失衡</div><div class="val ">--</div></div><div class="card"><div class="label">50点内判断</div><div class="val ">加载中</div></div></div></div>
 <div class="panel sidebox"><h3>市场状态</h3><div id="marketState" class="state-list"><div class="state-line"><span>Binance OI</span><strong>52.78亿</strong><span class="mini">费率 0.00007830</span><span class="funding-tag">多付空</span></div><div class="state-line"><span>Bybit OI</span><strong>19.44亿</strong><span class="mini">费率 -0.00004930</span><span class="funding-tag">空付多</span></div><div class="state-line"><span>OKX OI</span><strong>15.10亿</strong><span class="mini">费率 0.00005273</span><span class="funding-tag">多付空</span></div><div class="state-line"><span>平均费率</span><strong>0.00002724</strong><span class="funding-tag">short side favored</span></div></div></div>
 </div>
 <div class="main-grid">
-<div class="panel"><h3>清算热区速报</h3><div id="heatReport"><table class="heat-report-table"><thead><tr class="title"><th colspan="6">ETH 清算雷区速报（2026.4.23 11:17）</th></tr><tr class="spot"><th>ETH现价</th><th colspan="5" class="price">2,338.00</th></tr><tr class="group"><th rowspan="2">范围</th><th colspan="2" class="down">下方多单</th><th colspan="2">上方空单</th><th rowspan="2">差值（亿）</th></tr><tr class="sub"><th class="down">价格</th><th class="down">规模（亿）</th><th>价格</th><th>规模（亿）</th></tr></thead><tbody><tr class=""><td>10点内</td><td class="down-cell">2,328.00</td><td class="down-cell">4.06</td><td class="up-cell">2,348.00</td><td class="up-cell">1.62</td><td class="diff-cell diff-long">+2.44</td></tr><tr class="alt hot"><td>20点内</td><td class="down-cell">2,318.00</td><td class="down-cell">6.52</td><td class="up-cell">2,358.00</td><td class="up-cell">2.93</td><td class="diff-cell diff-long">+3.59</td></tr><tr class=""><td>30点内</td><td class="down-cell">2,308.00</td><td class="down-cell">10.28</td><td class="up-cell">2,368.00</td><td class="up-cell">4.02</td><td class="diff-cell diff-long">+6.26</td></tr><tr class="alt "><td>40点内</td><td class="down-cell">2,298.00</td><td class="down-cell">15.36</td><td class="up-cell">2,378.00</td><td class="up-cell">5.29</td><td class="diff-cell diff-long">+10.07</td></tr><tr class="hot"><td>50点内</td><td class="down-cell">2,288.00</td><td class="down-cell">19.04</td><td class="up-cell">2,388.00</td><td class="up-cell">6.66</td><td class="diff-cell diff-long">+12.38</td></tr><tr class="alt "><td>60点内</td><td class="down-cell">2,278.00</td><td class="down-cell">20.78</td><td class="up-cell">2,398.00</td><td class="up-cell">7.99</td><td class="diff-cell diff-long">+12.79</td></tr><tr class=""><td>70点内</td><td class="down-cell">2,268.00</td><td class="down-cell">22.35</td><td class="up-cell">2,408.00</td><td class="up-cell">10.35</td><td class="diff-cell diff-long">+12.01</td></tr><tr class="alt hot"><td>80点内</td><td class="down-cell">2,258.00</td><td class="down-cell">23.69</td><td class="up-cell">2,418.00</td><td class="up-cell">12.68</td><td class="diff-cell diff-long">+11.01</td></tr><tr class=""><td>90点内</td><td class="down-cell">2,248.00</td><td class="down-cell">24.59</td><td class="up-cell">2,428.00</td><td class="up-cell">15.00</td><td class="diff-cell diff-long">+9.59</td></tr><tr class="alt hot"><td>100点内</td><td class="down-cell">2,238.00</td><td class="down-cell">25.10</td><td class="up-cell">2,438.00</td><td class="up-cell">16.65</td><td class="diff-cell diff-long">+8.45</td></tr><tr class=""><td>150点内</td><td class="down-cell">2,188.00</td><td class="down-cell">34.34</td><td class="up-cell">2,488.00</td><td class="up-cell">22.45</td><td class="diff-cell diff-long">+11.88</td></tr><tr class="alt hot"><td>200点内</td><td class="down-cell">2,138.00</td><td class="down-cell">37.96</td><td class="up-cell">2,538.00</td><td class="up-cell">26.74</td><td class="diff-cell diff-long">+11.22</td></tr><tr class=""><td>250点内</td><td class="down-cell">2,088.00</td><td class="down-cell">39.98</td><td class="up-cell">2,588.00</td><td class="up-cell">28.17</td><td class="diff-cell diff-long">+11.81</td></tr><tr class="alt hot"><td>300点内</td><td class="down-cell">2,038.00</td><td class="down-cell">39.98</td><td class="up-cell">2,638.00</td><td class="up-cell">30.92</td><td class="diff-cell diff-long">+9.06</td></tr><tr class="longest"><td>最长柱</td><td class="down-cell">2,286.00</td><td class="down-cell">1.44</td><td class="up-cell">2,467.50</td><td class="up-cell">2.63</td><td class="diff-cell diff-short">-1.19</td></tr></tbody></table></div></div>
+<div class="panel"><h3>清算热区速报</h3><div id="heatReport"><div class="hint">加载中...</div></div></div>
 <div class="stack"><div class="panel"><h3>失衡统计</h3><div id="imbalanceStats"><div class="metric"><span>20点内</span><strong class="">上方 91.24百万 / 下方 24.89百万 / 上方偏强</strong></div><div class="metric"><span>50点内</span><strong class="">上方 2.13亿 / 下方 61.53百万 / 上方偏强</strong></div><div class="metric"><span>100点内</span><strong class="">上方 3.01亿 / 下方 68.88百万 / 上方偏强</strong></div></div></div><div class="panel"><h3>密度分层</h3><div id="densityLayers"><table><thead><tr><th>区间</th><th>上方空单</th><th>下方多单</th></tr></thead><tbody><tr><td>0-20pt</td><td>91.24百万</td><td>24.89百万</td></tr><tr><td>20-50pt</td><td>1.22亿</td><td>36.64百万</td></tr><tr><td>50-100pt</td><td>87.70百万</td><td>7.34百万</td></tr></tbody></table></div></div><div class="panel"><h3>变化跟踪（较上一时点）</h3><div id="changeTrack"><div class="metric"><span>20点内上方空单</span><strong class="">0.0万</strong></div><div class="metric"><span>20点内下方多单</span><strong class="warn">2.6万</strong></div><div class="metric"><span>最长柱变化</span><strong class="warn">35.0万</strong></div><div class="metric"><span>Funding变化</span><strong class="good">-0.00000063</strong></div></div></div></div>
 </div>
 <div class="triple">
-<div class="panel"><h3>最长柱 / 核心磁区</h3><div id="coreZone"><div class="metric"><span>上方最长柱</span><strong class="warn">2,467.5 / 2.63亿</strong></div><div class="metric"><span>下方最长柱</span><strong class="good">2,286.0 / 1.44亿</strong></div><div class="metric"><span>最近强区</span><strong class="">2,286.0 / 52.0点</strong></div><div class="metric"><span>方向</span><strong class="">下方强区</strong></div></div></div>
+<div class="panel"><h3>最长柱 / 核心磁区</h3><div id="coreZone"><div class="hint">加载中...</div></div></div>
 <div class="panel"><h3>交易所贡献拆分（10点内）</h3><div id="exchangeContrib"><div class="bar-row"><div>OKX</div><div class="bar"><div class="fill" style="width:60.84878849169657%"></div></div><div>61%</div></div><div class="bar-row"><div>Binance</div><div class="bar"><div class="fill" style="width:31.85454866630564%"></div></div><div>32%</div></div><div class="bar-row"><div>Bybit</div><div class="bar"><div class="fill" style="width:7.296662841997806%"></div></div><div>7%</div></div><div class="mini">主贡献交易所：OKX</div></div></div>
 <div class="panel"><h3>预警与已发生清算</h3><div id="alerts"><div class="metric"><span>当前预警</span><strong class="danger">临近强区预警</strong></div><div class="metric"><span>最近事件</span><strong class="">Binance / long / 2,337.9</strong></div><div class="metric"><span>近1分钟清算</span><strong class="warn">55.5万</strong></div><div class="metric"><span>Binance / Bybit / OKX</span><strong class="">54.3万 / 1.2万 / 0.0万</strong></div><div class="metric"><span>建议</span><strong class="">2358.0 / 2318.0 警惕上下双向插针风险</strong></div></div></div>
 </div>
@@ -55,6 +55,9 @@ let monitorLiqMapData=null;
 let monitorWebMap=null;
 let monitorLoadSeq=0;
 let monitorLoadState={pending:false,done:false,days:currentDays,error:'',heatReady:false,seq:0};
+const monitorCaptureMode=(function(){
+  try{return new URLSearchParams(window.location.search).get('capture')==='1';}catch(_){return false;}
+})();
 
 function normalizeWindowDays(value){
   const n=Number(value);
@@ -151,14 +154,31 @@ function signedAmountYiDiff(longValue,shortValue){
   if(diff<0) return '-'+amountYi(Math.abs(diff));
   return '0.00';
 }
-function formatHeatReportDateTime(ts){
+function formatMonitorUtc8DateTime(ts){
   const d=new Date(ts||Date.now());
-  const y=d.getFullYear();
-  const m=d.getMonth()+1;
-  const day=d.getDate();
-  const hh=String(d.getHours()).padStart(2,'0');
-  const mm=String(d.getMinutes()).padStart(2,'0');
+  if(!isFinite(d.getTime())) return '-';
+  const parts=new Intl.DateTimeFormat('zh-CN',{
+    timeZone:'Asia/Shanghai',
+    year:'numeric',
+    month:'numeric',
+    day:'numeric',
+    hour:'2-digit',
+    minute:'2-digit',
+    hour12:false
+  }).formatToParts(d);
+  const values={};
+  parts.forEach(function(part){
+    if(part&&part.type&&part.type!=='literal') values[part.type]=part.value;
+  });
+  const y=values.year||String(d.getUTCFullYear());
+  const m=String(values.month||1);
+  const day=String(values.day||1);
+  const hh=String(values.hour||'00').padStart(2,'0');
+  const mm=String(values.minute||'00').padStart(2,'0');
   return y+'.'+m+'.'+day+' '+hh+':'+mm;
+}
+function formatHeatReportDateTime(ts){
+  return formatMonitorUtc8DateTime(ts);
 }
 
 function biasClassByText(v){
@@ -212,6 +232,18 @@ function roundMonitorPrice1(v){
   const n=Number(v);
   if(!(isFinite(n)&&n>0)) return 0;
   return Math.round(n*10)/10;
+}
+
+function getMonitorFetchedCurrentPrice(){
+  return roundMonitorPrice1(monitorWebMap&&monitorWebMap.current_price);
+}
+
+function resolveMonitorDisplayPrice(fallback){
+  const webPrice=getMonitorFetchedCurrentPrice();
+  if(webPrice>0) return webPrice;
+  const dashPrice=roundMonitorPrice1(fallback);
+  if(dashPrice>0) return dashPrice;
+  return roundMonitorPrice1(monitorLiqMapData&&monitorLiqMapData.current_price);
 }
 
 function buildMonitorModelPoints(model){
@@ -310,7 +342,7 @@ function buildHeatBandsFromModel(model,anchorPrice){
 
 function buildHeatBandsFromWebMap(map,anchorPrice){
   if(!map||!map.has_data||!Array.isArray(map.points)||!map.points.length) return [];
-  const cp=roundMonitorPrice1(anchorPrice||(map&&map.current_price));
+  const cp=roundMonitorPrice1((map&&map.current_price)||anchorPrice);
   if(!(cp>0)) return [];
   const groups=buildMonitorWebGroups(map);
   if(!groups.length) return [];
@@ -358,7 +390,7 @@ function buildPeakSummaryFromModel(model,anchorPrice){
 
 function buildPeakSummaryFromWebMap(map,anchorPrice){
   if(!map||!map.has_data||!Array.isArray(map.points)||!map.points.length) return null;
-  const cp=roundMonitorPrice1(anchorPrice||(map&&map.current_price));
+  const cp=roundMonitorPrice1((map&&map.current_price)||anchorPrice);
   if(!(cp>0)) return null;
   const groups=buildMonitorWebGroups(map);
   if(!groups.length) return null;
@@ -376,7 +408,7 @@ function buildPeakSummaryFromWebMap(map,anchorPrice){
 }
 
 function resolveMonitorPeaks(anchorPrice){
-  const cp=roundMonitorPrice1(anchorPrice||(monitorLiqMapData&&monitorLiqMapData.current_price)||(monitorWebMap&&monitorWebMap.current_price));
+  const cp=roundMonitorPrice1((monitorWebMap&&monitorWebMap.current_price)||anchorPrice||(monitorLiqMapData&&monitorLiqMapData.current_price));
   return buildPeakSummaryFromWebMap(monitorWebMap,cp)||buildPeakSummaryFromModel(monitorLiqMapData,cp)||{source:'none',up:{price:0,v:0,cum:0},down:{price:0,v:0,cum:0}};
 }
 
@@ -415,39 +447,8 @@ function renderTopCards(d){
     '<div class="state-line"><span>平均费率</span><strong>'+fmtFunding(market.avg_funding)+'</strong><span class="funding-tag">'+(market.avg_funding_verdict||'-')+'</span></div>';
 }
 
-function renderHeatReport(d){
-  const wrap=document.getElementById('heatReport');
-  if(!wrap) return;
-  const anchorPrice=Number(d.current_price||0);
-  const webBands=buildHeatBandsFromWebMap(monitorWebMap,anchorPrice);
-  const bands=webBands.length?webBands:buildHeatBandsFromModel(monitorLiqMapData,anchorPrice);
-  if(!bands.length){
-    wrap.innerHTML='<div class="hint">暂无数据</div>';
-    return;
-  }
-  const peaks=resolveMonitorPeaks(anchorPrice);
-  const topUp=(peaks&&peaks.up)||{price:0,v:0,cum:0};
-  const topDown=(peaks&&peaks.down)||{price:0,v:0,cum:0};
-  const hot={20:true,50:true,80:true,100:true,200:true,300:true};
-  const dateText=formatHeatReportDateTime(d.generated_at||Date.now());
-  let html='<table class="heat-report-table"><thead>'+
-    '<tr class="title"><th colspan="6">ETH 清算雷区速报（'+dateText+'）</th></tr>'+
-    '<tr class="spot"><th>ETH现价</th><th colspan="5" class="price">'+fmtHeatPrice(d.current_price)+'</th></tr>'+
-    '<tr class="group"><th rowspan="2">范围</th><th colspan="2">上方空单</th><th colspan="2" class="down">下方多单</th><th rowspan="2">差值（亿）</th></tr>'+
-    '<tr class="sub"><th>价格</th><th>规模（亿）</th><th class="down">价格</th><th class="down">规模（亿）</th></tr>'+
-    '</thead><tbody>';
-  for(let i=0;i<bands.length;i++){
-    const b=bands[i];
-    const up=Number(b.up_notional_usd||0);
-    const down=Number(b.down_notional_usd||0);
-    const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
-    const diffClass=down>up?'diff-long':(up>down?'diff-short':'diff-flat');
-    html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="up-cell">'+fmtHeatPrice(b.up_price)+'</td><td class="up-cell">'+amountYi(up)+'</td><td class="down-cell">'+fmtHeatPrice(b.down_price)+'</td><td class="down-cell">'+amountYi(down)+'</td><td class="diff-cell '+diffClass+'">'+amountYi(Math.abs(down-up))+'</td></tr>';
-  }
-  const longestDiffClass=topDown.v>topUp.v?'diff-long':(topUp.v>topDown.v?'diff-short':'diff-flat');
-  html+='<tr class="longest"><td>最长柱</td><td class="up-cell">'+fmtHeatPrice(topUp.price)+'</td><td class="up-cell">'+amountYi(topUp.v)+'</td><td class="down-cell">'+fmtHeatPrice(topDown.price)+'</td><td class="down-cell">'+amountYi(topDown.v)+'</td><td class="diff-cell '+longestDiffClass+'">'+amountYi(Math.abs(topDown.v-topUp.v))+'</td></tr></tbody></table>';
-  wrap.innerHTML=html;
-}
+
+
 
 function renderHeatReport(d){
   const wrap=document.getElementById('heatReport');
@@ -468,7 +469,7 @@ function renderHeatReport(d){
     '<tr class="title"><th colspan="6">ETH 清算雷区速报（'+dateText+'）</th></tr>'+
     '<tr class="spot"><th>ETH现价</th><th colspan="5" class="price">'+fmtHeatPrice(d.current_price)+'</th></tr>'+
     '<tr class="group"><th rowspan="2">范围</th><th colspan="2" class="down">下方多单</th><th colspan="2">上方空单</th><th rowspan="2">差值（亿）</th></tr>'+
-    '<tr class="sub"><th class="down">价格</th><th class="down">规模（亿）</th><th>价格</th><th>规模（亿）</th></tr>'+
+    '<tr class="sub"><th class="down">价格</th><th class="down">累计（亿）</th><th>价格</th><th>累计（亿）</th></tr>'+
     '</thead><tbody>';
   for(let i=0;i<bands.length;i++){
     const b=bands[i];
@@ -529,64 +530,6 @@ function renderTrack(d){
     metricRow('Funding变化',fmtFunding(t.funding_delta),deltaClass(t.funding_delta));
 }
 
-function renderCore(d){
-  const c=((d.analytics||{}).core_zone)||{};
-  const el=document.getElementById('coreZone');
-  if(!el) return;
-  const peaks=resolveMonitorPeaks();
-  const cp=Number(d.current_price||0);
-  const up=(peaks&&peaks.up&&peaks.up.v>0)?peaks.up:{price:Number(c.up_price||0),v:Number(c.up_notional_usd||0)};
-  const down=(peaks&&peaks.down&&peaks.down.v>0)?peaks.down:{price:Number(c.down_price||0),v:Number(c.down_notional_usd||0)};
-  let nearestSide=String(c.nearest_side||'-');
-  let nearestPrice=Number(c.nearest_strong_price||0);
-  let nearestDist=Number(c.nearest_distance||0);
-  const upDist=(cp>0&&up.price>0)?Math.abs(up.price-cp):Infinity;
-  const downDist=(cp>0&&down.price>0)?Math.abs(cp-down.price):Infinity;
-  if(upDist<downDist){
-    nearestSide='上方强区';
-    nearestPrice=up.price;
-    nearestDist=upDist;
-  }else if(downDist<Infinity){
-    nearestSide='下方强区';
-    nearestPrice=down.price;
-    nearestDist=downDist;
-  }
-  el.innerHTML=
-    metricRow('上方最长柱',fmtPrice(up.price)+' / '+fmtAmount(up.v),'warn')+
-    metricRow('下方最长柱',fmtPrice(down.price)+' / '+fmtAmount(down.v),'good')+
-    metricRow('最近强区',fmtPrice(nearestPrice)+' / '+(isFinite(Number(nearestDist))?Number(nearestDist).toFixed(1):'-')+'点',biasClassByText(nearestSide))+
-    metricRow('方向',String(nearestSide||'-'));
-}
-
-function renderCore(d){
-  const c=((d.analytics||{}).core_zone)||{};
-  const el=document.getElementById('coreZone');
-  if(!el) return;
-  const peaks=resolveMonitorPeaks(Number(d.current_price||0));
-  const cp=Number(d.current_price||0);
-  const up=(peaks&&peaks.up&&peaks.up.v>0)?peaks.up:{price:Number(c.up_price||0),v:Number(c.up_notional_usd||0),cum:Number(c.up_notional_usd||0)};
-  const down=(peaks&&peaks.down&&peaks.down.v>0)?peaks.down:{price:Number(c.down_price||0),v:Number(c.down_notional_usd||0),cum:Number(c.down_notional_usd||0)};
-  let nearestSide=String(c.nearest_side||'-');
-  let nearestPrice=Number(c.nearest_strong_price||0);
-  let nearestDist=Number(c.nearest_distance||0);
-  const upDist=(cp>0&&up.price>0)?Math.abs(up.price-cp):Infinity;
-  const downDist=(cp>0&&down.price>0)?Math.abs(cp-down.price):Infinity;
-  if(upDist<downDist){
-    nearestSide='涓婃柟寮哄尯';
-    nearestPrice=up.price;
-    nearestDist=upDist;
-  }else if(downDist<Infinity){
-    nearestSide='涓嬫柟寮哄尯';
-    nearestPrice=down.price;
-    nearestDist=downDist;
-  }
-  el.innerHTML=
-    metricRow('涓婃柟鏈€闀挎煴',fmtPrice(up.price)+' / '+fmtAmount(up.cum||up.v),'warn')+
-    metricRow('涓嬫柟鏈€闀挎煴',fmtPrice(down.price)+' / '+fmtAmount(down.cum||down.v),'good')+
-    metricRow('鏈€杩戝己鍖?,fmtPrice(nearestPrice)+' / '+(isFinite(Number(nearestDist))?Number(nearestDist).toFixed(1):'-')+'鐐?,biasClassByText(nearestSide))+
-    metricRow('鏂瑰悜',String(nearestSide||'-'));
-}
-
 function renderContrib(d){
   const rows=((d.analytics||{}).exchange_contrib)||[];
   const el=document.getElementById('exchangeContrib');
@@ -632,7 +575,7 @@ function renderHeatReport(d){
     '<tr class="title"><th colspan="6">ETH 清算雷区速报（'+dateText+'）</th></tr>'+
     '<tr class="spot"><th>ETH现价</th><th colspan="5" class="price">'+fmtHeatPrice(d.current_price)+'</th></tr>'+
     '<tr class="group"><th rowspan="2">范围</th><th colspan="2" class="down">下方多单</th><th colspan="2">上方空单</th><th rowspan="2">差值（亿）</th></tr>'+
-    '<tr class="sub"><th class="down">价格</th><th class="down">规模（亿）</th><th>价格</th><th>规模（亿）</th></tr>'+
+    '<tr class="sub"><th class="down">价格</th><th class="down">累计（亿）</th><th>价格</th><th>累计（亿）</th></tr>'+
     '</thead><tbody>';
   for(let i=0;i<bands.length;i++){
     const b=bands[i];
@@ -704,9 +647,15 @@ async function load(opts){
     if(currentDays==null) currentDays=loadDays;
     const webWindow=windowKeyForDays(currentDays);
     monitorWebMap=webWindow?await fetch('/api/webdatasource/map?window='+encodeURIComponent(webWindow)).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}):null;
+    const fetchedCurrentPrice=getMonitorFetchedCurrentPrice();
+    const monitorDisplayPrice=fetchedCurrentPrice>0?fetchedCurrentPrice:resolveMonitorDisplayPrice(d&&d.current_price);
+    if(monitorDisplayPrice>0){
+      d.current_price=monitorDisplayPrice;
+      if(monitorLiqMapData&&!(roundMonitorPrice1(monitorLiqMapData.current_price)>0)) monitorLiqMapData.current_price=monitorDisplayPrice;
+    }
     renderActive();
     const heroTime=document.getElementById('heroTime');
-    if(heroTime) heroTime.textContent=new Date(d.generated_at||Date.now()).toLocaleString('zh-CN',{hour12:false});
+    if(heroTime) heroTime.textContent=formatMonitorUtc8DateTime(d.generated_at||Date.now());
     renderTopCards(d);
     renderHeatReport(d);
     renderImbalance(d);
@@ -723,7 +672,9 @@ async function load(opts){
     if(seq!==monitorLoadSeq) return false;
     const msg=String((err&&err.message)||err||'load failed').trim();
     const wrap=document.getElementById('heatReport');
-    if(wrap&&!String(wrap.textContent||'').trim()) wrap.innerHTML='<div class="hint">加载失败</div>';
+    if(wrap) wrap.innerHTML='<div class="hint">加载失败：'+msg+'</div>';
+    const core=document.getElementById('coreZone');
+    if(core) core.innerHTML='<div class="hint">加载失败：'+msg+'</div>';
     updateMonitorLoadState({pending:false,done:true,days:currentDays,error:msg,heatReady:false,seq:seq});
     throw err;
   }
@@ -783,7 +734,9 @@ document.addEventListener('keydown',function(e){
   if(e.key==='7') setWindow(7).catch(function(){});
   if(e.key==='3') setWindow(30).catch(function(){});
 });
-setInterval(function(){load().catch(function(){});},5000);
+if(!monitorCaptureMode){
+  setInterval(function(){load().catch(function(){});},5000);
+}
 const preferredMonitorDays=loadRequestedWindowDays();
 if(preferredMonitorDays!=null&&preferredMonitorDays!==currentDays){
   saveSharedWindowDays(preferredMonitorDays);

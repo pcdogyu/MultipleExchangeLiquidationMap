@@ -835,7 +835,7 @@ func (a *App) renderHeatReportPNG(r HeatReportData) ([]byte, error) {
 		longestDiffClass = "diff-short"
 	}
 	rows.WriteString(fmt.Sprintf(`<tr class="longest"><td>鏈€闀挎煴</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
-		r.LongPeak.Price, r.LongPeak.SingleUSD/1e8, r.ShortPeak.Price, r.ShortPeak.SingleUSD/1e8, longestDiffClass, math.Abs(r.LongPeak.SingleUSD-r.ShortPeak.SingleUSD)/1e8))
+		r.LongPeak.Price, r.LongPeak.CumulativeUSD/1e8, r.ShortPeak.Price, r.ShortPeak.CumulativeUSD/1e8, longestDiffClass, math.Abs(r.LongPeak.CumulativeUSD-r.ShortPeak.CumulativeUSD)/1e8))
 	html := `<!doctype html><html><head><meta charset="utf-8"><style>
 body{margin:0;background:#fff;font-family:Arial,"Microsoft YaHei",sans-serif;color:#34445a}
 .shot{width:974px;background:#fff}
@@ -904,7 +904,7 @@ func buildHeatReportTableHTML(r HeatReportData) string {
 		longestDiffClass = "diff-short"
 	}
 	rows.WriteString(fmt.Sprintf(`<tr class="longest"><td>鏈€闀挎煴</td><td>%.1f</td><td>%.2f</td><td>%.1f</td><td>%.2f</td><td class="diff-cell %s">%.2f</td></tr>`,
-		r.LongPeak.Price, r.LongPeak.SingleUSD/1e8, r.ShortPeak.Price, r.ShortPeak.SingleUSD/1e8, longestDiffClass, math.Abs(r.LongPeak.SingleUSD-r.ShortPeak.SingleUSD)/1e8))
+		r.LongPeak.Price, r.LongPeak.CumulativeUSD/1e8, r.ShortPeak.Price, r.ShortPeak.CumulativeUSD/1e8, longestDiffClass, math.Abs(r.LongPeak.CumulativeUSD-r.ShortPeak.CumulativeUSD)/1e8))
 	return `<!doctype html><html><head><meta charset="utf-8"></head><body><table><thead>` +
 		`<tr class="group"><th rowspan="2">Band</th><th colspan="2" class="down">Lower Longs</th><th colspan="2">Upper Shorts</th><th rowspan="2">Diff (yi)</th></tr>` +
 		`<tr class="sub"><th class="down">Price</th><th class="down">Size (yi)</th><th>Price</th><th>Size (yi)</th></tr>` +
@@ -1039,7 +1039,7 @@ func captureCanvasJPEGWithScale(pageURL, selector string, width, height int, dev
 }
 
 func (a *App) captureMonitorScreenshotJPEG(windowDays int) ([]byte, error) {
-	pageURL := fmt.Sprintf("http://127.0.0.1%s/monitor", defaultServerAddr)
+	pageURL := fmt.Sprintf("http://127.0.0.1%s/monitor?capture=1", defaultServerAddr)
 	prepare := fmt.Sprintf(`(async()=>{ if (typeof setTheme==='function') setTheme('light'); if (typeof setWindow==='function') { await setWindow(%d); } return true; })()`, windowDays)
 	wait := fmt.Sprintf(`(function(){ const btn=document.querySelector('.btns button[data-days=%q]'); const wrap=document.getElementById('heatReport'); const state=window.__monitorLoadState||{}; if(!btn || !btn.classList.contains('active') || !wrap) return false; if(state.pending) return false; if(!state.done) return false; if(Number(state.days||-1)!==%d) return false; if(state.error) return false; const table=wrap.querySelector('table'); const hint=(wrap.textContent||'').trim(); return !!(state.heatReady || table || hint.length>0); })()`, strconv.Itoa(windowDays), windowDays)
 	return captureElementJPEG(pageURL, "#heatReport", 1440, 1200, prepare, wait)
@@ -5266,6 +5266,9 @@ let monitorLatestClose=0;
 let monitorDisplayPrice=0;
 let monitorLoadSeq=0;
 let monitorLoadState={pending:false,done:false,days:currentDays,error:'',heatReady:false,seq:0};
+const monitorCaptureMode=(function(){
+  try{return new URLSearchParams(window.location.search).get('capture')==='1';}catch(_){return false;}
+})();
 
 function normalizeWindowDays(value){
   const n=Number(value);
@@ -5362,14 +5365,31 @@ function signedAmountYiDiff(longValue,shortValue){
   if(diff<0) return '-'+amountYi(Math.abs(diff));
   return '0.00';
 }
-function formatHeatReportDateTime(ts){
+function formatMonitorUtc8DateTime(ts){
   const d=new Date(ts||Date.now());
-  const y=d.getFullYear();
-  const m=d.getMonth()+1;
-  const day=d.getDate();
-  const hh=String(d.getHours()).padStart(2,'0');
-  const mm=String(d.getMinutes()).padStart(2,'0');
+  if(!isFinite(d.getTime())) return '-';
+  const parts=new Intl.DateTimeFormat('zh-CN',{
+    timeZone:'Asia/Shanghai',
+    year:'numeric',
+    month:'numeric',
+    day:'numeric',
+    hour:'2-digit',
+    minute:'2-digit',
+    hour12:false
+  }).formatToParts(d);
+  const values={};
+  parts.forEach(function(part){
+    if(part&&part.type&&part.type!=='literal') values[part.type]=part.value;
+  });
+  const y=values.year||String(d.getUTCFullYear());
+  const m=String(values.month||1);
+  const day=String(values.day||1);
+  const hh=String(values.hour||'00').padStart(2,'0');
+  const mm=String(values.minute||'00').padStart(2,'0');
   return y+'.'+m+'.'+day+' '+hh+':'+mm;
+}
+function formatHeatReportDateTime(ts){
+  return formatMonitorUtc8DateTime(ts);
 }
 
 function biasClassByText(v){
@@ -5425,8 +5445,12 @@ function roundMonitorPrice1(v){
   return Math.round(n*10)/10;
 }
 
+function getMonitorFetchedCurrentPrice(){
+  return roundMonitorPrice1(monitorWebMap&&monitorWebMap.current_price);
+}
+
 function resolveMonitorDisplayPrice(fallback){
-  const webPrice=roundMonitorPrice1(monitorWebMap&&monitorWebMap.current_price);
+  const webPrice=getMonitorFetchedCurrentPrice();
   if(webPrice>0) return webPrice;
   const dashPrice=roundMonitorPrice1(fallback);
   if(dashPrice>0) return dashPrice;
@@ -5784,8 +5808,8 @@ function renderCore(d){
     nearestDist=downDist;
   }
   el.innerHTML=
-    metricRow('涓婃柟鏈€闀挎煴',fmtPrice(up.price)+' / '+fmtAmount(up.v),'warn')+
-    metricRow('涓嬫柟鏈€闀挎煴',fmtPrice(down.price)+' / '+fmtAmount(down.v),'good')+
+    metricRow('涓婃柟鏈€闀挎煴',fmtPrice(up.price)+' / '+fmtAmount(up.cum||up.v),'warn')+
+    metricRow('涓嬫柟鏈€闀挎煴',fmtPrice(down.price)+' / '+fmtAmount(down.cum||down.v),'good')+
     metricRow('鏈€杩戝己鍖?,fmtPrice(nearestPrice)+' / '+(isFinite(Number(nearestDist))?Number(nearestDist).toFixed(1):'-')+'鐐?,biasClassByText(nearestSide))+
     metricRow('鏂瑰悜',String(nearestSide||'-'));
 }
@@ -5941,11 +5965,15 @@ async function load(opts){
     if(seq!==monitorLoadSeq) return false;
     monitorWebMap=auxResponses[0];
     monitorLatestClose=0;
-    monitorDisplayPrice=resolveMonitorDisplayPrice(d&&d.current_price);
-    if(monitorDisplayPrice>0) d.current_price=monitorDisplayPrice;
+    const fetchedCurrentPrice=getMonitorFetchedCurrentPrice();
+    monitorDisplayPrice=fetchedCurrentPrice>0?fetchedCurrentPrice:resolveMonitorDisplayPrice(d&&d.current_price);
+    if(monitorDisplayPrice>0){
+      d.current_price=monitorDisplayPrice;
+      if(monitorLiqMapData&&!(roundMonitorPrice1(monitorLiqMapData.current_price)>0)) monitorLiqMapData.current_price=monitorDisplayPrice;
+    }
     renderActive();
     const heroTime=document.getElementById('heroTime');
-    if(heroTime) heroTime.textContent=new Date(d.generated_at||Date.now()).toLocaleString('zh-CN',{hour12:false});
+    if(heroTime) heroTime.textContent=formatMonitorUtc8DateTime(d.generated_at||Date.now());
     renderTopCards(d);
     renderHeatReport(d);
     renderImbalance(d);
@@ -6022,7 +6050,9 @@ document.addEventListener('keydown',function(e){
   if(e.key==='7') setWindow(7).catch(function(){});
   if(e.key==='3') setWindow(30).catch(function(){});
 });
-setInterval(function(){load().catch(function(){});},5000);
+if(!monitorCaptureMode){
+  setInterval(function(){load().catch(function(){});},5000);
+}
 const preferredMonitorDays=loadRequestedWindowDays();
 if(preferredMonitorDays!=null&&preferredMonitorDays!==currentDays){
   saveSharedWindowDays(preferredMonitorDays);
