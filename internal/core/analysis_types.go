@@ -139,10 +139,63 @@ type AnalysisBacktestSummary struct {
 	CorrectRate  float64 `json:"correct_rate"`
 }
 
+type AnalysisBacktestFilters struct {
+	RequestedHours int     `json:"requested_hours"`
+	WindowHours    int     `json:"window_hours"`
+	MinConfidence  float64 `json:"min_confidence"`
+	Horizons       []int   `json:"horizons"`
+	DataStartTS    int64   `json:"data_start_ts"`
+	DataEndTS      int64   `json:"data_end_ts"`
+}
+
+type AnalysisBacktestFactorSummary struct {
+	Emitted         int     `json:"emitted"`
+	Verified        int     `json:"verified"`
+	Correct         int     `json:"correct"`
+	Wrong           int     `json:"wrong"`
+	Pending         int     `json:"pending"`
+	NoData          int     `json:"no_data"`
+	WinRateVerified float64 `json:"win_rate_verified"`
+}
+
+type AnalysisBacktestHorizonSummary struct {
+	HorizonMin int                          `json:"horizon_min"`
+	Single     AnalysisBacktestFactorSummary `json:"single"`
+	Composite  AnalysisBacktestFactorSummary `json:"composite"`
+	Winner     string                       `json:"winner"`
+}
+
+type AnalysisBacktestHorizonResult struct {
+	HorizonMin       int     `json:"horizon_min"`
+	VerifyDueTS      int64   `json:"verify_due_ts"`
+	VerifyClosePrice float64 `json:"verify_close_price,omitempty"`
+	Result           string  `json:"result"`
+	DeltaPrice       float64 `json:"delta_price,omitempty"`
+	DeltaPct         float64 `json:"delta_pct,omitempty"`
+}
+
+type AnalysisBacktestFactorSignal struct {
+	Included      bool                           `json:"included"`
+	Direction     string                         `json:"direction"`
+	Confidence    float64                        `json:"confidence"`
+	SignalPrice   float64                        `json:"signal_price"`
+	ShortRisk     float64                        `json:"short_risk_score"`
+	LongRisk      float64                        `json:"long_risk_score"`
+	HorizonResults []AnalysisBacktestHorizonResult `json:"horizon_results"`
+}
+
+type AnalysisBacktestPairedSignal struct {
+	SignalTS      int64                        `json:"signal_ts"`
+	Symbol        string                       `json:"symbol"`
+	SnapshotPrice float64                      `json:"snapshot_price"`
+	Single        AnalysisBacktestFactorSignal `json:"single"`
+	Composite     AnalysisBacktestFactorSignal `json:"composite"`
+}
+
 type AnalysisBacktestPageResponse struct {
-	Candles []map[string]any        `json:"candles"`
-	Signals []AnalysisSignalResult  `json:"signals"`
-	Summary AnalysisBacktestSummary `json:"summary"`
+	Filters          AnalysisBacktestFilters          `json:"filters"`
+	HorizonSummaries []AnalysisBacktestHorizonSummary `json:"horizon_summaries"`
+	PairedSignals    []AnalysisBacktestPairedSignal   `json:"paired_signals"`
 }
 
 type AnalysisBacktestHistoryResponse struct {
