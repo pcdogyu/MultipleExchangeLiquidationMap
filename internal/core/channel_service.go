@@ -320,9 +320,9 @@ func normalizeLegacyTelegramHistoryErrorText(v string) string {
 		return v
 	}
 	replacer := strings.NewReplacer(
-		"缁?缂佸嫭鏆熼幑顔惧繁婢?", "鏁版嵁缂哄け:",
-		"缁?缂佸嫭鍩呴崶鎯с亼鐠?", "鎴浘澶辫触:",
-		"缁?缂佸嫬褰傞柅浣搞亼鐠?", "鍙戦€佸け璐?",
+		"缁?缂佸嫭鏆熼幑顔惧繁婢?", "\u6570\u636e\u7f3a\u5931:",
+		"缁?缂佸嫭鍩呴崶鎯ં亼鐠?", "\u622a\u56fe\u5931\u8d25:",
+		"缁?缂佸嫬褰傞柅浣搞亼鐠?", "\u53d1\u9001\u5931\u8d25:",
 	)
 	v = replacer.Replace(v)
 	return strings.TrimSpace(v)
