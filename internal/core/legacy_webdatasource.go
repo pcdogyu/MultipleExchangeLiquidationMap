@@ -1,4 +1,4 @@
-package liqmap
+﻿package liqmap
 
 import (
 	"context"
@@ -2850,7 +2850,7 @@ func (m *WebDataSourceManager) captureWindowV2(session *webDataSourceSession, pr
 				return rect.width > 0 && rect.height > 0;
 			};
 			const dayNum = %q;
-			const wants = new Set([norm(%q), dayNum, dayNum + 'd', dayNum + 'day', dayNum + 'days', dayNum + 'day(s)', dayNum + ' day']);
+			const wants = new Set([norm(%q), dayNum, dayNum + 'd', dayNum + 'day', dayNum + 'days', dayNum + 'day(s)', dayNum + ' day', dayNum + '\u5929', dayNum + '\u65e5']);
 			const root = `+findPeriodRootJS+`;
 			const hidden = root ? root.querySelector('input[aria-hidden="true"]') : null;
 			const button = root ? root.querySelector('button[role="combobox"]') : null;
@@ -2873,7 +2873,7 @@ func (m *WebDataSourceManager) captureWindowV2(session *webDataSourceSession, pr
 			if (!hit) {
 				hit = candidates.find(item => {
 					const digits = item.text.replace(/[^0-9]/g, '');
-					return item.value === dayNum || digits === dayNum || (item.text.includes(dayNum) && item.text.includes('day'));
+					return item.value === dayNum || digits === dayNum || (item.text.includes(dayNum) && (item.text.includes('day') || item.text.includes('\u5929') || item.text.includes('\u65e5')));
 				});
 			}
 			const debug = 'popup=' + (popupId || '(none)') + ' options=' + candidates.slice(0, 8).map(item => item.rawText || item.value || '(blank)').join(' | ');
@@ -2967,10 +2967,10 @@ func (m *WebDataSourceManager) captureWindowV2(session *webDataSourceSession, pr
 				dayNum + ' day',
 				dayNum + 'day',
 				dayNum + 'days',
-				dayNum + 'day(s)' /*
-				dayNum + '天',
-				dayNum + '日'
-			*/ ]);
+				dayNum + 'day(s)',
+				dayNum + '\u5929',
+				dayNum + '\u65e5'
+			]);
 			const root = `+findPeriodRootJS+`;
 			const hidden = root ? root.querySelector('input[aria-hidden="true"]') : null;
 			const button = root ? root.querySelector('button[role="combobox"]') : null;
@@ -3004,15 +3004,8 @@ func (m *WebDataSourceManager) captureWindowV2(session *webDataSourceSession, pr
 				hit = candidates.find(item => {
 					const text = item.text;
 					const value = item.value;
-					return value === dayNum || (text.includes(dayNum) && (text.includes('day') || text.includes('澶? || text.includes('鏃?)));
-				});
-			*/ }
-			if (!hit) {
-				hit = candidates.find(item => {
-					const text = item.text;
-					const value = item.value;
 					const digits = text.replace(/[^0-9]/g, '');
-					return value === dayNum || digits === dayNum || (text.includes(dayNum) && text.includes('day'));
+					return value === dayNum || digits === dayNum || (text.includes(dayNum) && (text.includes('day') || text.includes('\u5929') || text.includes('\u65e5')));
 				});
 			}
 			const debug = 'popup=' + (popupId || '(none)') + ' options=' + candidates.slice(0, 8).map(item => item.rawText || item.value || '(blank)').join(' | ');
@@ -3335,10 +3328,14 @@ func (m *WebDataSourceManager) captureWindow(session *webDataSourceSession, prog
 			const dayNum = %d;
 			const wants = new Set([
 				norm(%q),
+				dayNum,
 				dayNum + 'd',
+				dayNum + ' day',
 				dayNum + 'day',
 				dayNum + 'days',
-				dayNum + '天'
+				dayNum + 'day(s)',
+				dayNum + '\u5929',
+				dayNum + '\u65e5'
 			]);
 			const optionSel = '[role="option"], [role="menuitem"], .MuiOption-root, .MuiMenuItem-root, li[class*="Option"], li[class*="option"], li[class*="MenuItem"], [data-value]';
 			const all = Array.from(document.querySelectorAll(optionSel)).filter(el => el.offsetParent !== null);

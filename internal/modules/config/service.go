@@ -30,7 +30,7 @@ func newService(core Services) *service {
 func (s *service) handlePage(w http.ResponseWriter, r *http.Request) {
 	data := &liqmap.ModelConfigPageData{
 		ModelConfig:      s.core.LoadModelConfig(),
-		PageTitle:        "濡€崇€烽柊宥囩枂",
+		PageTitle:        "模型配置",
 		ActiveMenu:       "config",
 		ShowAnalysisInfo: false,
 	}

@@ -320,9 +320,9 @@ func normalizeLegacyTelegramHistoryErrorText(v string) string {
 		return v
 	}
 	replacer := strings.NewReplacer(
-		"缁?缂佸嫭鏆熼幑顔惧繁婢?", "\u6570\u636e\u7f3a\u5931:",
-		"缁?缂佸嫭鍩呴崶鎯ં亼鐠?", "\u622a\u56fe\u5931\u8d25:",
-		"缁?缂佸嫬褰傞柅浣搞亼鐠?", "\u53d1\u9001\u5931\u8d25:",
+		"缂?缂傚倸鍊风粈浣衡偓姘煎弮瀵娊鎮㈤悡搴ｎ唹濡炪倖姊归崕宕囨崲娴ｅ壊鐔?", "\u6570\u636e\u7f3a\u5931:",
+		"缂?缂傚倸鍊风粈浣衡偓姘煎弮瀹曟椽宕ㄩ弶鎴犲€為梺璇″灔閻涘绂嶆總鍛婂仯?", "\u622a\u56fe\u5931\u8d25:",
+		"缂?缂傚倸鍊风粈浣衡偓姘煎墲閵囨劙宕掗悙瀵稿姷婵炶揪绲鹃幃鑸电婵傚憡鍋?", "\u53d1\u9001\u5931\u8d25:",
 	)
 	v = replacer.Replace(v)
 	return strings.TrimSpace(v)
@@ -453,9 +453,11 @@ func (a *App) listChannelPlannedPushes(hours int) []ChannelPlannedPushRow {
 			break
 		}
 		pushTS := pushAt.UnixMilli()
-		detail := "棰勮鎻愬墠 5 鍒嗛挓鎶撳彇鏁版嵁锛岀劧鍚庢墽琛屾帹閫?"
+		detail := "抓取会比推送提前 5 分钟，用于生成最新清算热区摘要。"
+
 		if previewOnly {
-			detail += "锛堝綋鍓嶈嚜鍔ㄩ€氱煡鏈紑鍚紝浠呬緵棰勮锛?"
+			detail += " 当前为预览排程，自动通知尚未开启。"
+
 		}
 		out = append(out, ChannelPlannedPushRow{
 			PushTS:      pushTS,
@@ -492,8 +494,10 @@ func (a *App) listChannelPlannedPushesClean(hours int) []ChannelPlannedPushRow {
 		}
 		pushTS := pushAt.UnixMilli()
 		detail := "抓取会比推送提前 5 分钟，用于生成最新清算热区摘要。"
+
 		if previewOnly {
 			detail += " 当前为预览排程，自动通知尚未开启。"
+
 		}
 		out = append(out, ChannelPlannedPushRow{
 			PushTS:      pushTS,
