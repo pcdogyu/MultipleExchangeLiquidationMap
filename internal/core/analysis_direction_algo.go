@@ -10,12 +10,14 @@ import (
 )
 
 const (
-	analysisDirectionBandWidthRatio    = 0.0035
-	analysisDirectionBandWidthFloor    = 8.0
-	analysisDirectionDeltaGrossRatio   = 0.02
-	analysisDirectionDeltaFloorUSD     = 50_000.0
-	analysisDirectionFlatScoreCutoff   = 12.0
-	analysisDirectionMinStrongBandMove = 120_000.0
+	analysisDirectionBandWidthRatio     = 0.0035
+	analysisDirectionBandWidthFloor     = 8.0
+	analysisDirectionDeltaGrossRatio    = 0.025
+	analysisDirectionDeltaFloorUSD      = 75_000.0
+	analysisDirectionFlatScoreCutoff    = 18.0
+	analysisDirectionDownScoreCutoff    = 22.0
+	analysisDirectionMinStrongBandMove  = 150_000.0
+	analysisDirectionMaxBandDistancePct = 2.4
 )
 
 type analysisDirectionSnapshot struct {
@@ -186,7 +188,7 @@ func buildAnalysisDirectionBandDeltas(latest, previous analysisDirectionSnapshot
 	for _, band := range latestBands {
 		windowGross += band.Gross
 	}
-	threshold := math.Max(windowGross*analysisDirectionDeltaGrossRatio, analysisDirectionDeltaFloorUSD)
+	threshold := math.Max(math.Max(windowGross*analysisDirectionDeltaGrossRatio, analysisDirectionDeltaFloorUSD), analysisDirectionMinStrongBandMove)
 	out := make([]analysisDirectionBandDelta, 0, len(keys))
 	for idx := range keys {
 		curr := latestBands[idx]
@@ -209,6 +211,9 @@ func buildAnalysisDirectionBandDeltas(latest, previous analysisDirectionSnapshot
 		}
 		if currentPrice > 0 {
 			delta.DistancePct = math.Abs(delta.Center-currentPrice) / currentPrice * 100
+		}
+		if delta.DistancePct > analysisDirectionMaxBandDistancePct {
+			continue
 		}
 		delta.ThresholdHit = delta.LatestGross > 0 && math.Abs(delta.DeltaNet) >= threshold
 		if !delta.ThresholdHit {
@@ -352,6 +357,25 @@ func buildAnalysisDirectionSummary(direction string, confidence, finalScore floa
 	return headline, fmt.Sprintf("%s 综合得分 %+.1f，置信度 %.1f%%。%s。重点带：%s。%s", lead, finalScore, confidence, strings.Join(windowParts, " | "), strings.Join(topParts, " ; "), confReason)
 }
 
+func analysisDirectionWindowAgreement(results []analysisDirectionWindowResult, direction string) (int, int, bool) {
+	aligned := 0
+	conflict := 0
+	oneDayAligned := false
+	for _, item := range results {
+		if item.Direction == direction {
+			aligned++
+			if item.Days == 1 {
+				oneDayAligned = true
+			}
+			continue
+		}
+		if item.Direction != "flat" {
+			conflict++
+		}
+	}
+	return aligned, conflict, oneDayAligned
+}
+
 func formatAnalysisDirectionBandDelta(item analysisDirectionBandDelta) string {
 	support := "下压"
 	if item.SupportDir == "up" {
@@ -385,7 +409,6 @@ func buildAnalysisDirectionDecision(currentPrice float64, snapshots map[int][2]a
 	weights := map[int]float64{}
 	scores := map[int]float64{}
 	counts := map[int]int{}
-	oneDayAligned := false
 	coherenceSum := 0.0
 	for _, item := range results {
 		finalScore += item.Score * item.Weight
@@ -396,34 +419,43 @@ func buildAnalysisDirectionDecision(currentPrice float64, snapshots map[int][2]a
 		coherenceSum += item.DominantShare * item.Weight
 		positiveBands = append(positiveBands, item.StrongPositive...)
 		negativeBands = append(negativeBands, item.StrongNegative...)
-		if item.Days == 1 && item.Direction != "flat" {
-			oneDayAligned = true
-		}
 	}
 	direction := "flat"
 	if finalScore >= analysisDirectionFlatScoreCutoff {
 		direction = "up"
-	} else if finalScore <= -analysisDirectionFlatScoreCutoff {
+	} else if finalScore <= -analysisDirectionDownScoreCutoff {
 		direction = "down"
 	}
 	if direction == "flat" {
+		return analysisDirectionDecision{}, false
+	}
+	alignedWindowCount, conflictWindowCount, oneDayAligned := analysisDirectionWindowAgreement(results, direction)
+	if alignedWindowCount < 2 || conflictWindowCount > 0 {
 		return analysisDirectionDecision{}, false
 	}
 
 	agreementBonus := 0.0
 	for _, item := range results {
 		if item.Direction == direction {
-			agreementBonus += item.Weight * 10
+			agreementBonus += item.Weight * 9
 		} else if item.Direction != "flat" {
-			agreementBonus -= item.Weight * 6
+			agreementBonus -= item.Weight * 8
 		}
 	}
 	if oneDayAligned {
-		agreementBonus += 6
+		agreementBonus += 5
 	}
+	agreementBonus += float64(alignedWindowCount-2) * 4
 	breadthBonus := math.Min(10, float64(breadthCount)*1.1)
-	fragmentationPenalty := math.Max(0, (1-coherenceSum)*18)
-	confidence := clamp(22+math.Abs(finalScore)*0.64+agreementBonus+breadthBonus-fragmentationPenalty, 18, 92)
+	fragmentationPenalty := math.Max(0, (1-coherenceSum)*20)
+	confidence := 18 + math.Abs(finalScore)*0.52 + agreementBonus + breadthBonus - fragmentationPenalty
+	if direction == "down" {
+		confidence -= 2
+	}
+	if alignedWindowCount >= 3 {
+		confidence += 3
+	}
+	confidence = clamp(confidence, 18, 90)
 	headline, summary := buildAnalysisDirectionSummary(direction, confidence, finalScore, results, positiveBands, negativeBands)
 
 	return analysisDirectionDecision{

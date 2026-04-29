@@ -111,7 +111,7 @@ func TestBuildAnalysisDirectionDecisionWeakReturnsFalse(t *testing.T) {
 	}
 }
 
-func TestBuildAnalysisDirectionDecisionOneDayOnly(t *testing.T) {
+func TestBuildAnalysisDirectionDecisionOneDayOnlyReturnsFalse(t *testing.T) {
 	currentPrice := 2300.0
 	snapshots := map[int][2]analysisDirectionSnapshot{
 		1: {
@@ -120,12 +120,8 @@ func TestBuildAnalysisDirectionDecisionOneDayOnly(t *testing.T) {
 		},
 	}
 
-	decision, ok := decisionFromSnapshots(currentPrice, snapshots)
-	if !ok {
-		t.Fatalf("expected one-day decision")
-	}
-	if decision.Direction != "up" {
-		t.Fatalf("expected up, got %s", decision.Direction)
+	if _, ok := decisionFromSnapshots(currentPrice, snapshots); ok {
+		t.Fatalf("expected no signal when fewer than two windows agree")
 	}
 }
 
@@ -133,41 +129,41 @@ func TestBuildAnalysisDirectionDecisionFragmentedHasLowerConfidence(t *testing.T
 	currentPrice := 2300.0
 	aligned := map[int][2]analysisDirectionSnapshot{
 		1: {
-			makeAnalysisDirectionSnapshot(1, currentPrice, shortPoint(2320, 280000), shortPoint(2340, 180000)),
-			makeAnalysisDirectionSnapshot(1, currentPrice, shortPoint(2320, 150000), shortPoint(2340, 100000)),
+			makeAnalysisDirectionSnapshot(1, currentPrice, shortPoint(2320, 460000), shortPoint(2340, 260000)),
+			makeAnalysisDirectionSnapshot(1, currentPrice, shortPoint(2320, 120000), shortPoint(2340, 90000)),
 		},
 		7: {
-			makeAnalysisDirectionSnapshot(7, currentPrice, shortPoint(2330, 320000), shortPoint(2360, 170000)),
-			makeAnalysisDirectionSnapshot(7, currentPrice, shortPoint(2330, 180000), shortPoint(2360, 90000)),
+			makeAnalysisDirectionSnapshot(7, currentPrice, shortPoint(2330, 500000), shortPoint(2350, 260000)),
+			makeAnalysisDirectionSnapshot(7, currentPrice, shortPoint(2330, 140000), shortPoint(2350, 90000)),
 		},
 	}
 	fragmented := map[int][2]analysisDirectionSnapshot{
 		1: {
 			makeAnalysisDirectionSnapshot(1, currentPrice,
-				shortPoint(2320, 180000),
-				longPoint(2280, 170000),
-				shortPoint(2360, 95000),
-				longPoint(2240, 110000),
+				shortPoint(2320, 500000),
+				longPoint(2280, 320000),
+				shortPoint(2340, 260000),
+				longPoint(2260, 190000),
 			),
 			makeAnalysisDirectionSnapshot(1, currentPrice,
-				shortPoint(2320, 120000),
-				longPoint(2280, 130000),
-				shortPoint(2360, 80000),
-				longPoint(2240, 90000),
+				shortPoint(2320, 130000),
+				longPoint(2280, 90000),
+				shortPoint(2340, 90000),
+				longPoint(2260, 50000),
 			),
 		},
 		7: {
 			makeAnalysisDirectionSnapshot(7, currentPrice,
-				shortPoint(2330, 190000),
-				longPoint(2270, 200000),
-				shortPoint(2380, 100000),
-				longPoint(2230, 120000),
+				shortPoint(2330, 520000),
+				longPoint(2270, 310000),
+				shortPoint(2350, 250000),
+				longPoint(2250, 180000),
 			),
 			makeAnalysisDirectionSnapshot(7, currentPrice,
-				shortPoint(2330, 125000),
-				longPoint(2270, 135000),
-				shortPoint(2380, 85000),
-				longPoint(2230, 95000),
+				shortPoint(2330, 130000),
+				longPoint(2270, 80000),
+				shortPoint(2350, 90000),
+				longPoint(2250, 50000),
 			),
 		},
 	}
@@ -194,6 +190,10 @@ func TestBuildAnalysisDirectionDecisionExtremePointIsClamped(t *testing.T) {
 		1: {
 			makeAnalysisDirectionSnapshot(1, currentPrice, shortPoint(2320, 9_000_000), shortPoint(2340, 400000)),
 			makeAnalysisDirectionSnapshot(1, currentPrice, shortPoint(2320, 100000), shortPoint(2340, 70000)),
+		},
+		7: {
+			makeAnalysisDirectionSnapshot(7, currentPrice, shortPoint(2330, 4_500_000), shortPoint(2350, 400000)),
+			makeAnalysisDirectionSnapshot(7, currentPrice, shortPoint(2330, 100000), shortPoint(2350, 70000)),
 		},
 	}
 

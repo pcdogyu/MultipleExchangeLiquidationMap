@@ -176,12 +176,41 @@ type AnalysisBacktestConfidenceBucket struct {
 	CorrectRate  float64 `json:"correct_rate"`
 }
 
+type AnalysisBacktestConfidenceFactorBucket struct {
+	Label        string  `json:"label"`
+	MinInclusive float64 `json:"min_inclusive"`
+	MaxExclusive float64 `json:"max_exclusive,omitempty"`
+	FactorKey    string  `json:"factor_key"`
+	FactorLabel  string  `json:"factor_label"`
+	TotalSignals int     `json:"total_signals"`
+	CorrectCount int     `json:"correct_count"`
+	WrongCount   int     `json:"wrong_count"`
+	PendingCount int     `json:"pending_count"`
+	NoDataCount  int     `json:"no_data_count"`
+	CorrectRate  float64 `json:"correct_rate"`
+}
+
+type AnalysisBacktestStrategyGroup struct {
+	FactorKey             string  `json:"factor_key"`
+	FactorLabel           string  `json:"factor_label"`
+	Label                 string  `json:"label"`
+	MinInclusive          float64 `json:"min_inclusive"`
+	MaxExclusive          float64 `json:"max_exclusive,omitempty"`
+	TotalSignals          int     `json:"total_signals"`
+	SampleCount           int     `json:"sample_count"`
+	FiveMinuteCorrectRate float64 `json:"five_minute_correct_rate"`
+	CompositeScore        float64 `json:"composite_score"`
+	Selected              bool    `json:"selected"`
+	Reason                string  `json:"reason"`
+}
+
 type AnalysisBacktestPageResponse struct {
 	Candles           []map[string]any                   `json:"candles"`
 	Signals           []AnalysisSignalResult             `json:"signals"`
 	Summary           AnalysisBacktestSummary            `json:"summary"`
 	HorizonStats      []AnalysisBacktestHorizonStat      `json:"horizon_stats"`
 	ConfidenceBuckets []AnalysisBacktestConfidenceBucket `json:"confidence_buckets,omitempty"`
+	QualityMode       string                             `json:"quality_mode,omitempty"`
 	ChartSource       string                             `json:"chart_source,omitempty"`
 	ChartInterval     string                             `json:"chart_interval,omitempty"`
 }
@@ -204,13 +233,17 @@ type AnalysisBacktest2FAFactorSummary struct {
 }
 
 type AnalysisBacktest2FAResponse struct {
-	Candles           []map[string]any                   `json:"candles"`
-	Signals           []AnalysisSignalResult             `json:"signals"`
-	Summary           AnalysisBacktestSummary            `json:"summary"`
-	HorizonStats      []AnalysisBacktestHorizonStat      `json:"horizon_stats"`
-	ConfidenceBuckets []AnalysisBacktestConfidenceBucket `json:"confidence_buckets,omitempty"`
-	SelectedFactor    string                             `json:"selected_factor"`
-	FactorOptions     []AnalysisBacktest2FAFactorSummary `json:"factor_options"`
-	ChartSource       string                             `json:"chart_source,omitempty"`
-	ChartInterval     string                             `json:"chart_interval,omitempty"`
+	Candles                 []map[string]any                         `json:"candles"`
+	Signals                 []AnalysisSignalResult                   `json:"signals"`
+	Summary                 AnalysisBacktestSummary                  `json:"summary"`
+	HorizonStats            []AnalysisBacktestHorizonStat            `json:"horizon_stats"`
+	ConfidenceBuckets       []AnalysisBacktestConfidenceBucket       `json:"confidence_buckets,omitempty"`
+	ConfidenceFactorBuckets []AnalysisBacktestConfidenceFactorBucket `json:"confidence_factor_buckets,omitempty"`
+	StrategyMode            string                                   `json:"strategy_mode"`
+	StrategyActive          bool                                     `json:"strategy_active"`
+	StrategyGroups          []AnalysisBacktestStrategyGroup          `json:"strategy_groups,omitempty"`
+	SelectedFactor          string                                   `json:"selected_factor"`
+	FactorOptions           []AnalysisBacktest2FAFactorSummary       `json:"factor_options"`
+	ChartSource             string                                   `json:"chart_source,omitempty"`
+	ChartInterval           string                                   `json:"chart_interval,omitempty"`
 }

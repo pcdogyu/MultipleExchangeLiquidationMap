@@ -177,6 +177,11 @@ th{color:var(--muted);font-weight:600}
             <option value="85">&gt;85</option>
             <option value="90">&gt;90</option>
           </select>
+          <label for="qualityModeSelect">&#20449;&#21495;&#33539;&#22260;</label>
+          <select id="qualityModeSelect">
+            <option value="high" selected>&#39640;&#36136;&#37327;</option>
+            <option value="all">&#20840;&#37096;&#20449;&#21495;</option>
+          </select>
           <button class="primary" type="button" id="reloadBtn">&#21047;&#26032;&#22270;&#34920;</button>
         </div>
         <div class="toolbar-group">
@@ -254,6 +259,7 @@ const state={
   horizonStats:[],
   candles:[],
   confMin:'0',
+  qualityMode:'high',
   interval:'5m',
   chartWidth:1600,
   chartHeight:620,
@@ -288,6 +294,7 @@ function fmtDelta(v){const n=Number(v||0);return isFinite(n)?(n>=0?'+':'')+n.toF
 function fmtTime(ts){const n=Number(ts||0);if(!n)return '-';return new Date(n).toLocaleString('zh-CN',{hour12:false});}
 function resultLabel(v){if(v==='correct')return ['Correct','ok'];if(v==='wrong')return ['Wrong','bad'];if(v==='pending')return ['Pending','pending'];if(v==='no_data')return ['No data','pending'];return [String(v||'-'),''];}
 function directionLabel(v){return v==='up'?'Up':'Down';}
+function qualityModeLabel(v){return v==='high'?'High quality':'All signals';}
 function horizonByMin(sig,min){for(const h of (sig&&sig.horizons||[])){if(Number(h&&h.horizon_min||0)===min)return h;}return null;}
 function renderHorizonCell(sig,min){const h=horizonByMin(sig,min);if(!h)return '<div class="horizon-pill nodata-pill"><span class="pending">已截断</span><span class="meta">反向信号</span></div>';const res=resultLabel(h.result);if(h.result==='pending')return '<div class="horizon-pill pending-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';if(h.result==='no_data')return '<div class="horizon-pill nodata-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';const isCorrect=h.result==='correct';const cls=isCorrect?'ok':'bad';const pillCls=isCorrect?'up-pill':'down-pill';return '<div class="horizon-pill '+pillCls+'"><span class="price">'+fmtPrice(h.verify_close_price)+'</span><span class="meta '+cls+'">'+fmtDelta(h.delta_price)+' / '+fmtPct(h.delta_pct)+'</span></div>';}
 function clamp(v,min,max){return Math.max(min,Math.min(max,v));}
@@ -518,7 +525,7 @@ function draw(){
 function renderHistory(){
   const body=document.getElementById('historyBody');
   if(!state.signals.length){
-    body.innerHTML='<tr><td colspan="9" class="empty">No signals matched the current confidence filter in the last 24h</td></tr>';
+    body.innerHTML='<tr><td colspan="9" class="empty">No signals matched the current filters in the last 24h</td></tr>';
     return;
   }
   body.innerHTML=state.signals.slice().sort((a,b)=>Number(b.signal_ts||0)-Number(a.signal_ts||0)).map(sig=>{
@@ -606,6 +613,9 @@ function applyBacktestData(d){
   if(d.chart_interval)state.interval=String(d.chart_interval);
   const confMinSelect=document.getElementById('confMinSelect');
   if(confMinSelect)confMinSelect.value=String(state.confMin||'0');
+  state.qualityMode=String(d.quality_mode||state.qualityMode||'high');
+  const qualityModeSelect=document.getElementById('qualityModeSelect');
+  if(qualityModeSelect)qualityModeSelect.value=state.qualityMode;
   const intervalSelect=document.getElementById('intervalSelect');
   if(intervalSelect)intervalSelect.value=state.interval;
   state.chartLoading=false;
@@ -622,7 +632,7 @@ function applyBacktestData(d){
 async function loadSignals(){
   state.chartLoading=true;
   draw();
-  const params=new URLSearchParams({hours:'24',interval:String(state.interval||'5m'),conf_min:String(state.confMin||'0')});
+  const params=new URLSearchParams({hours:'24',interval:String(state.interval||'5m'),conf_min:String(state.confMin||'0'),quality:String(state.qualityMode||'high')});
   const r=await fetch('/api/analysis-backtest?'+params.toString()).catch(()=>null);
   if(!r)throw new Error('Cannot request /api/analysis-backtest');
   if(!r.ok)throw new Error(await r.text().catch(()=>('HTTP '+r.status)));
@@ -654,6 +664,10 @@ function bindControls(){
     state.confMin=String(e.target.value||'0');
     await reloadAll();
   });
+  document.getElementById('qualityModeSelect').addEventListener('change',async e=>{
+    state.qualityMode=String(e.target.value||'high');
+    await reloadAll();
+  });
   document.getElementById('reloadBtn').addEventListener('click',reloadAll);
   document.getElementById('widthDownBtn').addEventListener('click',()=>adjustChartSize('width',-180));
   document.getElementById('widthUpBtn').addEventListener('click',()=>adjustChartSize('width',180));
@@ -668,7 +682,7 @@ function bindControls(){
 async function reloadChartOnly(){
   try{
     await loadSignals();
-    document.getElementById('footer').textContent='Confidence '+confidenceFilterLabel(state.confMin)+' | Interval '+state.interval+' | Signals '+state.signals.length+' | K '+state.candles.length;
+    document.getElementById('footer').textContent='Range '+qualityModeLabel(state.qualityMode)+' | Confidence '+confidenceFilterLabel(state.confMin)+' | Interval '+state.interval+' | Signals '+state.signals.length+' | K '+state.candles.length;
   }catch(err){
     state.chartLoading=false;
     state.candles=[];
@@ -681,7 +695,7 @@ async function reloadAll(){
   try{
     document.getElementById('footer').textContent='Loading...';
     await loadSignals();
-    document.getElementById('footer').textContent='Confidence '+confidenceFilterLabel(state.confMin)+' | Last 24h signals '+state.signals.length+' | Interval '+state.interval+' | K '+state.candles.length;
+    document.getElementById('footer').textContent='Range '+qualityModeLabel(state.qualityMode)+' | Confidence '+confidenceFilterLabel(state.confMin)+' | Last 24h signals '+state.signals.length+' | Interval '+state.interval+' | K '+state.candles.length;
   }catch(err){
     state.chartLoading=false;
     document.getElementById('footer').textContent=String(err&&err.message||err||'Load failed');

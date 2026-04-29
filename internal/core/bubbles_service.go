@@ -89,11 +89,11 @@ func (a *App) fetchOKXKlines(interval string, limit int, startTS, endTS int64) (
 		Data [][]string `json:"data"`
 	}
 	url := fmt.Sprintf("https://www.okx.com/api/v5/market/candles?instId=ETH-USDT-SWAP&bar=%s&limit=%d", url.QueryEscape(bar), limit)
-	if startTS > 0 {
-		url += fmt.Sprintf("&after=%d", startTS)
-	}
 	if endTS > 0 {
-		url += fmt.Sprintf("&before=%d", endTS)
+		url += fmt.Sprintf("&after=%d", endTS)
+	}
+	if startTS > 0 {
+		url += fmt.Sprintf("&before=%d", startTS)
 	}
 	if err := a.fetchJSON(url, &resp); err != nil {
 		return nil, "", err

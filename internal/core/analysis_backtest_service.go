@@ -3,6 +3,7 @@ package liqmap
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,12 +15,18 @@ const analysisSignalVerifyHorizonMin = 5
 var analysisBacktestHorizons = []int{5, 15, 30, 60}
 
 const (
-	analysisSecondFactorAll          = "all"
-	analysisSecondFactorVolumeSpike  = "volume_spike"
-	analysisSecondFactorVolumeNormal = "volume_normal"
-	analysisSecondFactorVolumeLow    = "volume_low"
-	analysisSecondFactorInsufficient = "insufficient"
+	analysisSecondFactorAll           = "all"
+	analysisSecondFactorVolumeSpike   = "volume_spike"
+	analysisSecondFactorVolumeNormal  = "volume_normal"
+	analysisSecondFactorVolumeLow     = "volume_low"
+	analysisSecondFactorInsufficient  = "insufficient"
+	analysisBacktestQualityAll        = "all"
+	analysisBacktestQualityHigh       = "high"
+	analysisBacktestStrategyAll       = "all"
+	analysisBacktestStrategyPreferred = "preferred"
 )
+
+var analysisDirectionSummaryScoreRe = regexp.MustCompile(`分数\s*([+-]?\d+(?:\.\d+)?)`)
 
 type analysisBacktestCandle struct {
 	TS          int64
@@ -344,7 +351,7 @@ func classifyAnalysisSecondFactor(record AnalysisSignalRecord, candles []analysi
 		return analysisSecondFactorInsufficient, analysisSecondFactorLabel(analysisSecondFactorInsufficient)
 	}
 	ratio := currentVolume / avg
-	if ratio >= 1.5 {
+	if ratio >= 1.2 {
 		return analysisSecondFactorVolumeSpike, analysisSecondFactorLabel(analysisSecondFactorVolumeSpike)
 	}
 	if ratio < 0.8 {
@@ -691,6 +698,201 @@ func buildAnalysisBacktestConfidenceBuckets(results []AnalysisSignalResult) []An
 	return out
 }
 
+func buildAnalysisBacktestConfidenceFactorBuckets(results []AnalysisSignalResult) []AnalysisBacktestConfidenceFactorBucket {
+	defs := analysisConfidenceBucketDefs()
+	factors := []string{
+		analysisSecondFactorVolumeSpike,
+		analysisSecondFactorVolumeNormal,
+		analysisSecondFactorVolumeLow,
+	}
+	out := make([]AnalysisBacktestConfidenceFactorBucket, 0, len(defs)*len(factors))
+	for _, def := range defs {
+		for _, factor := range factors {
+			bucket := AnalysisBacktestConfidenceFactorBucket{
+				Label:        def.Label,
+				MinInclusive: def.MinInclusive,
+				MaxExclusive: def.MaxExclusive,
+				FactorKey:    factor,
+				FactorLabel:  analysisSecondFactorLabel(factor),
+			}
+			for _, item := range results {
+				confidence := item.Confidence
+				if confidence < def.MinInclusive {
+					continue
+				}
+				if def.MaxExclusive > 0 && confidence >= def.MaxExclusive {
+					continue
+				}
+				if normalizeAnalysisSecondFactorKey(item.SecondFactorKey) != factor {
+					continue
+				}
+				bucket.TotalSignals++
+				switch item.Result {
+				case "correct":
+					bucket.CorrectCount++
+				case "wrong":
+					bucket.WrongCount++
+				case "pending":
+					bucket.PendingCount++
+				case "no_data":
+					bucket.NoDataCount++
+				}
+			}
+			verified := bucket.CorrectCount + bucket.WrongCount
+			if verified > 0 {
+				bucket.CorrectRate = math.Round((float64(bucket.CorrectCount)/float64(verified))*1000) / 10
+			}
+			out = append(out, bucket)
+		}
+	}
+	return out
+}
+
+func analysisConfidenceBucketForValue(confidence float64) analysisConfidenceBucketDef {
+	defs := analysisConfidenceBucketDefs()
+	for _, def := range defs {
+		if confidence < def.MinInclusive {
+			continue
+		}
+		if def.MaxExclusive > 0 && confidence >= def.MaxExclusive {
+			continue
+		}
+		return def
+	}
+	return defs[0]
+}
+
+func normalizeAnalysisBacktestStrategy(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case analysisBacktestStrategyPreferred:
+		return analysisBacktestStrategyPreferred
+	default:
+		return analysisBacktestStrategyAll
+	}
+}
+
+func analysisBacktestHorizonCorrectRate(results []AnalysisSignalResult, horizonMin int) (float64, int) {
+	correct := 0
+	wrong := 0
+	for _, item := range results {
+		for _, horizon := range item.Horizons {
+			if horizon.HorizonMin != horizonMin {
+				continue
+			}
+			switch horizon.Result {
+			case "correct":
+				correct++
+			case "wrong":
+				wrong++
+			}
+			break
+		}
+	}
+	verified := correct + wrong
+	if verified == 0 {
+		return 0, 0
+	}
+	return math.Round((float64(correct)/float64(verified))*1000) / 10, verified
+}
+
+func buildAnalysisBacktestStrategyGroups(results []AnalysisSignalResult) []AnalysisBacktestStrategyGroup {
+	defs := analysisConfidenceBucketDefs()
+	factors := []string{
+		analysisSecondFactorVolumeSpike,
+		analysisSecondFactorVolumeNormal,
+		analysisSecondFactorVolumeLow,
+	}
+	grouped := make(map[string][]AnalysisSignalResult, len(defs)*len(factors))
+	for _, item := range results {
+		key := normalizeAnalysisSecondFactorKey(item.SecondFactorKey)
+		if key == analysisSecondFactorAll || key == analysisSecondFactorInsufficient {
+			continue
+		}
+		def := analysisConfidenceBucketForValue(item.Confidence)
+		groupKey := key + "|" + def.Label
+		grouped[groupKey] = append(grouped[groupKey], item)
+	}
+
+	weights := map[int]float64{5: 0.4, 15: 0.3, 30: 0.2, 60: 0.1}
+	out := make([]AnalysisBacktestStrategyGroup, 0, len(defs)*len(factors))
+	for _, factor := range factors {
+		for _, def := range defs {
+			items := grouped[factor+"|"+def.Label]
+			group := AnalysisBacktestStrategyGroup{
+				FactorKey:    factor,
+				FactorLabel:  analysisSecondFactorLabel(factor),
+				Label:        def.Label,
+				MinInclusive: def.MinInclusive,
+				MaxExclusive: def.MaxExclusive,
+				TotalSignals: len(items),
+				Reason:       "样本不足",
+			}
+			weightedScore := 0.0
+			activeWeight := 0.0
+			weakHorizon := false
+			for _, horizonMin := range analysisBacktestHorizons {
+				rate, verified := analysisBacktestHorizonCorrectRate(items, horizonMin)
+				if horizonMin == 5 {
+					group.FiveMinuteCorrectRate = rate
+					group.SampleCount = verified
+				}
+				if verified <= 0 {
+					continue
+				}
+				if verified >= 5 && rate < 40 {
+					weakHorizon = true
+				}
+				weight := weights[horizonMin]
+				weightedScore += rate * weight
+				activeWeight += weight
+			}
+			if activeWeight > 0 {
+				group.CompositeScore = math.Round((weightedScore/activeWeight)*10) / 10
+			}
+			switch {
+			case group.SampleCount < 5:
+				group.Reason = "5m 已验证样本少于 5 条"
+			case group.FiveMinuteCorrectRate < 52:
+				group.Reason = "5m 胜率低于 52%"
+			case group.CompositeScore < 52:
+				group.Reason = "综合多周期得分低于 52%"
+			case weakHorizon:
+				group.Reason = "存在样本充足但胜率低于 40% 的周期"
+			default:
+				group.Selected = true
+				group.Reason = "入选"
+			}
+			out = append(out, group)
+		}
+	}
+	return out
+}
+
+func filterAnalysisSignalsByStrategyGroups(results []AnalysisSignalResult, groups []AnalysisBacktestStrategyGroup, mode string) ([]AnalysisSignalResult, bool) {
+	if normalizeAnalysisBacktestStrategy(mode) != analysisBacktestStrategyPreferred {
+		return append([]AnalysisSignalResult(nil), results...), false
+	}
+	allowed := map[string]bool{}
+	for _, group := range groups {
+		if !group.Selected {
+			continue
+		}
+		allowed[group.FactorKey+"|"+group.Label] = true
+	}
+	if len(allowed) == 0 {
+		return append([]AnalysisSignalResult(nil), results...), false
+	}
+	out := make([]AnalysisSignalResult, 0, len(results))
+	for _, item := range results {
+		key := normalizeAnalysisSecondFactorKey(item.SecondFactorKey)
+		def := analysisConfidenceBucketForValue(item.Confidence)
+		if allowed[key+"|"+def.Label] {
+			out = append(out, item)
+		}
+	}
+	return out, true
+}
+
 func buildAnalysisBacktest2FAFactorOptions(results []AnalysisSignalResult, hours int) []AnalysisBacktest2FAFactorSummary {
 	order := []string{
 		analysisSecondFactorAll,
@@ -777,6 +979,79 @@ func filterAnalysisSignalsByConfidence(results []AnalysisSignalResult, minConfid
 	return out
 }
 
+func normalizeAnalysisBacktestQualityMode(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case analysisBacktestQualityHigh:
+		return analysisBacktestQualityHigh
+	default:
+		return analysisBacktestQualityAll
+	}
+}
+
+func analysisSignalWindowScoreAgreement(item AnalysisSignalResult) (int, int) {
+	direction := normalizeAnalysisDirection(item.Direction)
+	if direction == "flat" {
+		return 0, 0
+	}
+	matches := analysisDirectionSummaryScoreRe.FindAllStringSubmatch(item.Summary, -1)
+	aligned := 0
+	conflict := 0
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		score, err := strconv.ParseFloat(match[1], 64)
+		if err != nil || math.Abs(score) < analysisDirectionFlatScoreCutoff {
+			continue
+		}
+		scoreDirection := "down"
+		if score > 0 {
+			scoreDirection = "up"
+		}
+		if scoreDirection == direction {
+			aligned++
+		} else {
+			conflict++
+		}
+	}
+	return aligned, conflict
+}
+
+func analysisSignalHasMultiWindowAgreement(item AnalysisSignalResult) bool {
+	aligned, conflict := analysisSignalWindowScoreAgreement(item)
+	return aligned >= 3 && conflict == 0
+}
+
+func analysisSignalIsHighQuality(item AnalysisSignalResult) bool {
+	direction := normalizeAnalysisDirection(item.Direction)
+	if direction != "up" && direction != "down" {
+		return false
+	}
+	if item.Confidence < 70 {
+		return false
+	}
+	if direction == "down" && item.Confidence < 80 {
+		return false
+	}
+	if item.Confidence >= 85 && !analysisSignalHasMultiWindowAgreement(item) {
+		return false
+	}
+	return true
+}
+
+func filterAnalysisSignalsByQuality(results []AnalysisSignalResult, mode string) []AnalysisSignalResult {
+	if normalizeAnalysisBacktestQualityMode(mode) != analysisBacktestQualityHigh {
+		return append([]AnalysisSignalResult(nil), results...)
+	}
+	out := make([]AnalysisSignalResult, 0, len(results))
+	for _, item := range results {
+		if analysisSignalIsHighQuality(item) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 func filterAnalysisSignalsBySecondFactor(results []AnalysisSignalResult, factor string) []AnalysisSignalResult {
 	key := normalizeAnalysisSecondFactorKey(factor)
 	if key == analysisSecondFactorAll {
@@ -834,7 +1109,7 @@ func (a *App) fetchAnalysisBacktestChartCandles(hours int, interval string, sinc
 	return out, cfg.Source, cfg.Label, nil
 }
 
-func (a *App) buildAnalysisBacktestResults(hours int, minConfidence float64) ([]AnalysisSignalResult, int64, int64, error) {
+func (a *App) buildAnalysisBacktestResults(hours int, minConfidence float64, qualityMode string) ([]AnalysisSignalResult, int64, int64, error) {
 	if hours <= 0 {
 		hours = 24
 	}
@@ -870,11 +1145,13 @@ func (a *App) buildAnalysisBacktestResults(hours int, minConfidence float64) ([]
 		}
 		results = append(results, buildAnalysisSignalResult(record, candles, nowTS, analysisBacktestHorizonsForSignal(records, i)))
 	}
+	results = filterAnalysisSignalsByQuality(results, qualityMode)
 	return results, sinceTS, floorToFiveMinute(nowTS) + baseStep, nil
 }
 
-func (a *App) AnalysisBacktest(hours int, interval string, minConfidence float64) (AnalysisBacktestPageResponse, error) {
-	results, sinceTS, chartEndTS, err := a.buildAnalysisBacktestResults(hours, minConfidence)
+func (a *App) AnalysisBacktest(hours int, interval string, minConfidence float64, qualityMode string) (AnalysisBacktestPageResponse, error) {
+	selectedQuality := normalizeAnalysisBacktestQualityMode(qualityMode)
+	results, sinceTS, chartEndTS, err := a.buildAnalysisBacktestResults(hours, minConfidence, selectedQuality)
 	if err != nil {
 		return AnalysisBacktestPageResponse{}, err
 	}
@@ -888,13 +1165,14 @@ func (a *App) AnalysisBacktest(hours int, interval string, minConfidence float64
 		Summary:           buildAnalysisBacktestSummary(results, hours),
 		HorizonStats:      buildAnalysisBacktestHorizonStats(results),
 		ConfidenceBuckets: buildAnalysisBacktestConfidenceBuckets(results),
+		QualityMode:       selectedQuality,
 		ChartSource:       source,
 		ChartInterval:     chartInterval,
 	}, nil
 }
 
-func (a *App) AnalysisBacktest2FA(hours int, interval string, factor string, minConfidence float64) (AnalysisBacktest2FAResponse, error) {
-	baseResults, sinceTS, chartEndTS, err := a.buildAnalysisBacktestResults(hours, 0)
+func (a *App) AnalysisBacktest2FA(hours int, interval string, factor string, minConfidence float64, strategy string) (AnalysisBacktest2FAResponse, error) {
+	baseResults, sinceTS, chartEndTS, err := a.buildAnalysisBacktestResults(hours, 0, analysisBacktestQualityAll)
 	if err != nil {
 		return AnalysisBacktest2FAResponse{}, err
 	}
@@ -906,24 +1184,31 @@ func (a *App) AnalysisBacktest2FA(hours int, interval string, factor string, min
 		}
 		candidates = append(candidates, candidate)
 	}
+	strategyMode := normalizeAnalysisBacktestStrategy(strategy)
+	strategyGroups := buildAnalysisBacktestStrategyGroups(candidates)
+	strategyFiltered, strategyActive := filterAnalysisSignalsByStrategyGroups(candidates, strategyGroups, strategyMode)
 	selectedFactor := defaultAnalysisSecondFactorSelection(factor)
-	factorFilteredAll := filterAnalysisSignalsBySecondFactor(candidates, selectedFactor)
-	confFiltered := filterAnalysisSignalsByConfidence(candidates, minConfidence)
+	factorFilteredAll := filterAnalysisSignalsBySecondFactor(strategyFiltered, selectedFactor)
+	confFiltered := filterAnalysisSignalsByConfidence(strategyFiltered, minConfidence)
 	filtered := filterAnalysisSignalsBySecondFactor(confFiltered, selectedFactor)
 	candles, source, chartInterval, err := a.fetchAnalysisBacktestChartCandles(hours, interval, sinceTS, chartEndTS)
 	if err != nil {
 		return AnalysisBacktest2FAResponse{}, err
 	}
 	return AnalysisBacktest2FAResponse{
-		Candles:           candles,
-		Signals:           filtered,
-		Summary:           buildAnalysisBacktestSummary(filtered, hours),
-		HorizonStats:      buildAnalysisBacktestHorizonStats(filtered),
-		ConfidenceBuckets: buildAnalysisBacktestConfidenceBuckets(factorFilteredAll),
-		SelectedFactor:    selectedFactor,
-		FactorOptions:     buildAnalysisBacktest2FAFactorOptions(confFiltered, hours),
-		ChartSource:       source,
-		ChartInterval:     chartInterval,
+		Candles:                 candles,
+		Signals:                 filtered,
+		Summary:                 buildAnalysisBacktestSummary(filtered, hours),
+		HorizonStats:            buildAnalysisBacktestHorizonStats(filtered),
+		ConfidenceBuckets:       buildAnalysisBacktestConfidenceBuckets(factorFilteredAll),
+		ConfidenceFactorBuckets: buildAnalysisBacktestConfidenceFactorBuckets(candidates),
+		StrategyMode:            strategyMode,
+		StrategyActive:          strategyActive,
+		StrategyGroups:          strategyGroups,
+		SelectedFactor:          selectedFactor,
+		FactorOptions:           buildAnalysisBacktest2FAFactorOptions(confFiltered, hours),
+		ChartSource:             source,
+		ChartInterval:           chartInterval,
 	}, nil
 }
 
@@ -987,7 +1272,7 @@ func max(a, b int) int {
 }
 
 func (a *App) debugAnalysisBacktestSummary(hours int) string {
-	resp, err := a.AnalysisBacktest(hours, "5m", 0)
+	resp, err := a.AnalysisBacktest(hours, "5m", 0, analysisBacktestQualityAll)
 	if err != nil {
 		return err.Error()
 	}

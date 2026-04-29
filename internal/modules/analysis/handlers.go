@@ -66,7 +66,8 @@ func (s *service) handleBacktest(w http.ResponseWriter, r *http.Request) {
 			minConfidence = n
 		}
 	}
-	resp, err := s.core.AnalysisBacktest(hours, interval, minConfidence)
+	qualityMode := strings.TrimSpace(r.URL.Query().Get("quality"))
+	resp, err := s.core.AnalysisBacktest(hours, interval, minConfidence, qualityMode)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -93,7 +94,8 @@ func (s *service) handleBacktest2FA(w http.ResponseWriter, r *http.Request) {
 			minConfidence = n
 		}
 	}
-	resp, err := s.core.AnalysisBacktest2FA(hours, interval, factor, minConfidence)
+	strategy := strings.TrimSpace(r.URL.Query().Get("strategy"))
+	resp, err := s.core.AnalysisBacktest2FA(hours, interval, factor, minConfidence, strategy)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
