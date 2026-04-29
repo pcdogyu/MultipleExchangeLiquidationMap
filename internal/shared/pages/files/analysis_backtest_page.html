@@ -26,7 +26,7 @@ body{margin:0;background:radial-gradient(circle at top left,#fff8ee,transparent 
 .hero-main{background:linear-gradient(140deg,rgba(194,106,45,.15),rgba(20,116,111,.08)),var(--card)}
 .hero-main h1{margin:8px 0 10px;font-size:34px}
 .small{font-size:12px;color:var(--muted);line-height:1.6}
-.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
 .horizon-stats{grid-template-columns:repeat(4,minmax(0,1fr))}
 .stat{padding:16px;border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,.68)}
 .stat .k{font-size:12px;color:var(--muted)}
@@ -117,7 +117,9 @@ th{color:var(--muted);font-weight:600}
     </div>
     <div class="stats">
       <div class="stat"><div class="k">&#24635;&#20449;&#21495;&#25968;</div><div class="v" id="totalSignals">-</div></div>
-      <div class="stat"><div class="k">&#27491;&#30830;&#25968; / &#27491;&#30830;&#29575;</div><div class="v" id="correctSignals">-</div></div>
+      <div class="stat"><div class="k">&#24050;&#39564;&#35777;&#25968;</div><div class="v" id="verifiedHorizons">-</div></div>
+      <div class="stat"><div class="k">&#27491;&#30830;&#39564;&#35777;&#25968;</div><div class="v" id="correctHorizons">-</div></div>
+      <div class="stat"><div class="k">&#27491;&#30830;&#29575;</div><div class="v" id="correctSignals">-</div></div>
       <div class="stat"><div class="k">&#24453;&#39564;&#35777;</div><div class="v" id="pendingSignals">-</div></div>
     </div>
   </div>
@@ -287,7 +289,7 @@ function fmtTime(ts){const n=Number(ts||0);if(!n)return '-';return new Date(n).t
 function resultLabel(v){if(v==='correct')return ['Correct','ok'];if(v==='wrong')return ['Wrong','bad'];if(v==='pending')return ['Pending','pending'];if(v==='no_data')return ['No data','pending'];return [String(v||'-'),''];}
 function directionLabel(v){return v==='up'?'Up':'Down';}
 function horizonByMin(sig,min){for(const h of (sig&&sig.horizons||[])){if(Number(h&&h.horizon_min||0)===min)return h;}return null;}
-function renderHorizonCell(sig,min){const h=horizonByMin(sig,min);if(!h)return '<div class="horizon-pill nodata-pill"><span class="pending">已截断</span><span class="meta">反向信号</span></div>';const res=resultLabel(h.result);if(h.result==='pending')return '<div class="horizon-pill pending-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';if(h.result==='no_data')return '<div class="horizon-pill nodata-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';const cls=Number(h.delta_price||0)>=0?'up':'down';const pillCls=Number(h.delta_price||0)>=0?'up-pill':'down-pill';return '<div class="horizon-pill '+pillCls+'"><span class="price">'+fmtPrice(h.verify_close_price)+'</span><span class="meta '+cls+'">'+fmtDelta(h.delta_price)+' / '+fmtPct(h.delta_pct)+'</span></div>';}
+function renderHorizonCell(sig,min){const h=horizonByMin(sig,min);if(!h)return '<div class="horizon-pill nodata-pill"><span class="pending">已截断</span><span class="meta">反向信号</span></div>';const res=resultLabel(h.result);if(h.result==='pending')return '<div class="horizon-pill pending-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';if(h.result==='no_data')return '<div class="horizon-pill nodata-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';const isCorrect=h.result==='correct';const cls=isCorrect?'ok':'bad';const pillCls=isCorrect?'up-pill':'down-pill';return '<div class="horizon-pill '+pillCls+'"><span class="price">'+fmtPrice(h.verify_close_price)+'</span><span class="meta '+cls+'">'+fmtDelta(h.delta_price)+' / '+fmtPct(h.delta_pct)+'</span></div>';}
 function clamp(v,min,max){return Math.max(min,Math.min(max,v));}
 function uniqByTS(rows){const out=[];const seen=new Set();for(const row of rows){const ts=Number(row.ts||0);if(!ts||seen.has(ts))continue;seen.add(ts);out.push(row);}return out.sort((a,b)=>Number(a.ts||0)-Number(b.ts||0));}
 function parseRows(rows){
@@ -534,10 +536,51 @@ function renderHistory(){
       +'</tr>';
   }).join('');
 }
+const BACKTEST_HORIZON_MINS=[5,15,30,60];
+function backtestResultCounts(target,result){
+  switch(String(result||'')){
+    case 'correct': target.correct_count++; break;
+    case 'wrong': target.wrong_count++; break;
+    case 'pending': target.pending_count++; break;
+    case 'no_data': target.no_data_count++; break;
+  }
+}
+function backtestCorrectRate(correct,wrong){const verified=Number(correct||0)+Number(wrong||0);return verified>0?Math.round((Number(correct||0)/verified)*1000)/10:0;}
+function buildSummaryFromSignals(signals){
+  const rows=Array.isArray(signals)?signals:[];
+  const out={total_signals:rows.length,correct_count:0,wrong_count:0,pending_count:0,no_data_count:0,correct_rate:0,verified_horizon_count:0,correct_horizon_count:0,horizon_correct_rate:0};
+  for(const sig of rows){
+    backtestResultCounts(out,sig&&sig.result);
+    for(const h of (Array.isArray(sig&&sig.horizons)?sig.horizons:[])){
+      const result=String(h&&h.result||'');
+      if(result==='correct'||result==='wrong')out.verified_horizon_count++;
+      if(result==='correct')out.correct_horizon_count++;
+    }
+  }
+  out.correct_rate=backtestCorrectRate(out.correct_count,out.wrong_count);
+  out.horizon_correct_rate=out.verified_horizon_count>0?Math.round((out.correct_horizon_count/out.verified_horizon_count)*1000)/10:0;
+  return out;
+}
+function buildHorizonStatsFromSignals(signals){
+  const rows=Array.isArray(signals)?signals:[];
+  return BACKTEST_HORIZON_MINS.map(min=>{
+    const out={horizon_min:min,label:min===60?'1h':(min+'m'),total_signals:0,correct_count:0,wrong_count:0,pending_count:0,no_data_count:0,correct_rate:0};
+    for(const sig of rows){
+      const h=horizonByMin(sig,min);
+      if(!h)continue;
+      out.total_signals++;
+      backtestResultCounts(out,h.result);
+    }
+    out.correct_rate=backtestCorrectRate(out.correct_count,out.wrong_count);
+    return out;
+  });
+}
 function renderSummary(summary){
   state.summary=summary||{};
   document.getElementById('totalSignals').textContent=String(summary.total_signals||0);
-  document.getElementById('correctSignals').textContent=(summary.correct_count||0)+' / '+Number(summary.correct_rate||0).toFixed(1)+'%';
+  document.getElementById('verifiedHorizons').textContent=String(summary.verified_horizon_count||0);
+  document.getElementById('correctHorizons').textContent=String(summary.correct_horizon_count||0);
+  document.getElementById('correctSignals').textContent=Number(summary.horizon_correct_rate||0).toFixed(1)+'%';
   document.getElementById('pendingSignals').textContent=String(summary.pending_count||0);
 }
 function renderHorizonStats(stats){
@@ -570,8 +613,8 @@ function applyBacktestData(d){
   state.viewCount=Math.max(1,state.candles.length||0);
   state.yZoom=1;
   state.yPan=0;
-  renderSummary(d.summary||{});
-  renderHorizonStats(d.horizon_stats||[]);
+  renderSummary(buildSummaryFromSignals(state.signals));
+  renderHorizonStats(buildHorizonStatsFromSignals(state.signals));
   renderHistory();
   updateChartMeta();
   draw();

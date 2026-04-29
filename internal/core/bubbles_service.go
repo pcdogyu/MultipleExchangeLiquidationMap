@@ -107,7 +107,15 @@ func (a *App) fetchOKXKlines(interval string, limit int, startTS, endTS int64) (
 		if len(r) < 5 {
 			continue
 		}
-		rows = append(rows, []any{r[0], r[1], r[2], r[3], r[4]})
+		quoteVolume := ""
+		if len(r) > 7 {
+			quoteVolume = r[7]
+		} else if len(r) > 6 {
+			quoteVolume = r[6]
+		} else if len(r) > 5 {
+			quoteVolume = r[5]
+		}
+		rows = append(rows, []any{r[0], r[1], r[2], r[3], r[4], quoteVolume})
 	}
 	return rows, "okx:" + bar, nil
 }

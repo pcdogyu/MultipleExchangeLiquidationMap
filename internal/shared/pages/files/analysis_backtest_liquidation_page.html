@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>双因子回测</title>
+<title>&#28165;&#31639;&#22238;&#27979;</title>
 <style>
 :root{--bg:#f4efe7;--ink:#172033;--muted:#63708a;--card:#fffdf8;--line:#e5dccd;--nav:#101827;--navInk:#f6f7fb;--up:#16a34a;--down:#dc2626;--grid:rgba(23,32,51,.12);--shadow:0 12px 36px rgba(17,24,39,.08)}
 [data-theme="dark"]{--bg:#000;--ink:#f8fafc;--muted:#cbd5e1;--card:#000;--line:#263041;--nav:#000;--navInk:#f8fafc;--grid:rgba(255,255,255,.16);--shadow:none}
@@ -26,7 +26,7 @@ body{margin:0;background:radial-gradient(circle at top left,#fff8ee,transparent 
 .hero-main{background:linear-gradient(140deg,rgba(194,106,45,.15),rgba(20,116,111,.08)),var(--card)}
 .hero-main h1{margin:8px 0 10px;font-size:34px}
 .small{font-size:12px;color:var(--muted);line-height:1.6}
-.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
 .horizon-stats{grid-template-columns:repeat(4,minmax(0,1fr))}
 .stat{padding:16px;border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,.68)}
 .stat .k{font-size:12px;color:var(--muted)}
@@ -96,7 +96,7 @@ th{color:var(--muted);font-weight:600}
 <div class="nav">
   <div class="nav-left">
     <div class="brand">ETH Liquidation Map</div>
-    <div class="menu"><a href="/">&#28165;&#31639;&#28909;&#21306;</a><a href="/config">&#27169;&#22411;&#37197;&#32622;</a><a href="/monitor">&#38647;&#21306;&#30417;&#25511;</a><a href="/map">&#30424;&#21475;&#27719;&#24635;</a><a href="/liquidations">&#24378;&#24179;&#28165;&#31639;</a><a href="/bubbles">&#27668;&#27873;&#22270;</a><a href="/webdatasource">&#39029;&#38754;&#25968;&#25454;&#28304;</a><a href="/channel">&#28040;&#24687;&#36890;&#36947;</a><a href="/analysis">&#26085;&#20869;&#20998;&#26512;</a><a href="/analysis-backtest">&#21333;&#22240;&#23376;&#22238;&#27979;</a><a href="/analysis-backtest-liquidation">&#28165;&#31639;&#22238;&#27979;</a><a href="/analysis-backtest-2fa" class="active">&#21452;&#22240;&#23376;&#22238;&#27979;</a></div>
+    <div class="menu"><a href="/">&#28165;&#31639;&#28909;&#21306;</a><a href="/config">&#27169;&#22411;&#37197;&#32622;</a><a href="/monitor">&#38647;&#21306;&#30417;&#25511;</a><a href="/map">&#30424;&#21475;&#27719;&#24635;</a><a href="/liquidations">&#24378;&#24179;&#28165;&#31639;</a><a href="/bubbles">&#27668;&#27873;&#22270;</a><a href="/webdatasource">&#39029;&#38754;&#25968;&#25454;&#28304;</a><a href="/channel">&#28040;&#24687;&#36890;&#36947;</a><a href="/analysis">&#26085;&#20869;&#20998;&#26512;</a><a href="/analysis-backtest">&#21333;&#22240;&#23376;&#22238;&#27979;</a><a href="/analysis-backtest-liquidation" class="active">&#28165;&#31639;&#22238;&#27979;</a><a href="/analysis-backtest-2fa">&#21452;&#22240;&#23376;&#22238;&#27979;</a></div>
   </div>
     <div class="nav-right">
     <div class="theme-toggle">
@@ -111,45 +111,32 @@ th{color:var(--muted);font-weight:600}
 <div class="wrap">
   <div class="hero">
     <div class="panel hero-main">
-      <div class="small">双因子回测</div>
-      <h1>双因子回测</h1>
-      <div class="small">在基础方向信号之外，叠加信号所在 5m 成交量相对均量作为第二因子，比较放量、正常、缩量分组下的历史命中表现。</div>
+      <div class="small">Liquidation Backtest</div>
+      <h1>&#28165;&#31639;&#22238;&#27979;</h1>
+      <div class="small">&#22522;&#20110; 1D / 7D / 30D &#20840;&#37327;&#28165;&#31639;&#28857;&#20301;&#21464;&#21270;&#29983;&#25104;&#26041;&#21521;&#20449;&#21495;&#65292;&#24182;&#23558;&#20449;&#21495;&#26631;&#27880;&#22312;&#25152;&#36873; K &#32447;&#21608;&#26399;&#19978;&#65292;&#32479;&#35745;&#20449;&#21495;&#21457;&#29983;&#21518; 5m / 15m / 30m / 1h &#30340;&#25910;&#30424;&#39564;&#35777;&#32467;&#26524;&#12290;</div>
     </div>
     <div class="stats">
-      <div class="stat"><div class="k">总信号数</div><div class="v" id="totalSignals">-</div></div>
-      <div class="stat"><div class="k">已验证数</div><div class="v" id="verifiedHorizons">-</div></div>
-      <div class="stat"><div class="k">正确验证数</div><div class="v" id="correctHorizons">-</div></div>
-      <div class="stat"><div class="k">正确率</div><div class="v" id="correctSignals">-</div></div>
-      <div class="stat"><div class="k">待验证</div><div class="v" id="pendingSignals">-</div></div>
-      <div class="stat"><div class="k">第二因子</div><div class="v" id="factorName">全部</div></div>
+      <div class="stat"><div class="k">&#24635;&#20449;&#21495;&#25968;</div><div class="v" id="totalSignals">-</div></div>
+      <div class="stat"><div class="k">&#24050;&#39564;&#35777;&#25968;</div><div class="v" id="verifiedHorizons">-</div></div>
+      <div class="stat"><div class="k">&#27491;&#30830;&#39564;&#35777;&#25968;</div><div class="v" id="correctHorizons">-</div></div>
+      <div class="stat"><div class="k">&#27491;&#30830;&#29575;</div><div class="v" id="correctSignals">-</div></div>
+      <div class="stat"><div class="k">&#24453;&#39564;&#35777;</div><div class="v" id="pendingSignals">-</div></div>
     </div>
   </div>
 
   <div class="section">
     <div class="panel">
-      <h2>信号生成逻辑</h2>
+      <h2>&#20449;&#21495;&#29983;&#25104;&#21407;&#29702;</h2>
       <div class="principle-card">
         <div class="principle-box">
-          <h3>先计算基础信号，再叠加第二因子</h3>
-          <p>页面先沿用单因子清算方向信号，再给每条信号追加成交量第二因子分组。基础信号来自 <code>1D / 7D / 30D</code> 清算快照变化，第二因子则根据信号所在 5m 成交量相对前 12 根均量进行分类。</p>
+          <h3>&#21333;&#22240;&#23376;&#21482;&#30475;&#22810;&#31383;&#21475;&#28165;&#31639;&#24102;&#21464;&#21270;</h3>
+          <p>&#31639;&#27861;&#35835;&#21462;&#26368;&#36817;&#20004;&#20221; 1D / 7D / 30D &#28165;&#31639;&#28857;&#20301;&#24555;&#29031;&#65292;&#25226;&#20840;&#37327;&#28857;&#20301;&#25353;&#20215;&#26684;&#32858;&#21512;&#25104;&#20215;&#26684;&#24102;&#65292;&#20877;&#27604;&#36739; long / short &#28165;&#31639;&#37329;&#39069;&#30340;&#20928;&#21464;&#21270;&#12290;&#31163;&#29616;&#20215;&#36234;&#36817;&#12289;&#21464;&#21270;&#36234;&#26126;&#26174;&#12289;&#22810;&#20010;&#31383;&#21475;&#26041;&#21521;&#36234;&#19968;&#33268;&#65292;&#26041;&#21521;&#20998;&#25968;&#21644;&#32622;&#20449;&#24230;&#36234;&#39640;&#12290;</p>
         </div>
         <div class="principle-points">
-          <div class="principle-pill">
-            <div class="k">第一步</div>
-            <div class="v">生成基础方向、置信度和信号价格。</div>
-          </div>
-          <div class="principle-pill">
-            <div class="k">第二步</div>
-            <div class="v">读取信号所在 5m 成交量，并与前 12 根 5m K 线平均成交量比较。</div>
-          </div>
-          <div class="principle-pill">
-            <div class="k">第三步</div>
-            <div class="v">按当前第二因子和置信度阈值过滤信号。</div>
-          </div>
-          <div class="principle-pill">
-            <div class="k">当前规则</div>
-            <div class="v">放量 +8，正常不变，缩量 -8，最后再应用页面置信度筛选。</div>
-          </div>
+          <div class="principle-pill"><div class="k">&#31532;&#19968;&#27493;</div><div class="v">&#25353;&#20215;&#26684;&#24102;&#32858;&#21512; 1D / 7D / 30D &#20840;&#37327;&#28165;&#31639;&#28857;&#20301;&#65292;&#20998;&#21035;&#32047;&#35745; long&#12289;short&#12289;&#20928;&#21387;&#21147;&#21644;&#24635;&#37329;&#39069;&#12290;</div></div>
+          <div class="principle-pill"><div class="k">&#31532;&#20108;&#27493;</div><div class="v">&#27604;&#36739;&#26368;&#26032;&#24555;&#29031;&#19982;&#19978;&#19968;&#20221;&#24555;&#29031;&#65292;&#31579;&#20986;&#21464;&#21270;&#36275;&#22815;&#22823;&#30340;&#20215;&#26684;&#24102;&#65292;&#35745;&#31639;&#27599;&#20010;&#31383;&#21475;&#33258;&#24049;&#30340;&#26041;&#21521;&#20998;&#25968;&#12290;</div></div>
+          <div class="principle-pill"><div class="k">&#31532;&#19977;&#27493;</div><div class="v">&#26681;&#25454;&#31383;&#21475;&#26032;&#40092;&#24230;&#12289;&#20869;&#37096;&#19968;&#33268;&#24615;&#21644;&#26377;&#25928;&#21464;&#21270;&#37327;&#65292;&#21160;&#24577;&#20998;&#37197; 1D / 7D / 30D &#26435;&#37325;&#12290;</div></div>
+          <div class="principle-pill"><div class="k">&#36755;&#20986;</div><div class="v">&#26368;&#32456;&#36755;&#20986;&#26041;&#21521;&#12289;&#32622;&#20449;&#24230;&#21644;&#25688;&#35201;&#65307;&#20998;&#25968;&#25509;&#36817;&#20013;&#24615;&#26102;&#19981;&#29983;&#25104;&#20449;&#21495;&#12290;</div></div>
         </div>
       </div>
     </div>
@@ -157,35 +144,9 @@ th{color:var(--muted);font-weight:600}
 
   <div class="section">
     <div class="panel">
-      <h2>多周期验证统计</h2>
+      <h2>&#22810;&#21608;&#26399;&#39564;&#35777;&#32479;&#35745;</h2>
       <div class="stats horizon-stats" id="horizonStats">
-        <div class="stat"><div class="k">加载中</div><div class="v">-</div></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="section">
-    <div class="panel">
-      <h2>按置信度分桶统计</h2>
-      <div class="small" id="confidenceBucketMeta">按当前第二因子统计全部置信度档位，方便直接比较不同分数段的历史表现。</div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>置信度档位</th>
-              <th>信号数</th>
-              <th>已验证</th>
-              <th>正确</th>
-              <th>错误</th>
-              <th>待验证</th>
-              <th>无数据</th>
-              <th>正确率</th>
-            </tr>
-          </thead>
-          <tbody id="confidenceBucketBody">
-            <tr><td colspan="8" class="empty">加载中...</td></tr>
-          </tbody>
-        </table>
+        <div class="stat"><div class="k">&#26242;&#26080;&#32479;&#35745;</div><div class="v">-</div></div>
       </div>
     </div>
   </div>
@@ -194,7 +155,7 @@ th{color:var(--muted);font-weight:600}
     <div class="panel chart-panel">
       <div class="toolbar">
         <div class="toolbar-group">
-          <label for="intervalSelect">K线周期</label>
+          <label for="intervalSelect">K&#32447;&#21608;&#26399;</label>
           <select id="intervalSelect">
             <option value="1m">1m</option>
             <option value="5m" selected>5m</option>
@@ -208,77 +169,69 @@ th{color:var(--muted);font-weight:600}
             <option value="48h">48h</option>
             <option value="72h">72h</option>
           </select>
-          <label for="confMinSelect">置信度</label>
+          <label for="confMinSelect">&#32622;&#20449;&#24230;</label>
           <select id="confMinSelect">
-            <option value="0">全部</option>
+            <option value="0">&#20840;&#37096;</option>
             <option value="70">&gt;70</option>
             <option value="80">&gt;80</option>
             <option value="85">&gt;85</option>
             <option value="90">&gt;90</option>
           </select>
-          <button class="primary" type="button" id="reloadBtn">刷新图表</button>
+          <button class="primary" type="button" id="reloadBtn">&#21047;&#26032;&#22270;&#34920;</button>
         </div>
         <div class="toolbar-group">
-          <label for="factor2Select">第二因子</label>
-          <select id="factor2Select">
-            <option value="all">全部</option>
-          </select>
-          <button class="secondary" type="button" id="widthDownBtn">宽度 -</button>
-          <button class="secondary" type="button" id="widthUpBtn">宽度 +</button>
-          <button class="secondary" type="button" id="heightDownBtn">高度 -</button>
-          <button class="secondary" type="button" id="heightUpBtn">高度 +</button>
-          <button class="secondary" type="button" id="resetViewBtn">重置视图</button>
+          <button class="secondary" type="button" id="widthDownBtn">&#23485;&#24230; -</button>
+          <button class="secondary" type="button" id="widthUpBtn">&#23485;&#24230; +</button>
+          <button class="secondary" type="button" id="heightDownBtn">&#39640;&#24230; -</button>
+          <button class="secondary" type="button" id="heightUpBtn">&#39640;&#24230; +</button>
+          <button class="secondary" type="button" id="resetViewBtn">&#37325;&#32622;&#35270;&#22270;</button>
           <span class="size-pill" id="sizeInfo">1600 x 620</span>
         </div>
       </div>
 
-      <h2>ETH 价格行情与方向箭头</h2>
+      <h2>ETH &#20215;&#26684;&#34892;&#24773;&#19982;&#26041;&#21521;&#31661;&#22836;</h2>
       <div class="chart-viewport" id="chartViewport">
         <div class="canvas-wrap" id="canvasWrap">
           <canvas id="chart" width="1600" height="620"></canvas>
         </div>
       </div>
       <div class="legend small">
-        <div>支持 1m / 5m / 15m / 30m / 1h / 4h / 8h / 12h / 24h / 48h / 72h 周期切换。滚轮缩放，拖动平移，Shift + 滚轮单独调整价格高度。</div>
-        <div>
-          <span class="tag"><span class="dot" style="background:#16a34a"></span>向上信号</span>
-          <span class="tag" style="margin-left:12px"><span class="dot" style="background:#dc2626"></span>向下信号</span>
-        </div>
+        <div>&#25903;&#25345; 1m / 5m / 15m / 30m / 1h / 4h / 8h / 12h / 24h / 48h / 72h &#21608;&#26399;&#20999;&#25442;&#12290;&#40736;&#26631;&#28378;&#36718;&#32553;&#25918;&#65292;&#25302;&#21160;&#24038;&#21491;&#24179;&#31227;&#65307;Shift + &#28378;&#36718;&#35843;&#25972;&#20215;&#26684;&#39640;&#24230;&#12290;</div>
+        <div><span class="tag"><span class="dot" style="background:#16a34a"></span>&#21521;&#19978;&#20449;&#21495;</span><span class="tag" style="margin-left:12px"><span class="dot" style="background:#dc2626"></span>&#21521;&#19979;&#20449;&#21495;</span></div>
       </div>
-      <div class="small meta-line" id="factorMeta">第二因子统计加载中...</div>
-      <div class="small meta-line" id="chartMeta">图表加载中...</div>
+      <div class="small meta-line" id="chartMeta">&#22270;&#34920;&#21152;&#36733;&#20013;...</div>
     </div>
   </div>
 
   <div class="section">
     <div class="panel">
-      <h2>历史方向记录</h2>
+      <h2>&#21382;&#21490;&#26041;&#21521;&#35760;&#24405;</h2>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>时间</th>
-              <th>方向</th>
-              <th>置信度</th>
-              <th>第二因子</th>
-              <th>信号价</th>
+              <th>&#26102;&#38388;</th>
+              <th>&#26041;&#21521;</th>
+              <th>&#32622;&#20449;&#24230;</th>
+              <th>&#20449;&#21495;&#20215;</th>
               <th>5m</th>
               <th>15m</th>
               <th>30m</th>
               <th>1h</th>
-              <th>结论</th>
+              <th>&#32467;&#35770;</th>
             </tr>
           </thead>
           <tbody id="historyBody">
-            <tr><td colspan="10" class="empty">加载中...</td></tr>
+            <tr><td colspan="9" class="empty">&#21152;&#36733;&#20013;...</td></tr>
           </tbody>
         </table>
       </div>
     </div>
   </div>
 
-  <div class="footer" id="footer">双因子回测加载中...</div>
+  <div class="footer" id="footer">analysis-backtest-liquidation loading...</div>
 </div>
+
 
 <script>
 const DAY_MS=24*60*60*1000;
@@ -298,10 +251,7 @@ const INTERVAL_CONFIG={
 const state={
   signals:[],
   summary:{},
-  factorOptions:[],
-  secondFactor:'all',
   horizonStats:[],
-  confidenceBuckets:[],
   candles:[],
   confMin:'0',
   interval:'5m',
@@ -316,8 +266,7 @@ const state={
   dragLastX:0,
   dragLastY:0,
   chartSource:'-',
-  chartLoading:false,
-  loadSeq:0
+  chartLoading:false
 };
 
 function setTheme(t){
@@ -333,20 +282,12 @@ function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';
 function esc(s){return String(s==null?'':s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
 function fmtPrice(v){const n=Number(v||0);return isFinite(n)?n.toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1}):'-';}
 function fmtConfidence(v){const n=Number(v||0);return isFinite(n)?n.toFixed(1)+'%':'-';}
-function confidenceFilterLabel(v){const n=Number(v||0);return n>0?('>'+n):'全部';}
+function confidenceFilterLabel(v){const n=Number(v||0);return n>0?('>'+n):'All';}
 function fmtPct(v){const n=Number(v||0);return isFinite(n)?(n>=0?'+':'')+n.toFixed(2)+'%':'-';}
 function fmtDelta(v){const n=Number(v||0);return isFinite(n)?(n>=0?'+':'')+n.toFixed(1):'-';}
 function fmtTime(ts){const n=Number(ts||0);if(!n)return '-';return new Date(n).toLocaleString('zh-CN',{hour12:false});}
-function resultLabel(v){if(v==='correct')return ['正确','ok'];if(v==='wrong')return ['错误','bad'];if(v==='pending')return ['待验证','pending'];if(v==='no_data')return ['无数据','pending'];return [String(v||'-'),''];}
-function directionLabel(v){return v==='up'?'向上':'向下';}
-function factorLabel(v){if(v==='volume_spike')return '放量';if(v==='volume_normal')return '正常';if(v==='volume_low')return '缩量';if(v==='insufficient')return '样本不足';return '全部';}
-function normalizeSecondFactor(v){v=String(v||'').trim();if(v==='volume_spike'||v==='volume_normal'||v==='volume_low')return v;return 'all';}
-function filterSignalsBySecondFactor(signals,factor){
-  const rows=Array.isArray(signals)?signals:[];
-  const key=normalizeSecondFactor(factor);
-  if(key==='all')return rows.slice();
-  return rows.filter(sig=>String(sig&&sig.second_factor_key||'')===key);
-}
+function resultLabel(v){if(v==='correct')return ['Correct','ok'];if(v==='wrong')return ['Wrong','bad'];if(v==='pending')return ['Pending','pending'];if(v==='no_data')return ['No data','pending'];return [String(v||'-'),''];}
+function directionLabel(v){return v==='up'?'Up':'Down';}
 function horizonByMin(sig,min){for(const h of (sig&&sig.horizons||[])){if(Number(h&&h.horizon_min||0)===min)return h;}return null;}
 function renderHorizonCell(sig,min){const h=horizonByMin(sig,min);if(!h)return '<div class="horizon-pill nodata-pill"><span class="pending">已截断</span><span class="meta">反向信号</span></div>';const res=resultLabel(h.result);if(h.result==='pending')return '<div class="horizon-pill pending-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';if(h.result==='no_data')return '<div class="horizon-pill nodata-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';const isCorrect=h.result==='correct';const cls=isCorrect?'ok':'bad';const pillCls=isCorrect?'up-pill':'down-pill';return '<div class="horizon-pill '+pillCls+'"><span class="price">'+fmtPrice(h.verify_close_price)+'</span><span class="meta '+cls+'">'+fmtDelta(h.delta_price)+' / '+fmtPct(h.delta_pct)+'</span></div>';}
 function clamp(v,min,max){return Math.max(min,Math.min(max,v));}
@@ -419,7 +360,7 @@ async function fetchRangeRows(interval,startTS,endTS,targetCount){
 async function loadChartCandles(){
   state.chartLoading=true;
   const meta=document.getElementById('chartMeta');
-  meta.textContent='图表加载中...';
+  meta.textContent='Loading chart...';
   draw();
   const cfg=INTERVAL_CONFIG[state.interval]||INTERVAL_CONFIG['5m'];
   const endTS=Date.now();
@@ -505,7 +446,7 @@ function draw(){
   ctx.font='12px sans-serif';
   if(state.chartLoading){
     ctx.fillStyle=textColor();
-    ctx.fillText('图表加载中...',20,30);
+    ctx.fillText('Loading chart...',20,30);
     return;
   }
   if(!state.candles.length){
@@ -577,7 +518,7 @@ function draw(){
 function renderHistory(){
   const body=document.getElementById('historyBody');
   if(!state.signals.length){
-    body.innerHTML='<tr><td colspan="10" class="empty">当前筛选条件下暂无符合要求的双因子回测信号</td></tr>';
+    body.innerHTML='<tr><td colspan="9" class="empty">No signals matched the current confidence filter in the last 24h</td></tr>';
     return;
   }
   body.innerHTML=state.signals.slice().sort((a,b)=>Number(b.signal_ts||0)-Number(a.signal_ts||0)).map(sig=>{
@@ -586,7 +527,6 @@ function renderHistory(){
       +'<td>'+fmtTime(sig.signal_ts)+'</td>'
       +'<td class="'+dirCls+'">'+directionLabel(sig.direction)+'</td>'
       +'<td>'+fmtConfidence(sig.confidence)+'</td>'
-      +'<td>'+esc(sig.second_factor_label||factorLabel(sig.second_factor_key))+'</td>'
       +'<td>'+fmtPrice(sig.signal_price)+'</td>'
       +'<td class="horizon-cell">'+renderHorizonCell(sig,5)+'</td>'
       +'<td class="horizon-cell">'+renderHorizonCell(sig,15)+'</td>'
@@ -595,27 +535,6 @@ function renderHistory(){
       +'<td>'+esc(sig.headline||sig.summary||'-')+'</td>'
       +'</tr>';
   }).join('');
-}
-function renderFactorOptions(options,selected){
-  state.factorOptions=Array.isArray(options)?options:[];
-  state.secondFactor=normalizeSecondFactor(selected||state.secondFactor||'all');
-  const select=document.getElementById('factor2Select');
-  if(select){
-    select.innerHTML=state.factorOptions.map(opt=>'<option value="'+esc(opt.key)+'">'+esc(opt.label)+' ('+Number(opt.total_signals||0)+')</option>').join('');
-    if(!select.innerHTML)select.innerHTML='<option value="all">全部</option>';
-    select.value=state.secondFactor;
-  }
-  const current=state.factorOptions.find(opt=>String(opt.key||'')===String(state.secondFactor||''));
-  const factorName=document.getElementById('factorName');
-  if(factorName)factorName.textContent=current&&current.label?current.label:factorLabel(state.secondFactor);
-  const factorMeta=document.getElementById('factorMeta');
-  if(factorMeta){
-    factorMeta.textContent=state.factorOptions.map(opt=>{
-      const total=Number(opt.total_signals||0);
-      const rate=Number(opt.correct_rate||0).toFixed(1);
-      return String(opt.label||factorLabel(opt.key))+': '+total+' 条 / '+rate+'%';
-    }).join(' | ');
-  }
 }
 const BACKTEST_HORIZON_MINS=[5,15,30,60];
 function backtestResultCounts(target,result){
@@ -669,7 +588,7 @@ function renderHorizonStats(stats){
   const root=document.getElementById('horizonStats');
   if(!root)return;
   if(!state.horizonStats.length){
-    root.innerHTML='<div class="stat"><div class="k">暂无统计</div><div class="v">-</div></div>';
+    root.innerHTML='<div class="stat"><div class="k">No stats</div><div class="v">-</div></div>';
     return;
   }
   root.innerHTML=state.horizonStats.map(stat=>{
@@ -677,50 +596,11 @@ function renderHorizonStats(stats){
     const total=Number(stat.total_signals||0);
     const rate=Number(stat.correct_rate||0).toFixed(1)+'%';
     const verified=Number(stat.correct_count||0)+Number(stat.wrong_count||0);
-    return '<div class="stat"><div class="k">'+esc(label)+' 收盘判断</div><div class="v">'+rate+'</div><div class="small">样本 '+total+' | 已验证 '+verified+' | 待验证 '+Number(stat.pending_count||0)+'</div></div>';
+    return '<div class="stat"><div class="k">'+esc(label)+' close check</div><div class="v">'+rate+'</div><div class="small">samples '+total+' | verified '+verified+' | pending '+Number(stat.pending_count||0)+'</div></div>';
   }).join('');
 }
-function renderConfidenceBuckets(rows){
-  state.confidenceBuckets=Array.isArray(rows)?rows:[];
-  const body=document.getElementById('confidenceBucketBody');
-  const meta=document.getElementById('confidenceBucketMeta');
-  if(meta){
-    meta.textContent='按当前成交量第二因子统计全部置信度档位；右上角置信度筛选只影响下方信号列表，不影响这张对比表。';
-  }
-  if(!body)return;
-  if(!state.confidenceBuckets.length){
-    body.innerHTML='<tr><td colspan="8" class="empty">当前条件下暂无可统计的置信度分桶样本</td></tr>';
-    return;
-  }
-  body.innerHTML=state.confidenceBuckets.map(bucket=>{
-    const total=Number(bucket.total_signals||0);
-    const correct=Number(bucket.correct_count||0);
-    const wrong=Number(bucket.wrong_count||0);
-    const pending=Number(bucket.pending_count||0);
-    const noData=Number(bucket.no_data_count||0);
-    const verified=correct+wrong;
-    return '<tr>'
-      +'<td>'+esc(bucket.label||'-')+'</td>'
-      +'<td>'+total+'</td>'
-      +'<td>'+verified+'</td>'
-      +'<td class="ok">'+correct+'</td>'
-      +'<td class="bad">'+wrong+'</td>'
-      +'<td class="pending">'+pending+'</td>'
-      +'<td>'+noData+'</td>'
-      +'<td>'+(verified>0?(Number(bucket.correct_rate||0).toFixed(1)+'%'):'-')+'</td>'
-      +'</tr>';
-  }).join('');
-}
-function renderBacktestViews(){
-  renderSummary(buildSummaryFromSignals(state.signals));
-  renderHorizonStats(buildHorizonStatsFromSignals(state.signals));
-  renderHistory();
-  updateChartMeta();
-  draw();
-}
-function applyBacktestData(d,selectedFactor){
-  const factor=normalizeSecondFactor(selectedFactor||d.selected_factor||state.secondFactor||'all');
-  state.signals=filterSignalsBySecondFactor(d.signals||[],factor);
+function applyBacktestData(d){
+  state.signals=d.signals||[];
   state.candles=parseCandleMaps(d.candles||[]);
   state.chartSource=d.chart_source||'-';
   if(d.chart_interval)state.interval=String(d.chart_interval);
@@ -733,24 +613,22 @@ function applyBacktestData(d,selectedFactor){
   state.viewCount=Math.max(1,state.candles.length||0);
   state.yZoom=1;
   state.yPan=0;
-  renderFactorOptions(d.factor_options||[],factor);
-  renderConfidenceBuckets(d.confidence_buckets||[]);
-  renderBacktestViews();
+  renderSummary(buildSummaryFromSignals(state.signals));
+  renderHorizonStats(buildHorizonStatsFromSignals(state.signals));
+  renderHistory();
+  updateChartMeta();
+  draw();
 }
 async function loadSignals(){
-  const seq=++state.loadSeq;
-  const requestedFactor=normalizeSecondFactor(state.secondFactor||'all');
   state.chartLoading=true;
   draw();
-  const params=new URLSearchParams({hours:'24',interval:String(state.interval||'5m'),factor2:requestedFactor,conf_min:String(state.confMin||'0'),_:String(Date.now())});
-  const r=await fetch('/api/analysis-backtest-2fa?'+params.toString(),{cache:'no-store'}).catch(()=>null);
-  if(!r)throw new Error('无法连接 /api/analysis-backtest-2fa');
+  const params=new URLSearchParams({hours:'24',interval:String(state.interval||'5m'),conf_min:String(state.confMin||'0')});
+  const r=await fetch('/api/analysis-backtest?'+params.toString()).catch(()=>null);
+  if(!r)throw new Error('Cannot request /api/analysis-backtest');
   if(!r.ok)throw new Error(await r.text().catch(()=>('HTTP '+r.status)));
   const d=await r.json().catch(()=>null);
-  if(!d)throw new Error('回测接口返回了无法解析的 JSON');
-  if(seq!==state.loadSeq)return false;
-  applyBacktestData(d,requestedFactor);
-  return true;
+  if(!d)throw new Error('API response is not valid JSON');
+  applyBacktestData(d);
 }
 function resetViewState(){
   state.viewStart=0;
@@ -776,13 +654,6 @@ function bindControls(){
     state.confMin=String(e.target.value||'0');
     await reloadAll();
   });
-  const factorSelect=document.getElementById('factor2Select');
-  const handleFactorChange=async e=>{
-    state.secondFactor=normalizeSecondFactor(e.target.value||'all');
-    await reloadAll();
-  };
-  factorSelect.addEventListener('change',handleFactorChange);
-  factorSelect.addEventListener('input',handleFactorChange);
   document.getElementById('reloadBtn').addEventListener('click',reloadAll);
   document.getElementById('widthDownBtn').addEventListener('click',()=>adjustChartSize('width',-180));
   document.getElementById('widthUpBtn').addEventListener('click',()=>adjustChartSize('width',180));
@@ -796,26 +667,24 @@ function bindControls(){
 }
 async function reloadChartOnly(){
   try{
-    const applied=await loadSignals();
-    if(!applied)return;
-    document.getElementById('footer').textContent='因子 '+factorLabel(state.secondFactor)+' | 置信度 '+confidenceFilterLabel(state.confMin)+' | 周期 '+state.interval+' | 信号 '+state.signals.length+' | K线 '+state.candles.length;
+    await loadSignals();
+    document.getElementById('footer').textContent='Confidence '+confidenceFilterLabel(state.confMin)+' | Interval '+state.interval+' | Signals '+state.signals.length+' | K '+state.candles.length;
   }catch(err){
     state.chartLoading=false;
     state.candles=[];
     draw();
-    document.getElementById('chartMeta').textContent='图表加载失败: '+String(err&&err.message||err||'未知错误');
-    document.getElementById('footer').textContent='图表加载失败';
+    document.getElementById('chartMeta').textContent='Chart load failed: '+String(err&&err.message||err||'unknown error');
+    document.getElementById('footer').textContent='Chart load failed';
   }
 }
 async function reloadAll(){
   try{
-    document.getElementById('footer').textContent='加载中...';
-    const applied=await loadSignals();
-    if(!applied)return;
-    document.getElementById('footer').textContent='因子 '+factorLabel(state.secondFactor)+' | 置信度 '+confidenceFilterLabel(state.confMin)+' | 近24小时信号 '+state.signals.length+' | 周期 '+state.interval+' | K线 '+state.candles.length;
+    document.getElementById('footer').textContent='Loading...';
+    await loadSignals();
+    document.getElementById('footer').textContent='Confidence '+confidenceFilterLabel(state.confMin)+' | Last 24h signals '+state.signals.length+' | Interval '+state.interval+' | K '+state.candles.length;
   }catch(err){
     state.chartLoading=false;
-    document.getElementById('footer').textContent=String(err&&err.message||err||'加载失败');
+    document.getElementById('footer').textContent=String(err&&err.message||err||'Load failed');
     draw();
   }
 }
@@ -884,4 +753,5 @@ reloadAll();
 </script>
 </body>
 </html>
+
 

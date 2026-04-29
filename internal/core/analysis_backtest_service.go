@@ -15,18 +15,19 @@ var analysisBacktestHorizons = []int{5, 15, 30, 60}
 
 const (
 	analysisSecondFactorAll          = "all"
-	analysisSecondFactorAligned      = "aligned"
-	analysisSecondFactorCounter      = "counter"
-	analysisSecondFactorRange        = "range"
+	analysisSecondFactorVolumeSpike  = "volume_spike"
+	analysisSecondFactorVolumeNormal = "volume_normal"
+	analysisSecondFactorVolumeLow    = "volume_low"
 	analysisSecondFactorInsufficient = "insufficient"
 )
 
 type analysisBacktestCandle struct {
-	TS int64
-	O  float64
-	H  float64
-	L  float64
-	C  float64
+	TS          int64
+	O           float64
+	H           float64
+	L           float64
+	C           float64
+	QuoteVolume float64
 }
 
 type analysisBacktestIntervalConfig struct {
@@ -120,6 +121,20 @@ func parseFlexibleInt64(v any) (int64, bool) {
 	}
 }
 
+func parseAnalysisCandleQuoteVolume(row []any) float64 {
+	if len(row) > 7 {
+		if v, ok := parseFlexibleFloat(row[7]); ok && v > 0 {
+			return v
+		}
+	}
+	if len(row) > 5 {
+		if v, ok := parseFlexibleFloat(row[5]); ok && v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
 func parseAnalysisBacktestCandles(rows any) []analysisBacktestCandle {
 	list, ok := rows.([][]any)
 	if !ok {
@@ -146,11 +161,12 @@ func parseAnalysisBacktestCandles(rows any) []analysisBacktestCandle {
 			continue
 		}
 		out = append(out, analysisBacktestCandle{
-			TS: ts,
-			O:  open,
-			H:  high,
-			L:  low,
-			C:  closePrice,
+			TS:          ts,
+			O:           open,
+			H:           high,
+			L:           low,
+			C:           closePrice,
+			QuoteVolume: parseAnalysisCandleQuoteVolume(row),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].TS < out[j].TS })
@@ -184,7 +200,7 @@ func aggregateAnalysisBacktestCandles(candles []analysisBacktestCandle, bucketMS
 			if current != nil {
 				out = append(out, *current)
 			}
-			copyCandle := analysisBacktestCandle{TS: ts, O: candle.O, H: candle.H, L: candle.L, C: candle.C}
+			copyCandle := analysisBacktestCandle{TS: ts, O: candle.O, H: candle.H, L: candle.L, C: candle.C, QuoteVolume: candle.QuoteVolume}
 			current = &copyCandle
 			continue
 		}
@@ -195,6 +211,7 @@ func aggregateAnalysisBacktestCandles(candles []analysisBacktestCandle, bucketMS
 			current.L = candle.L
 		}
 		current.C = candle.C
+		current.QuoteVolume += candle.QuoteVolume
 	}
 	if current != nil {
 		out = append(out, *current)
@@ -262,14 +279,14 @@ func analysisBacktestHorizonsForSignal(records []AnalysisSignalRecord, index int
 
 func normalizeAnalysisSecondFactorKey(v string) string {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "", analysisSecondFactorAll:
+	case "", analysisSecondFactorAll, "aligned", "counter", "range":
 		return analysisSecondFactorAll
-	case analysisSecondFactorAligned:
-		return analysisSecondFactorAligned
-	case analysisSecondFactorCounter:
-		return analysisSecondFactorCounter
-	case analysisSecondFactorRange:
-		return analysisSecondFactorRange
+	case analysisSecondFactorVolumeSpike:
+		return analysisSecondFactorVolumeSpike
+	case analysisSecondFactorVolumeNormal:
+		return analysisSecondFactorVolumeNormal
+	case analysisSecondFactorVolumeLow:
+		return analysisSecondFactorVolumeLow
 	case analysisSecondFactorInsufficient:
 		return analysisSecondFactorInsufficient
 	default:
@@ -279,12 +296,12 @@ func normalizeAnalysisSecondFactorKey(v string) string {
 
 func analysisSecondFactorLabel(key string) string {
 	switch normalizeAnalysisSecondFactorKey(key) {
-	case analysisSecondFactorAligned:
-		return "顺势"
-	case analysisSecondFactorCounter:
-		return "逆势"
-	case analysisSecondFactorRange:
-		return "震荡"
+	case analysisSecondFactorVolumeSpike:
+		return "放量"
+	case analysisSecondFactorVolumeNormal:
+		return "正常"
+	case analysisSecondFactorVolumeLow:
+		return "缩量"
 	case analysisSecondFactorInsufficient:
 		return "样本不足"
 	default:
@@ -306,29 +323,34 @@ func findCandleIndexForTS(candles []analysisBacktestCandle, ts int64) int {
 }
 
 func classifyAnalysisSecondFactor(record AnalysisSignalRecord, candles []analysisBacktestCandle) (string, string) {
-	const lookbackCandles = 6
+	const lookbackCandles = 12
 	idx := findCandleIndexForTS(candles, record.SignalTS)
 	if idx < lookbackCandles {
 		return analysisSecondFactorInsufficient, analysisSecondFactorLabel(analysisSecondFactorInsufficient)
 	}
-	base := candles[idx-lookbackCandles].C
-	current := candles[idx].C
-	if !(base > 0) || !(current > 0) {
+	currentVolume := candles[idx].QuoteVolume
+	if !(currentVolume > 0) {
 		return analysisSecondFactorInsufficient, analysisSecondFactorLabel(analysisSecondFactorInsufficient)
 	}
-	delta := current - base
-	threshold := math.Max(record.SignalPrice*0.0012, 6)
-	if math.Abs(delta) < threshold {
-		return analysisSecondFactorRange, analysisSecondFactorLabel(analysisSecondFactorRange)
+	sum := 0.0
+	for i := idx - lookbackCandles; i < idx; i++ {
+		if !(candles[i].QuoteVolume > 0) {
+			return analysisSecondFactorInsufficient, analysisSecondFactorLabel(analysisSecondFactorInsufficient)
+		}
+		sum += candles[i].QuoteVolume
 	}
-	trendDirection := "up"
-	if delta < 0 {
-		trendDirection = "down"
+	avg := sum / lookbackCandles
+	if !(avg > 0) {
+		return analysisSecondFactorInsufficient, analysisSecondFactorLabel(analysisSecondFactorInsufficient)
 	}
-	if normalizeAnalysisDirection(record.Direction) == trendDirection {
-		return analysisSecondFactorAligned, analysisSecondFactorLabel(analysisSecondFactorAligned)
+	ratio := currentVolume / avg
+	if ratio >= 1.5 {
+		return analysisSecondFactorVolumeSpike, analysisSecondFactorLabel(analysisSecondFactorVolumeSpike)
 	}
-	return analysisSecondFactorCounter, analysisSecondFactorLabel(analysisSecondFactorCounter)
+	if ratio < 0.8 {
+		return analysisSecondFactorVolumeLow, analysisSecondFactorLabel(analysisSecondFactorVolumeLow)
+	}
+	return analysisSecondFactorVolumeNormal, analysisSecondFactorLabel(analysisSecondFactorVolumeNormal)
 }
 
 func buildAnalysisSignalHorizonResult(record AnalysisSignalRecord, direction string, horizonMin int, candles []analysisBacktestCandle, nowTS int64) AnalysisSignalHorizonResult {
@@ -672,18 +694,17 @@ func buildAnalysisBacktestConfidenceBuckets(results []AnalysisSignalResult) []An
 func buildAnalysisBacktest2FAFactorOptions(results []AnalysisSignalResult, hours int) []AnalysisBacktest2FAFactorSummary {
 	order := []string{
 		analysisSecondFactorAll,
-		analysisSecondFactorAligned,
-		analysisSecondFactorCounter,
-		analysisSecondFactorRange,
-		analysisSecondFactorInsufficient,
+		analysisSecondFactorVolumeSpike,
+		analysisSecondFactorVolumeNormal,
+		analysisSecondFactorVolumeLow,
 	}
 	grouped := map[string][]AnalysisSignalResult{
 		analysisSecondFactorAll: results,
 	}
 	for _, item := range results {
 		key := normalizeAnalysisSecondFactorKey(item.SecondFactorKey)
-		if key == analysisSecondFactorAll {
-			key = analysisSecondFactorInsufficient
+		if key == analysisSecondFactorAll || key == analysisSecondFactorInsufficient {
+			continue
 		}
 		grouped[key] = append(grouped[key], item)
 	}
@@ -707,21 +728,17 @@ func buildAnalysisBacktest2FAFactorOptions(results []AnalysisSignalResult, hours
 
 func defaultAnalysisSecondFactorSelection(factor string) string {
 	if strings.TrimSpace(factor) == "" {
-		return analysisSecondFactorAligned
+		return analysisSecondFactorAll
 	}
 	return normalizeAnalysisSecondFactorKey(factor)
 }
 
 func analysisSecondFactorConfidenceDelta(key string) float64 {
 	switch normalizeAnalysisSecondFactorKey(key) {
-	case analysisSecondFactorAligned:
+	case analysisSecondFactorVolumeSpike:
 		return 8
-	case analysisSecondFactorRange:
-		return -6
-	case analysisSecondFactorCounter:
-		return -12
-	case analysisSecondFactorInsufficient:
-		return -20
+	case analysisSecondFactorVolumeLow:
+		return -8
 	default:
 		return 0
 	}
