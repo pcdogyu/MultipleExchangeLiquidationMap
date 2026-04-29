@@ -174,6 +174,7 @@ func Init(db *sql.DB) error {
 			symbol TEXT NOT NULL,
 			source_group INTEGER NOT NULL,
 			direction TEXT NOT NULL,
+			confidence REAL NOT NULL DEFAULT 0,
 			signal_price REAL NOT NULL,
 			analysis_generated_at INTEGER NOT NULL,
 			headline TEXT NOT NULL DEFAULT '',
@@ -191,6 +192,7 @@ func Init(db *sql.DB) error {
 	_ = execWithBusyRetry(db, `UPDATE analysis_direction_signals
 		SET verify_horizon_min=5
 		WHERE verify_horizon_min IS NULL OR verify_horizon_min<>5`)
+	_ = ensureColumn(db, "analysis_direction_signals", "confidence", "REAL NOT NULL DEFAULT 0")
 	_ = ensureColumn(db, "market_state", "long_short_ratio", "REAL")
 	_ = ensureColumn(db, "oi_snapshots", "long_short_ratio", "REAL")
 	return nil

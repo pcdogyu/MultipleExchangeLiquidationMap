@@ -81,7 +81,7 @@ func (a *App) loadSettings() ChannelSettings {
 	return ChannelSettings{
 		TelegramBotToken:      normalizeQuotedInput(a.getSetting("telegram_bot_token")),
 		TelegramChannel:       normalizeQuotedInput(a.getSetting("telegram_channel")),
-		TelegramAPIBase:       a.telegramAPIBaseURL(),
+		TelegramAPIBase:       normalizeTelegramAPIBaseSetting(a.getSetting("telegram_api_base")),
 		NotifyIntervalMin:     workInterval,
 		NotifyWorkIntervalMin: workInterval,
 		NotifyOffIntervalMin:  offInterval,
@@ -107,7 +107,7 @@ func (a *App) saveSettings(req ChannelSettings) error {
 	if err := a.setSetting("telegram_channel", channel); err != nil {
 		return err
 	}
-	apiBase := normalizeQuotedInput(req.TelegramAPIBase)
+	apiBase := normalizeTelegramAPIBaseSetting(req.TelegramAPIBase)
 	if err := a.setSetting("telegram_api_base", apiBase); err != nil {
 		return err
 	}
@@ -270,13 +270,25 @@ func (a *App) sendTelegramPhoto(caption string, image []byte) error {
 }
 
 func (a *App) telegramAPIBaseURL() string {
-	if v := normalizeQuotedInput(a.getSetting("telegram_api_base")); v != "" {
-		return strings.TrimRight(v, "/")
+	if v := normalizeTelegramAPIBaseSetting(a.getSetting("telegram_api_base")); v != "" {
+		return v
 	}
-	if v := normalizeQuotedInput(os.Getenv("TELEGRAM_API_BASE_URL")); v != "" {
-		return strings.TrimRight(v, "/")
+	if v := normalizeTelegramAPIBaseInput(os.Getenv("TELEGRAM_API_BASE_URL")); v != "" {
+		return v
 	}
 	return defaultTelegramAPIBaseURL
+}
+
+func normalizeTelegramAPIBaseInput(raw string) string {
+	return strings.TrimRight(normalizeQuotedInput(raw), "/")
+}
+
+func normalizeTelegramAPIBaseSetting(raw string) string {
+	v := normalizeTelegramAPIBaseInput(raw)
+	if v == defaultTelegramAPIBaseURL {
+		return ""
+	}
+	return v
 }
 
 func (a *App) doTelegramRequest(path, contentType string, payload []byte, timeout time.Duration) error {

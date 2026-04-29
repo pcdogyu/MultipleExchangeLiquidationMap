@@ -12,6 +12,8 @@ server.log
 *.log
 *.disabled
 *test*
+!*_test.go
+!internal/core/analysis_backtest_service.go
 
 # certificates / keys
 pem/

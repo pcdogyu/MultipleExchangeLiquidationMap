@@ -1,4 +1,4 @@
-﻿package liqmap
+package liqmap
 
 import (
 	"context"
@@ -29,6 +29,8 @@ const (
 	defaultWebDataSourceInitTimeout  = (defaultWebDataSourceInitLoginSec + 15) * time.Second
 	defaultWebDataSourceMaxAttempts  = 3
 	webDataSourcePayloadDir          = "playload"
+	webDataSourceRuntimePrefix       = "coinglass_profile_runtime_"
+	webDataSourceStaleRuntimeAge     = 10 * time.Minute
 )
 
 type WebDataSourceManager struct {
@@ -163,6 +165,7 @@ type webMouseTarget struct {
 func newWebDataSourceManager(app *App) *WebDataSourceManager {
 	m := &WebDataSourceManager{app: app}
 	m.cleanupStaleRunningRuns("run interrupted before completion")
+	m.cleanupStaleRuntimeProfiles()
 	return m
 }
 
@@ -1004,13 +1007,66 @@ func (m *WebDataSourceManager) prepareCaptureProfile(sourceDir string) (string, 
 		return "", nil, err
 	}
 	cleanup := func() {
-		_ = os.RemoveAll(runtimeDir)
+		m.cleanupRuntimeProfile(runtimeDir)
 	}
 	if err := cloneChromeProfileForCapture(sourceDir, runtimeDir); err != nil {
 		cleanup()
 		return "", nil, err
 	}
 	return runtimeDir, cleanup, nil
+}
+
+func (m *WebDataSourceManager) cleanupRuntimeProfile(runtimeDir string) {
+	runtimeDir = strings.TrimSpace(runtimeDir)
+	if runtimeDir == "" {
+		return
+	}
+	base := filepath.Base(runtimeDir)
+	if !strings.HasPrefix(base, webDataSourceRuntimePrefix) && !strings.Contains(base, "_runtime_") {
+		if m.app.debug {
+			log.Printf("skip webdatasource runtime cleanup for unexpected path: %s", runtimeDir)
+		}
+		return
+	}
+	for attempt := 1; attempt <= 8; attempt++ {
+		if err := os.RemoveAll(runtimeDir); err == nil {
+			return
+		} else if attempt == 8 {
+			if m.app.debug {
+				log.Printf("cleanup webdatasource runtime profile failed: path=%s err=%v", runtimeDir, err)
+			}
+		}
+		time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+	}
+}
+
+func (m *WebDataSourceManager) cleanupStaleRuntimeProfiles() {
+	cfg := m.loadSettings()
+	parentDir := filepath.Dir(strings.TrimSpace(cfg.ProfileDir))
+	if parentDir == "" || parentDir == "." {
+		wd, err := os.Getwd()
+		if err != nil {
+			return
+		}
+		parentDir = wd
+	}
+	entries, err := os.ReadDir(parentDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), webDataSourceRuntimePrefix) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if time.Since(info.ModTime()) < webDataSourceStaleRuntimeAge {
+			continue
+		}
+		m.cleanupRuntimeProfile(filepath.Join(parentDir, entry.Name()))
+	}
 }
 
 func cloneChromeProfileForCapture(sourceDir, targetDir string) error {
@@ -1743,6 +1799,9 @@ func (m *WebDataSourceManager) newCaptureSession(ctx context.Context, chromePath
 func (s *webDataSourceSession) close() {
 	if s != nil {
 		s.closeOnce.Do(func() {
+			if s.taskCtx != nil {
+				_ = chromedp.Cancel(s.taskCtx)
+			}
 			if s.cancel != nil {
 				s.cancel()
 			}
@@ -3756,7 +3815,7 @@ const webDataSourceHookJS = `(() => {
 const webDataSourceHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>页面数据源</title>
 <style>:root{--bg:#f5f7fb;--text:#1f2937;--muted:#64748b;--nav-bg:#0b1220;--nav-border:#243145;--nav-text:#eef3f9;--link:#d6deea;--panel-bg:#fff;--panel-border:#dce3ec;--ctl-bg:#fff;--ctl-text:#111827;--ctl-border:#cbd5e1;--chart-border:#e5e7eb}[data-theme="dark"]{--bg:#000;--text:#f8fafc;--muted:#cbd5e1;--nav-bg:#000;--nav-border:#1f2937;--nav-text:#f8fafc;--link:#e2e8f0;--panel-bg:#000;--panel-border:#263041;--ctl-bg:#000;--ctl-text:#f8fafc;--ctl-border:#475569;--chart-border:#263041}html,body{height:100%}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;overflow:hidden}.nav{height:56px;background:var(--nav-bg);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10;box-sizing:border-box}.nav-left,.nav-right{display:flex;align-items:center;gap:14px}.brand{font-size:18px;font-weight:700;color:var(--nav-text)}.menu a{color:var(--link);text-decoration:none;font-size:16px;margin-right:18px}.menu a.active{color:#fff;font-weight:700}.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:var(--nav-text);cursor:pointer}.theme-toggle button.label{cursor:default;opacity:.92}.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}.wrap{width:100%;height:calc(100vh - 56px);margin:0;padding:12px;box-sizing:border-box;display:flex;flex-direction:column}.grid{display:grid;grid-template-columns:330px minmax(0,1fr);gap:12px;min-height:0;flex:1}.panel{border:1px solid var(--panel-border);background:var(--panel-bg);padding:12px;border-radius:8px;box-sizing:border-box}.grid>.panel{overflow:auto}.main-area{display:flex;flex-direction:column;min-width:0;min-height:0}.small{font-size:12px;color:var(--muted)}.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}.field input,.field select,button{height:36px;border:1px solid var(--ctl-border);border-radius:8px;background:var(--ctl-bg);color:var(--ctl-text);padding:0 10px}.field input{width:100%;box-sizing:border-box}button{cursor:pointer}.primary{background:#0f172a;color:#eef3f9;border-color:#0f172a}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:10px}.card{border:1px solid var(--panel-border);border-radius:8px;padding:10px;background:var(--panel-bg)}.card .k{font-size:12px;color:var(--muted)}.card .v{margin-top:6px;font-size:22px;font-weight:700}.chart-panel{display:flex;flex-direction:column;min-height:0;flex:1}.chart-head{display:grid;grid-template-columns:minmax(250px,320px) minmax(0,1fr);gap:16px;align-items:start;margin-bottom:8px}.chart-head-main{min-width:0}.chart-toolbar{display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:0}.chart-toolbar-top{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:flex-end;gap:12px;width:100%}.toolbar-primary-controls{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:flex-end;gap:12px}.window-switch{display:inline-flex;align-items:center;gap:6px;padding:4px;border:1px solid var(--ctl-border);border-radius:999px;background:rgba(148,163,184,0.08)}.window-switch button{height:30px;padding:0 12px;border-radius:999px;border:1px solid transparent;background:transparent;color:var(--ctl-text);font-size:12px;font-weight:600}.window-switch button.active{border-color:rgba(37,99,235,0.35);background:rgba(37,99,235,0.12);color:#60a5fa}.control-section{display:flex;flex-direction:column;align-items:flex-end;gap:6px;width:100%}.control-row{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:12px;width:100%}.control-group{display:flex;flex-direction:column;align-items:flex-end;gap:4px;width:100%}.toolbar-control-group{width:auto}.control-host{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px}.chart-wrap{position:relative;flex:1;min-height:0}.chart{width:100%;height:100%;min-height:420px;border:1px solid var(--chart-border);border-radius:8px;display:block;background:var(--panel-bg);box-sizing:border-box;flex:1}.map-tip{position:absolute;display:none;min-width:190px;max-width:240px;background:rgba(2,6,23,.98);color:#f8fafc;border:1px solid rgba(148,163,184,.35);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.55;box-shadow:0 10px 28px rgba(2,6,23,.35);pointer-events:none;z-index:5}.runs{max-height:260px;overflow:auto}.runs table{width:100%;border-collapse:collapse}.runs th,.runs td{padding:6px 8px;border-bottom:1px solid var(--panel-border);font-size:12px;text-align:left}.tag{display:inline-block;padding:2px 8px;border-radius:999px;background:rgba(37,99,235,.12);color:#60a5fa;font-size:12px}.log-box{margin-top:12px;max-height:240px;overflow:auto;white-space:pre-wrap;font:12px/1.5 Consolas,Monaco,'Courier New',monospace;border:1px solid var(--panel-border);border-radius:8px;background:var(--panel-bg);padding:10px;box-sizing:border-box}.footer{display:none}@media (max-width:1320px){.chart-head{grid-template-columns:1fr}.chart-toolbar,.control-section,.control-group{align-items:flex-start}.chart-toolbar-top,.toolbar-primary-controls,.control-host,.control-row{justify-content:flex-start}}@media (max-width:1100px){body{overflow:auto}.wrap{height:auto}.grid{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.chart{height:560px}}</style></head>
-<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource" class="active">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a><a href="/analysis-backtest">日内回测</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="/config" style="color:#fff;text-decoration:none;font-size:14px;padding:8px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.18)">升级</a></div></div>
+<body><div class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/">清算热区</a><a href="/config">模型配置</a><a href="/monitor">雷区监控</a><a href="/map">盘口汇总</a><a href="/liquidations">强平清算</a><a href="/bubbles">气泡图</a><a href="/webdatasource" class="active">页面数据源</a><a href="/channel">消息通道</a><a href="/analysis">日内分析</a><a href="/analysis-backtest">单因子回测</a><a href="/analysis-backtest-liquidation">&#28165;&#31639;&#22238;&#27979;</a><a href="/analysis-backtest-2fa">双因子回测</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" onclick="setTheme('dark')">深色</button><button id="themeLight" onclick="setTheme('light')">浅色</button></div><a href="/config" style="color:#fff;text-decoration:none;font-size:14px;padding:8px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.18)">升级</a></div></div>
 <div class="wrap"><div class="grid"><div class="panel"><h2 style="margin:0 0 8px 0">抓取任务</h2><div id="statusBox" class="small">加载中...</div><div class="field" style="margin-top:12px"><label>抓取间隔（分钟）</label><input id="intervalMin" type="number" min="1" step="1"></div><div class="field" style="margin-top:12px"><label>超时（秒）</label><input id="timeoutSec" type="number" min="5" step="1"></div><div class="field" style="margin-top:12px"><label>Chrome 路径</label><input id="chromePath" placeholder="留空自动探测"></div><div class="field" style="margin-top:12px"><label>Profile 目录</label><input id="profileDir"></div><div class="row" style="margin-top:14px"><button class="primary" onclick="saveSettings()">保存设置</button><button onclick="initSession()">初始抓取</button><button onclick="runNow()">立即抓取</button><select id="runWindow"><option value="">抓取全部窗口</option><option value="1">仅 1 天</option><option value="7">仅 7 天</option><option value="30">仅 30 天</option></select></div><div class="small" id="saveMsg" style="margin-top:8px"></div><div id="stepLog" class="log-box">等待抓取日志...</div><div style="margin-top:16px"><div class="row" style="justify-content:space-between"><h3 style="margin:0">最近运行</h3><span class="tag" id="runState">-</span></div><div class="runs" style="margin-top:8px"><table><thead><tr><th>ID</th><th>窗口</th><th>状态</th><th>记录数</th><th>开始</th><th>错误</th></tr></thead><tbody id="runsBody"></tbody></table></div></div></div><div class="main-area"><div class="cards"><div class="card"><div class="k">当前窗口</div><div class="v" id="cardWindow">-</div></div><div class="card"><div class="k">多单总强度</div><div class="v" id="cardLong">-</div></div><div class="card"><div class="k">空单总强度</div><div class="v" id="cardShort">-</div></div><div class="card"><div class="k">最新抓取</div><div class="v" id="cardTime" style="font-size:16px">-</div></div></div><div class="panel chart-panel"><div class="chart-head"><div class="chart-head-main"><strong>ETH 页面数据源清算地图</strong><div class="small" id="chartMeta">加载中...</div><div class="small">滚轮缩放，按住鼠标左键左右拖动</div></div><div class="chart-toolbar" id="chartToolbar"><div class="chart-toolbar-top"><div id="toolbarPrimaryControls" class="toolbar-primary-controls"></div><input id="windowSel" type="hidden" value="30d"><div class="window-switch" role="group" aria-label="时间窗口"><button type="button" data-window-key="30d" onclick="setWindow('30d')">30D</button><button type="button" data-window-key="7d" onclick="setWindow('7d')">7D</button><button type="button" data-window-key="1d" onclick="setWindow('1d')">1D</button></div></div><div id="labelControlSection" class="control-section"></div></div></div><div class="chart-wrap"><canvas id="cv" class="chart" width="1000" height="520"></canvas><div id="mapTip" class="map-tip"></div></div></div></div></div></div><div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
 <script>
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');requestAnimationFrame(()=>{if(typeof draw==='function')draw();});}

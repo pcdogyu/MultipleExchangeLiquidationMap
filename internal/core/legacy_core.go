@@ -1093,19 +1093,22 @@ func (a *App) captureWebDataSourceScreenshotJPEG(window string) ([]byte, error) 
 }
 
 func (a *App) captureAnalysisScreenshotJPEG() ([]byte, error) {
-	pageURL := fmt.Sprintf("http://127.0.0.1%s/analysis", defaultServerAddr)
-	prepare := `(async()=>{ window.scrollTo(0,0); return true; })()`
+	pageURL := fmt.Sprintf("http://127.0.0.1%s/analysis?capture=1", defaultServerAddr)
+	prepare := `(async()=>{ window.__analysisCaptureStartedAt=Date.now(); window.scrollTo(0,0); return true; })()`
 	wait := `(function(){
 		const wrap=document.getElementById('analysisCapture');
+		if(wrap && window.__analysisCaptureStartedAt && Date.now()-window.__analysisCaptureStartedAt>15000) return true;
 		const title=document.getElementById('title');
 		const indicators=document.querySelectorAll('#indicators .metric-card');
+		const indicatorFallback=document.querySelector('#indicators .panel');
 		const broadcast=document.getElementById('broadcastHeadline');
 		if(!wrap || !title || !broadcast) return false;
 		const titleText=(title.textContent||'').trim();
 		const broadcastText=(broadcast.textContent||'').trim();
-		if(!titleText || titleText==='加载中...' || titleText==='加载失败') return false;
-		if(!broadcastText || broadcastText==='加载中...' || broadcastText==='加载失败') return false;
-		return indicators.length > 0;
+		const loading=['加载中...','正在生成播报摘要...','鍔犺浇涓?..'];
+		if(!titleText || loading.includes(titleText)) return false;
+		if(!broadcastText || loading.includes(broadcastText)) return false;
+		return indicators.length > 0 || !!indicatorFallback || titleText==='加载失败' || broadcastText==='加载失败';
 	})()`
 	return captureElementJPEGWithScale(pageURL, "#analysisCapture", 1640, 1760, 1.6, prepare, wait)
 }

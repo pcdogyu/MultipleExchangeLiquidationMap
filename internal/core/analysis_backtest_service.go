@@ -1,0 +1,984 @@
+package liqmap
+
+import (
+	"fmt"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const analysisSignalVerifyHorizonMin = 5
+
+var analysisBacktestHorizons = []int{5, 15, 30, 60}
+
+const (
+	analysisSecondFactorAll          = "all"
+	analysisSecondFactorAligned      = "aligned"
+	analysisSecondFactorCounter      = "counter"
+	analysisSecondFactorRange        = "range"
+	analysisSecondFactorInsufficient = "insufficient"
+)
+
+type analysisBacktestCandle struct {
+	TS int64
+	O  float64
+	H  float64
+	L  float64
+	C  float64
+}
+
+type analysisBacktestIntervalConfig struct {
+	Label    string
+	Source   string
+	BucketMS int64
+	Direct   bool
+}
+
+func normalizeAnalysisBacktestInterval(interval string) analysisBacktestIntervalConfig {
+	switch strings.ToLower(strings.TrimSpace(interval)) {
+	case "1m":
+		return analysisBacktestIntervalConfig{Label: "1m", Source: "1m", BucketMS: int64(time.Minute / time.Millisecond), Direct: true}
+	case "15m":
+		return analysisBacktestIntervalConfig{Label: "15m", Source: "15m", BucketMS: int64(15 * time.Minute / time.Millisecond), Direct: true}
+	case "30m":
+		return analysisBacktestIntervalConfig{Label: "30m", Source: "30m", BucketMS: int64(30 * time.Minute / time.Millisecond), Direct: true}
+	case "1h":
+		return analysisBacktestIntervalConfig{Label: "1h", Source: "1h", BucketMS: int64(time.Hour / time.Millisecond), Direct: true}
+	case "4h":
+		return analysisBacktestIntervalConfig{Label: "4h", Source: "1h", BucketMS: int64(4 * time.Hour / time.Millisecond), Direct: false}
+	case "8h":
+		return analysisBacktestIntervalConfig{Label: "8h", Source: "1h", BucketMS: int64(8 * time.Hour / time.Millisecond), Direct: false}
+	case "12h":
+		return analysisBacktestIntervalConfig{Label: "12h", Source: "1h", BucketMS: int64(12 * time.Hour / time.Millisecond), Direct: false}
+	case "24h":
+		return analysisBacktestIntervalConfig{Label: "24h", Source: "1h", BucketMS: int64(24 * time.Hour / time.Millisecond), Direct: false}
+	case "48h":
+		return analysisBacktestIntervalConfig{Label: "48h", Source: "1h", BucketMS: int64(48 * time.Hour / time.Millisecond), Direct: false}
+	case "72h":
+		return analysisBacktestIntervalConfig{Label: "72h", Source: "1h", BucketMS: int64(72 * time.Hour / time.Millisecond), Direct: false}
+	case "", "5m":
+		fallthrough
+	default:
+		return analysisBacktestIntervalConfig{Label: "5m", Source: "5m", BucketMS: int64(5 * time.Minute / time.Millisecond), Direct: true}
+	}
+}
+
+func normalizeAnalysisDirection(direction string) string {
+	switch strings.ToLower(strings.TrimSpace(direction)) {
+	case "up":
+		return "up"
+	case "down":
+		return "down"
+	default:
+		return "flat"
+	}
+}
+
+func parseFlexibleFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case jsonNumber:
+		f, err := strconv.ParseFloat(string(n), 64)
+		return f, err == nil
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+type jsonNumber string
+
+func parseFlexibleInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	case float64:
+		return int64(n), true
+	case string:
+		i, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64)
+		return i, err == nil
+	default:
+		if f, ok := parseFlexibleFloat(v); ok {
+			return int64(f), true
+		}
+		return 0, false
+	}
+}
+
+func parseAnalysisBacktestCandles(rows any) []analysisBacktestCandle {
+	list, ok := rows.([][]any)
+	if !ok {
+		if generic, ok := rows.([]any); ok {
+			list = make([][]any, 0, len(generic))
+			for _, item := range generic {
+				if row, ok := item.([]any); ok {
+					list = append(list, row)
+				}
+			}
+		}
+	}
+	out := make([]analysisBacktestCandle, 0, len(list))
+	for _, row := range list {
+		if len(row) < 5 {
+			continue
+		}
+		ts, okTS := parseFlexibleInt64(row[0])
+		open, okO := parseFlexibleFloat(row[1])
+		high, okH := parseFlexibleFloat(row[2])
+		low, okL := parseFlexibleFloat(row[3])
+		closePrice, okC := parseFlexibleFloat(row[4])
+		if !okTS || !okO || !okH || !okL || !okC {
+			continue
+		}
+		out = append(out, analysisBacktestCandle{
+			TS: ts,
+			O:  open,
+			H:  high,
+			L:  low,
+			C:  closePrice,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TS < out[j].TS })
+	return out
+}
+
+func floorToFiveMinute(ts int64) int64 {
+	const step = int64(5 * time.Minute / time.Millisecond)
+	if ts <= 0 {
+		return 0
+	}
+	return ts - (ts % step)
+}
+
+func bucketStart(ts, bucketMS int64) int64 {
+	if ts <= 0 || bucketMS <= 0 {
+		return ts
+	}
+	return ts - (ts % bucketMS)
+}
+
+func aggregateAnalysisBacktestCandles(candles []analysisBacktestCandle, bucketMS int64) []analysisBacktestCandle {
+	if bucketMS <= 0 || len(candles) == 0 {
+		return nil
+	}
+	out := make([]analysisBacktestCandle, 0, len(candles))
+	var current *analysisBacktestCandle
+	for _, candle := range candles {
+		ts := bucketStart(candle.TS, bucketMS)
+		if current == nil || current.TS != ts {
+			if current != nil {
+				out = append(out, *current)
+			}
+			copyCandle := analysisBacktestCandle{TS: ts, O: candle.O, H: candle.H, L: candle.L, C: candle.C}
+			current = &copyCandle
+			continue
+		}
+		if candle.H > current.H {
+			current.H = candle.H
+		}
+		if candle.L < current.L {
+			current.L = candle.L
+		}
+		current.C = candle.C
+	}
+	if current != nil {
+		out = append(out, *current)
+	}
+	return out
+}
+
+func findCandleCloseForTS(candles []analysisBacktestCandle, ts int64) (float64, bool) {
+	if ts <= 0 {
+		return 0, false
+	}
+	want := floorToFiveMinute(ts)
+	for _, candle := range candles {
+		if candle.TS == want {
+			return candle.C, true
+		}
+	}
+	return 0, false
+}
+
+func normalizedAnalysisVerifyHorizonMin(v int) int {
+	if v != analysisSignalVerifyHorizonMin {
+		return analysisSignalVerifyHorizonMin
+	}
+	return v
+}
+
+func analysisBacktestHorizonsForSignal(records []AnalysisSignalRecord, index int) []int {
+	horizons := append([]int(nil), analysisBacktestHorizons...)
+	if index < 0 || index >= len(records)-1 {
+		return horizons
+	}
+	current := records[index]
+	currentDirection := normalizeAnalysisDirection(current.Direction)
+	if currentDirection == "flat" {
+		return horizons
+	}
+
+	oppositeTS := int64(0)
+	for i := index + 1; i < len(records); i++ {
+		nextDirection := normalizeAnalysisDirection(records[i].Direction)
+		if nextDirection == "flat" || nextDirection == currentDirection {
+			continue
+		}
+		oppositeTS = records[i].SignalTS
+		break
+	}
+	if oppositeTS <= 0 {
+		return horizons
+	}
+
+	out := make([]int, 0, len(horizons))
+	const minuteMS = int64(time.Minute / time.Millisecond)
+	for _, horizonMin := range horizons {
+		dueTS := current.SignalTS + int64(horizonMin)*minuteMS
+		if dueTS < oppositeTS {
+			out = append(out, horizonMin)
+		}
+	}
+	if len(out) == 0 {
+		return []int{analysisSignalVerifyHorizonMin}
+	}
+	return out
+}
+
+func normalizeAnalysisSecondFactorKey(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", analysisSecondFactorAll:
+		return analysisSecondFactorAll
+	case analysisSecondFactorAligned:
+		return analysisSecondFactorAligned
+	case analysisSecondFactorCounter:
+		return analysisSecondFactorCounter
+	case analysisSecondFactorRange:
+		return analysisSecondFactorRange
+	case analysisSecondFactorInsufficient:
+		return analysisSecondFactorInsufficient
+	default:
+		return analysisSecondFactorAll
+	}
+}
+
+func analysisSecondFactorLabel(key string) string {
+	switch normalizeAnalysisSecondFactorKey(key) {
+	case analysisSecondFactorAligned:
+		return "顺势"
+	case analysisSecondFactorCounter:
+		return "逆势"
+	case analysisSecondFactorRange:
+		return "震荡"
+	case analysisSecondFactorInsufficient:
+		return "样本不足"
+	default:
+		return "全部"
+	}
+}
+
+func findCandleIndexForTS(candles []analysisBacktestCandle, ts int64) int {
+	want := floorToFiveMinute(ts)
+	for i := len(candles) - 1; i >= 0; i-- {
+		if candles[i].TS == want {
+			return i
+		}
+		if candles[i].TS < want {
+			break
+		}
+	}
+	return -1
+}
+
+func classifyAnalysisSecondFactor(record AnalysisSignalRecord, candles []analysisBacktestCandle) (string, string) {
+	const lookbackCandles = 6
+	idx := findCandleIndexForTS(candles, record.SignalTS)
+	if idx < lookbackCandles {
+		return analysisSecondFactorInsufficient, analysisSecondFactorLabel(analysisSecondFactorInsufficient)
+	}
+	base := candles[idx-lookbackCandles].C
+	current := candles[idx].C
+	if !(base > 0) || !(current > 0) {
+		return analysisSecondFactorInsufficient, analysisSecondFactorLabel(analysisSecondFactorInsufficient)
+	}
+	delta := current - base
+	threshold := math.Max(record.SignalPrice*0.0012, 6)
+	if math.Abs(delta) < threshold {
+		return analysisSecondFactorRange, analysisSecondFactorLabel(analysisSecondFactorRange)
+	}
+	trendDirection := "up"
+	if delta < 0 {
+		trendDirection = "down"
+	}
+	if normalizeAnalysisDirection(record.Direction) == trendDirection {
+		return analysisSecondFactorAligned, analysisSecondFactorLabel(analysisSecondFactorAligned)
+	}
+	return analysisSecondFactorCounter, analysisSecondFactorLabel(analysisSecondFactorCounter)
+}
+
+func buildAnalysisSignalHorizonResult(record AnalysisSignalRecord, direction string, horizonMin int, candles []analysisBacktestCandle, nowTS int64) AnalysisSignalHorizonResult {
+	out := AnalysisSignalHorizonResult{
+		HorizonMin:  horizonMin,
+		VerifyDueTS: record.SignalTS + int64(horizonMin)*int64(time.Minute/time.Millisecond),
+		Result:      "pending",
+	}
+	if nowTS < out.VerifyDueTS {
+		return out
+	}
+	verifyClose, ok := findCandleCloseForTS(candles, out.VerifyDueTS)
+	if !ok {
+		out.Result = "no_data"
+		return out
+	}
+	out.VerifyClosePrice = verifyClose
+	out.DeltaPrice = verifyClose - record.SignalPrice
+	if record.SignalPrice > 0 {
+		out.DeltaPct = (out.DeltaPrice / record.SignalPrice) * 100
+	}
+	switch direction {
+	case "up":
+		if out.DeltaPrice > 0 {
+			out.Result = "correct"
+		} else {
+			out.Result = "wrong"
+		}
+	case "down":
+		if out.DeltaPrice < 0 {
+			out.Result = "correct"
+		} else {
+			out.Result = "wrong"
+		}
+	default:
+		out.Result = "no_data"
+	}
+	return out
+}
+
+func buildAnalysisSignalResult(record AnalysisSignalRecord, candles []analysisBacktestCandle, nowTS int64, horizons []int) AnalysisSignalResult {
+	secondFactorKey, secondFactorLabel := classifyAnalysisSecondFactor(record, candles)
+	direction := normalizeAnalysisDirection(record.Direction)
+	if len(horizons) == 0 {
+		horizons = analysisBacktestHorizons
+	}
+	result := AnalysisSignalResult{
+		ID:                record.ID,
+		SignalTS:          record.SignalTS,
+		Symbol:            record.Symbol,
+		SourceGroup:       record.SourceGroup,
+		Direction:         direction,
+		Confidence:        record.Confidence,
+		SignalPrice:       record.SignalPrice,
+		AnalysisGenerated: record.AnalysisGenerated,
+		Headline:          record.Headline,
+		Summary:           record.Summary,
+		VerifyHorizonMin:  normalizedAnalysisVerifyHorizonMin(record.VerifyHorizonMin),
+		SecondFactorKey:   secondFactorKey,
+		SecondFactorLabel: secondFactorLabel,
+		VerifyDueTS:       record.SignalTS + int64(normalizedAnalysisVerifyHorizonMin(record.VerifyHorizonMin))*int64(time.Minute/time.Millisecond),
+		Result:            "pending",
+	}
+	result.Horizons = make([]AnalysisSignalHorizonResult, 0, len(horizons))
+	for _, horizonMin := range horizons {
+		outcome := buildAnalysisSignalHorizonResult(record, direction, horizonMin, candles, nowTS)
+		result.Horizons = append(result.Horizons, outcome)
+		if horizonMin == normalizedAnalysisVerifyHorizonMin(record.VerifyHorizonMin) {
+			result.VerifyDueTS = outcome.VerifyDueTS
+			result.VerifyClosePrice = outcome.VerifyClosePrice
+			result.Result = outcome.Result
+			result.DeltaPrice = outcome.DeltaPrice
+			result.DeltaPct = outcome.DeltaPct
+		}
+	}
+	return result
+}
+
+func analysisDirectionWeightForBucket(hours int) float64 {
+	switch hours {
+	case 1:
+		return 8
+	case 4:
+		return 4
+	case 12:
+		return 2
+	case 24:
+		return 1
+	default:
+		return 1
+	}
+}
+
+func analysisDirectionSignFromBucket(bucket LiquidationPeriodBucket) float64 {
+	switch strings.ToLower(strings.TrimSpace(bucket.PricePush)) {
+	case "up":
+		return 1
+	case "down":
+		return -1
+	default:
+		if strings.ToLower(strings.TrimSpace(bucket.DominantSide)) == "short" {
+			return 1
+		}
+		if strings.ToLower(strings.TrimSpace(bucket.DominantSide)) == "long" {
+			return -1
+		}
+		return 0
+	}
+}
+
+func buildLiquidationOnlyDirectionSignal(snapshot AnalysisSnapshot, period LiquidationPeriodSummary) (AnalysisSignalRecord, bool) {
+	record := AnalysisSignalRecord{
+		SignalTS:          time.Now().UnixMilli(),
+		Symbol:            strings.TrimSpace(snapshot.Symbol),
+		SourceGroup:       5,
+		SignalPrice:       snapshot.CurrentPrice,
+		AnalysisGenerated: snapshot.GeneratedAt,
+		VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+	}
+	if record.Symbol == "" {
+		record.Symbol = defaultSymbol
+	}
+
+	var weightedScore float64
+	var activeWeight float64
+	var activePeriods int
+	var strongPeriods int
+	details := make([]string, 0, len(period.Buckets))
+	for _, bucket := range period.Buckets {
+		if bucket.TotalUSD <= 0 {
+			continue
+		}
+		weight := analysisDirectionWeightForBucket(bucket.Hours)
+		sign := analysisDirectionSignFromBucket(bucket)
+		if sign == 0 {
+			continue
+		}
+		ratio := clamp(bucket.BalanceRatio, 0, 1)
+		weightedScore += sign * weight * ratio
+		activeWeight += weight
+		activePeriods++
+		if ratio >= 0.18 {
+			strongPeriods++
+		}
+		details = append(details, fmt.Sprintf("%s %s %.0f%%", bucket.Label, bucket.PricePushLabel, ratio*100))
+	}
+	if activeWeight <= 0 {
+		return AnalysisSignalRecord{}, false
+	}
+
+	normalized := weightedScore / activeWeight
+	strength := math.Abs(normalized)
+	if strength < 0.12 {
+		return AnalysisSignalRecord{}, false
+	}
+
+	direction := "down"
+	title := "单因子清算柱偏空"
+	bias := "多周期清算柱整体偏向下压。"
+	if normalized > 0 {
+		direction = "up"
+		title = "单因子清算柱偏多"
+		bias = "多周期清算柱整体偏向上推。"
+	}
+
+	confidence := clamp(strength*100*0.88+float64(strongPeriods)*4, 18, 92)
+	record.Direction = direction
+	record.Confidence = math.Round(confidence*10) / 10
+	record.Headline = title
+	record.Summary = fmt.Sprintf("%s 形态 %s，活跃周期 %d 个，强共振 %d 个。%s", bias, strings.TrimSpace(period.Pattern.Code), activePeriods, strongPeriods, strings.Join(details, " | "))
+	return record, true
+}
+
+func (a *App) listAnalysisDirectionSignals(sinceTS int64, limit, offset int) ([]AnalysisSignalRecord, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := a.db.Query(`SELECT id, signal_ts, symbol, source_group, direction, confidence, signal_price, analysis_generated_at, headline, summary, verify_horizon_min
+		FROM analysis_direction_signals
+		WHERE signal_ts>=?
+		ORDER BY signal_ts DESC, id DESC
+		LIMIT ? OFFSET ?`, sinceTS, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]AnalysisSignalRecord, 0, limit)
+	for rows.Next() {
+		var item AnalysisSignalRecord
+		if err := rows.Scan(&item.ID, &item.SignalTS, &item.Symbol, &item.SourceGroup, &item.Direction, &item.Confidence, &item.SignalPrice, &item.AnalysisGenerated, &item.Headline, &item.Summary, &item.VerifyHorizonMin); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (a *App) listAnalysisDirectionSignalsPage(limit, page int) ([]AnalysisSignalRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if page <= 0 {
+		page = 1
+	}
+	offset := (page - 1) * limit
+	rows, err := a.db.Query(`SELECT id, signal_ts, symbol, source_group, direction, confidence, signal_price, analysis_generated_at, headline, summary, verify_horizon_min
+		FROM analysis_direction_signals
+		ORDER BY signal_ts DESC, id DESC
+		LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]AnalysisSignalRecord, 0, limit)
+	for rows.Next() {
+		var item AnalysisSignalRecord
+		if err := rows.Scan(&item.ID, &item.SignalTS, &item.Symbol, &item.SourceGroup, &item.Direction, &item.Confidence, &item.SignalPrice, &item.AnalysisGenerated, &item.Headline, &item.Summary, &item.VerifyHorizonMin); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func buildAnalysisBacktestSummary(results []AnalysisSignalResult, hours int) AnalysisBacktestSummary {
+	out := AnalysisBacktestSummary{WindowHours: hours, TotalSignals: len(results)}
+	for _, item := range results {
+		switch item.Result {
+		case "correct":
+			out.CorrectCount++
+		case "wrong":
+			out.WrongCount++
+		case "pending":
+			out.PendingCount++
+		case "no_data":
+			out.NoDataCount++
+		}
+	}
+	verified := out.CorrectCount + out.WrongCount
+	if verified > 0 {
+		out.CorrectRate = math.Round((float64(out.CorrectCount)/float64(verified))*1000) / 10
+	}
+	return out
+}
+
+func buildAnalysisBacktestHorizonStats(results []AnalysisSignalResult) []AnalysisBacktestHorizonStat {
+	out := make([]AnalysisBacktestHorizonStat, 0, len(analysisBacktestHorizons))
+	for _, horizonMin := range analysisBacktestHorizons {
+		stat := AnalysisBacktestHorizonStat{
+			HorizonMin: horizonMin,
+			Label:      fmt.Sprintf("%dm", horizonMin),
+		}
+		if horizonMin == 60 {
+			stat.Label = "1h"
+		}
+		for _, item := range results {
+			for _, horizon := range item.Horizons {
+				if horizon.HorizonMin != horizonMin {
+					continue
+				}
+				stat.TotalSignals++
+				switch horizon.Result {
+				case "correct":
+					stat.CorrectCount++
+				case "wrong":
+					stat.WrongCount++
+				case "pending":
+					stat.PendingCount++
+				case "no_data":
+					stat.NoDataCount++
+				}
+				break
+			}
+		}
+		verified := stat.CorrectCount + stat.WrongCount
+		if verified > 0 {
+			stat.CorrectRate = math.Round((float64(stat.CorrectCount)/float64(verified))*1000) / 10
+		}
+		out = append(out, stat)
+	}
+	return out
+}
+
+type analysisConfidenceBucketDef struct {
+	Label        string
+	MinInclusive float64
+	MaxExclusive float64
+}
+
+func analysisConfidenceBucketDefs() []analysisConfidenceBucketDef {
+	return []analysisConfidenceBucketDef{
+		{Label: "<70", MinInclusive: 0, MaxExclusive: 70},
+		{Label: "70-80", MinInclusive: 70, MaxExclusive: 80},
+		{Label: "80-85", MinInclusive: 80, MaxExclusive: 85},
+		{Label: "85-90", MinInclusive: 85, MaxExclusive: 90},
+		{Label: "90+", MinInclusive: 90, MaxExclusive: 0},
+	}
+}
+
+func buildAnalysisBacktestConfidenceBuckets(results []AnalysisSignalResult) []AnalysisBacktestConfidenceBucket {
+	defs := analysisConfidenceBucketDefs()
+	out := make([]AnalysisBacktestConfidenceBucket, 0, len(defs))
+	for _, def := range defs {
+		bucket := AnalysisBacktestConfidenceBucket{
+			Label:        def.Label,
+			MinInclusive: def.MinInclusive,
+			MaxExclusive: def.MaxExclusive,
+		}
+		for _, item := range results {
+			confidence := item.Confidence
+			if confidence < def.MinInclusive {
+				continue
+			}
+			if def.MaxExclusive > 0 && confidence >= def.MaxExclusive {
+				continue
+			}
+			bucket.TotalSignals++
+			switch item.Result {
+			case "correct":
+				bucket.CorrectCount++
+			case "wrong":
+				bucket.WrongCount++
+			case "pending":
+				bucket.PendingCount++
+			case "no_data":
+				bucket.NoDataCount++
+			}
+		}
+		verified := bucket.CorrectCount + bucket.WrongCount
+		if verified > 0 {
+			bucket.CorrectRate = math.Round((float64(bucket.CorrectCount)/float64(verified))*1000) / 10
+		}
+		out = append(out, bucket)
+	}
+	return out
+}
+
+func buildAnalysisBacktest2FAFactorOptions(results []AnalysisSignalResult, hours int) []AnalysisBacktest2FAFactorSummary {
+	order := []string{
+		analysisSecondFactorAll,
+		analysisSecondFactorAligned,
+		analysisSecondFactorCounter,
+		analysisSecondFactorRange,
+		analysisSecondFactorInsufficient,
+	}
+	grouped := map[string][]AnalysisSignalResult{
+		analysisSecondFactorAll: results,
+	}
+	for _, item := range results {
+		key := normalizeAnalysisSecondFactorKey(item.SecondFactorKey)
+		if key == analysisSecondFactorAll {
+			key = analysisSecondFactorInsufficient
+		}
+		grouped[key] = append(grouped[key], item)
+	}
+	out := make([]AnalysisBacktest2FAFactorSummary, 0, len(order))
+	for _, key := range order {
+		items := grouped[key]
+		summary := buildAnalysisBacktestSummary(items, hours)
+		out = append(out, AnalysisBacktest2FAFactorSummary{
+			Key:          key,
+			Label:        analysisSecondFactorLabel(key),
+			TotalSignals: summary.TotalSignals,
+			CorrectCount: summary.CorrectCount,
+			WrongCount:   summary.WrongCount,
+			PendingCount: summary.PendingCount,
+			NoDataCount:  summary.NoDataCount,
+			CorrectRate:  summary.CorrectRate,
+		})
+	}
+	return out
+}
+
+func defaultAnalysisSecondFactorSelection(factor string) string {
+	if strings.TrimSpace(factor) == "" {
+		return analysisSecondFactorAligned
+	}
+	return normalizeAnalysisSecondFactorKey(factor)
+}
+
+func analysisSecondFactorConfidenceDelta(key string) float64 {
+	switch normalizeAnalysisSecondFactorKey(key) {
+	case analysisSecondFactorAligned:
+		return 8
+	case analysisSecondFactorRange:
+		return -6
+	case analysisSecondFactorCounter:
+		return -12
+	case analysisSecondFactorInsufficient:
+		return -20
+	default:
+		return 0
+	}
+}
+
+func buildAnalysisDualFactorCandidate(item AnalysisSignalResult) (AnalysisSignalResult, bool) {
+	key := normalizeAnalysisSecondFactorKey(item.SecondFactorKey)
+	if key == analysisSecondFactorAll || key == analysisSecondFactorInsufficient {
+		return AnalysisSignalResult{}, false
+	}
+	item.Confidence = math.Round(clamp(item.Confidence+analysisSecondFactorConfidenceDelta(key), 18, 92)*10) / 10
+	if label := strings.TrimSpace(item.SecondFactorLabel); label != "" {
+		if headline := strings.TrimSpace(item.Headline); headline != "" {
+			item.Headline = headline + " · " + label
+		} else {
+			item.Headline = "双因子 · " + label
+		}
+		if summary := strings.TrimSpace(item.Summary); summary != "" {
+			item.Summary = "第二因子 " + label + "。 " + summary
+		}
+	}
+	return item, true
+}
+
+func filterAnalysisSignalsByConfidence(results []AnalysisSignalResult, minConfidence float64) []AnalysisSignalResult {
+	if minConfidence <= 0 {
+		return append([]AnalysisSignalResult(nil), results...)
+	}
+	out := make([]AnalysisSignalResult, 0, len(results))
+	for _, item := range results {
+		if item.Confidence <= minConfidence {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func filterAnalysisSignalsBySecondFactor(results []AnalysisSignalResult, factor string) []AnalysisSignalResult {
+	key := normalizeAnalysisSecondFactorKey(factor)
+	if key == analysisSecondFactorAll {
+		return append([]AnalysisSignalResult(nil), results...)
+	}
+	out := make([]AnalysisSignalResult, 0, len(results))
+	for _, item := range results {
+		if normalizeAnalysisSecondFactorKey(item.SecondFactorKey) == key {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func candleToMap(c analysisBacktestCandle) map[string]any {
+	return map[string]any{
+		"ts": c.TS,
+		"o":  c.O,
+		"h":  c.H,
+		"l":  c.L,
+		"c":  c.C,
+	}
+}
+
+func (a *App) fetchAnalysisBacktestChartCandles(hours int, interval string, sinceTS, endTS int64) ([]map[string]any, string, string, error) {
+	cfg := normalizeAnalysisBacktestInterval(interval)
+	durationMS := endTS - sinceTS
+	if durationMS <= 0 {
+		durationMS = int64(hours) * int64(time.Hour/time.Millisecond)
+	}
+	startTS := sinceTS
+	if cfg.Direct && cfg.Label == "1m" {
+		startTS = sinceTS - int64(30*time.Minute/time.Millisecond)
+	}
+	limit := int(math.Ceil(float64(durationMS)/float64(cfg.BucketMS))) + 24
+	if limit < 320 {
+		limit = 320
+	}
+	raw, err := a.FetchKlines(cfg.Source, limit, startTS, endTS)
+	if err != nil {
+		return nil, "", "", err
+	}
+	base := parseAnalysisBacktestCandles(raw["rows"])
+	chartCandles := base
+	if !cfg.Direct {
+		chartCandles = aggregateAnalysisBacktestCandles(base, cfg.BucketMS)
+	}
+	out := make([]map[string]any, 0, len(chartCandles))
+	for _, candle := range chartCandles {
+		if candle.TS < sinceTS || candle.TS > endTS {
+			continue
+		}
+		out = append(out, candleToMap(candle))
+	}
+	return out, cfg.Source, cfg.Label, nil
+}
+
+func (a *App) buildAnalysisBacktestResults(hours int, minConfidence float64) ([]AnalysisSignalResult, int64, int64, error) {
+	if hours <= 0 {
+		hours = 24
+	}
+	now := time.Now()
+	nowTS := now.UnixMilli()
+	sinceTS := now.Add(-time.Duration(hours) * time.Hour).UnixMilli()
+	records, err := a.listAnalysisDirectionSignals(sinceTS, 500, 0)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	const baseStep = int64(5 * time.Minute / time.Millisecond)
+	startTS := floorToFiveMinute(sinceTS - int64(30*time.Minute/time.Millisecond))
+	endTS := floorToFiveMinute(nowTS) + int64(time.Hour/time.Millisecond) + baseStep
+	limit := int(math.Ceil(float64(endTS-startTS)/float64(baseStep))) + 24
+	if limit < 320 {
+		limit = 320
+	}
+	raw, err := a.FetchKlines("5m", limit, startTS, endTS)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	candles := parseAnalysisBacktestCandles(raw["rows"])
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].SignalTS == records[j].SignalTS {
+			return records[i].ID < records[j].ID
+		}
+		return records[i].SignalTS < records[j].SignalTS
+	})
+	results := make([]AnalysisSignalResult, 0, len(records))
+	for i, record := range records {
+		if record.Confidence <= minConfidence {
+			continue
+		}
+		results = append(results, buildAnalysisSignalResult(record, candles, nowTS, analysisBacktestHorizonsForSignal(records, i)))
+	}
+	return results, sinceTS, floorToFiveMinute(nowTS) + baseStep, nil
+}
+
+func (a *App) AnalysisBacktest(hours int, interval string, minConfidence float64) (AnalysisBacktestPageResponse, error) {
+	results, sinceTS, chartEndTS, err := a.buildAnalysisBacktestResults(hours, minConfidence)
+	if err != nil {
+		return AnalysisBacktestPageResponse{}, err
+	}
+	candles, source, chartInterval, err := a.fetchAnalysisBacktestChartCandles(hours, interval, sinceTS, chartEndTS)
+	if err != nil {
+		return AnalysisBacktestPageResponse{}, err
+	}
+	return AnalysisBacktestPageResponse{
+		Candles:           candles,
+		Signals:           results,
+		Summary:           buildAnalysisBacktestSummary(results, hours),
+		HorizonStats:      buildAnalysisBacktestHorizonStats(results),
+		ConfidenceBuckets: buildAnalysisBacktestConfidenceBuckets(results),
+		ChartSource:       source,
+		ChartInterval:     chartInterval,
+	}, nil
+}
+
+func (a *App) AnalysisBacktest2FA(hours int, interval string, factor string, minConfidence float64) (AnalysisBacktest2FAResponse, error) {
+	baseResults, sinceTS, chartEndTS, err := a.buildAnalysisBacktestResults(hours, 0)
+	if err != nil {
+		return AnalysisBacktest2FAResponse{}, err
+	}
+	candidates := make([]AnalysisSignalResult, 0, len(baseResults))
+	for _, item := range baseResults {
+		candidate, ok := buildAnalysisDualFactorCandidate(item)
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+	selectedFactor := defaultAnalysisSecondFactorSelection(factor)
+	factorFilteredAll := filterAnalysisSignalsBySecondFactor(candidates, selectedFactor)
+	confFiltered := filterAnalysisSignalsByConfidence(candidates, minConfidence)
+	filtered := filterAnalysisSignalsBySecondFactor(confFiltered, selectedFactor)
+	candles, source, chartInterval, err := a.fetchAnalysisBacktestChartCandles(hours, interval, sinceTS, chartEndTS)
+	if err != nil {
+		return AnalysisBacktest2FAResponse{}, err
+	}
+	return AnalysisBacktest2FAResponse{
+		Candles:           candles,
+		Signals:           filtered,
+		Summary:           buildAnalysisBacktestSummary(filtered, hours),
+		HorizonStats:      buildAnalysisBacktestHorizonStats(filtered),
+		ConfidenceBuckets: buildAnalysisBacktestConfidenceBuckets(factorFilteredAll),
+		SelectedFactor:    selectedFactor,
+		FactorOptions:     buildAnalysisBacktest2FAFactorOptions(confFiltered, hours),
+		ChartSource:       source,
+		ChartInterval:     chartInterval,
+	}, nil
+}
+
+func (a *App) AnalysisBacktestHistory(limit, page int) (AnalysisBacktestHistoryResponse, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if page <= 0 {
+		page = 1
+	}
+	records, err := a.listAnalysisDirectionSignalsPage(limit, page)
+	if err != nil {
+		return AnalysisBacktestHistoryResponse{}, err
+	}
+	nowTS := time.Now().UnixMilli()
+	startTS := int64(0)
+	endTS := int64(0)
+	for i, record := range records {
+		if i == 0 || record.SignalTS < startTS || startTS == 0 {
+			startTS = record.SignalTS
+		}
+		verifyDueTS := record.SignalTS + int64(normalizedAnalysisVerifyHorizonMin(record.VerifyHorizonMin))*int64(time.Minute/time.Millisecond)
+		if verifyDueTS > endTS {
+			endTS = verifyDueTS
+		}
+	}
+	candles := []analysisBacktestCandle{}
+	if startTS > 0 {
+		raw, err := a.FetchKlines("5m", 1000, floorToFiveMinute(startTS-int64(5*time.Minute/time.Millisecond)), endTS+int64(5*time.Minute/time.Millisecond))
+		if err == nil {
+			candles = parseAnalysisBacktestCandles(raw["rows"])
+		}
+	}
+	results := make([]AnalysisSignalResult, 0, len(records))
+	ordered := append([]AnalysisSignalRecord(nil), records...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].SignalTS == ordered[j].SignalTS {
+			return ordered[i].ID < ordered[j].ID
+		}
+		return ordered[i].SignalTS < ordered[j].SignalTS
+	})
+	horizonsByID := map[int64][]int{}
+	for i := range ordered {
+		horizonsByID[ordered[i].ID] = analysisBacktestHorizonsForSignal(ordered, i)
+	}
+	for _, record := range records {
+		results = append(results, buildAnalysisSignalResult(record, candles, nowTS, horizonsByID[record.ID]))
+	}
+	return AnalysisBacktestHistoryResponse{
+		Page:    page,
+		Limit:   limit,
+		Signals: results,
+	}, nil
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func (a *App) debugAnalysisBacktestSummary(hours int) string {
+	resp, err := a.AnalysisBacktest(hours, "5m", 0)
+	if err != nil {
+		return err.Error()
+	}
+	return fmt.Sprintf("signals=%d correct=%d wrong=%d pending=%d no_data=%d",
+		resp.Summary.TotalSignals,
+		resp.Summary.CorrectCount,
+		resp.Summary.WrongCount,
+		resp.Summary.PendingCount,
+		resp.Summary.NoDataCount,
+	)
+}
