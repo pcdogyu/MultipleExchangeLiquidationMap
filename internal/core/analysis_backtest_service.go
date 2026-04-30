@@ -24,6 +24,8 @@ const (
 	analysisBacktestQualityHigh       = "high"
 	analysisBacktestStrategyAll       = "all"
 	analysisBacktestStrategyPreferred = "preferred"
+	analysisBacktestNoiseNone         = "none"
+	analysisBacktestNoisePersistence  = "persistence"
 )
 
 var analysisDirectionSummaryScoreRe = regexp.MustCompile(`分数\s*([+-]?\d+(?:\.\d+)?)`)
@@ -1052,6 +1054,197 @@ func filterAnalysisSignalsByQuality(results []AnalysisSignalResult, mode string)
 	return out
 }
 
+func normalizeAnalysisBacktestNoiseStrategy(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case analysisBacktestNoisePersistence:
+		return analysisBacktestNoisePersistence
+	default:
+		return analysisBacktestNoiseNone
+	}
+}
+
+func analysisBacktestPersistenceLabel(score float64) string {
+	if score >= 65 {
+		return "长周期延续"
+	}
+	if score >= 50 {
+		return "中性观察"
+	}
+	return "短线噪声"
+}
+
+func analysisBacktestDirectionAligned(direction string, value float64) bool {
+	if direction == "up" {
+		return value > 0
+	}
+	if direction == "down" {
+		return value < 0
+	}
+	return false
+}
+
+func analysisBacktestEMA(values []float64, period int) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	if period <= 1 {
+		return values[len(values)-1]
+	}
+	k := 2 / float64(period+1)
+	ema := values[0]
+	for _, value := range values[1:] {
+		ema = value*k + ema*(1-k)
+	}
+	return ema
+}
+
+func scoreAnalysisSignalPersistence(item AnalysisSignalResult, candles []analysisBacktestCandle) AnalysisSignalResult {
+	score := 50.0
+	reasons := []string{}
+	direction := normalizeAnalysisDirection(item.Direction)
+	aligned, conflict := analysisSignalWindowScoreAgreement(item)
+	switch {
+	case conflict > 0:
+		score -= 25
+		reasons = append(reasons, "存在反向窗口 -25")
+	case aligned >= 3:
+		score += 20
+		reasons = append(reasons, "三窗口同向 +20")
+	case aligned >= 2:
+		score += 12
+		reasons = append(reasons, "双窗口同向 +12")
+	default:
+		reasons = append(reasons, "窗口同向不足")
+	}
+
+	switch normalizeAnalysisSecondFactorKey(item.SecondFactorKey) {
+	case analysisSecondFactorVolumeSpike:
+		score += 12
+		reasons = append(reasons, "放量 +12")
+	case analysisSecondFactorVolumeNormal:
+		score += 4
+		reasons = append(reasons, "成交量正常 +4")
+	case analysisSecondFactorVolumeLow:
+		score -= 14
+		reasons = append(reasons, "缩量 -14")
+	default:
+		score -= 8
+		reasons = append(reasons, "量能样本不足 -8")
+	}
+
+	idx := findCandleIndexForTS(candles, item.SignalTS)
+	if idx >= 12 && direction != "flat" {
+		current := candles[idx]
+		lookback := candles[idx-12 : idx+1]
+		closes := make([]float64, 0, len(lookback))
+		for _, candle := range lookback {
+			closes = append(closes, candle.C)
+		}
+		firstEMA := analysisBacktestEMA(closes[:7], 5)
+		lastEMA := analysisBacktestEMA(closes[6:], 5)
+		if analysisBacktestDirectionAligned(direction, lastEMA-firstEMA) {
+			score += 10
+			reasons = append(reasons, "EMA斜率同向 +10")
+		}
+		if analysisBacktestDirectionAligned(direction, current.C-candles[idx-3].C) {
+			score += 8
+			reasons = append(reasons, "近3根净变化同向 +8")
+		}
+
+		rangeSize := current.H - current.L
+		bodySize := math.Abs(current.C - current.O)
+		upperWick := current.H - math.Max(current.O, current.C)
+		lowerWick := math.Min(current.O, current.C) - current.L
+		if rangeSize > 0 && bodySize/rangeSize < 0.25 && upperWick/rangeSize > 0.28 && lowerWick/rangeSize > 0.28 {
+			score -= 10
+			reasons = append(reasons, "当前K线长影小实体 -10")
+		}
+
+		switches := 0
+		prevSign := 0
+		for i := idx - 11; i <= idx; i++ {
+			move := candles[i].C - candles[i-1].C
+			sign := 0
+			if move > 0 {
+				sign = 1
+			} else if move < 0 {
+				sign = -1
+			}
+			if sign != 0 && prevSign != 0 && sign != prevSign {
+				switches++
+			}
+			if sign != 0 {
+				prevSign = sign
+			}
+		}
+		if switches >= 7 {
+			score -= 8
+			reasons = append(reasons, "12根内方向切换过多 -8")
+		}
+	} else {
+		score -= 8
+		reasons = append(reasons, "趋势样本不足 -8")
+	}
+
+	item.PersistenceScore = math.Round(clamp(score, 0, 100)*10) / 10
+	item.PersistenceLabel = analysisBacktestPersistenceLabel(item.PersistenceScore)
+	item.PersistenceReason = strings.Join(reasons, " | ")
+	return item
+}
+
+func applyAnalysisPersistenceCooldown(results []AnalysisSignalResult) []AnalysisSignalResult {
+	out := make([]AnalysisSignalResult, 0, len(results))
+	const sameDirectionMS = int64(15 * time.Minute / time.Millisecond)
+	const oppositeDirectionMS = int64(10 * time.Minute / time.Millisecond)
+	for _, item := range results {
+		replaced := false
+		skip := false
+		for i := len(out) - 1; i >= 0; i-- {
+			prev := out[i]
+			delta := item.SignalTS - prev.SignalTS
+			if delta < 0 {
+				delta = -delta
+			}
+			if item.Direction == prev.Direction && delta <= sameDirectionMS {
+				if item.PersistenceScore > prev.PersistenceScore {
+					out[i] = item
+					replaced = true
+				} else {
+					skip = true
+				}
+				break
+			}
+			if item.Direction != prev.Direction && delta <= oppositeDirectionMS {
+				if item.PersistenceScore > prev.PersistenceScore {
+					out[i] = item
+					replaced = true
+				} else {
+					skip = true
+				}
+				break
+			}
+		}
+		if !skip && !replaced {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func filterAnalysisSignalsByNoiseStrategy(results []AnalysisSignalResult, candles []analysisBacktestCandle, strategy string) []AnalysisSignalResult {
+	if normalizeAnalysisBacktestNoiseStrategy(strategy) != analysisBacktestNoisePersistence {
+		return append([]AnalysisSignalResult(nil), results...)
+	}
+	scored := make([]AnalysisSignalResult, 0, len(results))
+	for _, item := range results {
+		item = scoreAnalysisSignalPersistence(item, candles)
+		if item.PersistenceScore >= 65 {
+			scored = append(scored, item)
+		}
+	}
+	return applyAnalysisPersistenceCooldown(scored)
+}
+
 func filterAnalysisSignalsBySecondFactor(results []AnalysisSignalResult, factor string) []AnalysisSignalResult {
 	key := normalizeAnalysisSecondFactorKey(factor)
 	if key == analysisSecondFactorAll {
@@ -1109,7 +1302,7 @@ func (a *App) fetchAnalysisBacktestChartCandles(hours int, interval string, sinc
 	return out, cfg.Source, cfg.Label, nil
 }
 
-func (a *App) buildAnalysisBacktestResults(hours int, minConfidence float64, qualityMode string) ([]AnalysisSignalResult, int64, int64, error) {
+func (a *App) buildAnalysisBacktestResults(hours int, minConfidence float64, qualityMode string, noiseStrategy string) ([]AnalysisSignalResult, int64, int64, error) {
 	if hours <= 0 {
 		hours = 24
 	}
@@ -1146,12 +1339,14 @@ func (a *App) buildAnalysisBacktestResults(hours int, minConfidence float64, qua
 		results = append(results, buildAnalysisSignalResult(record, candles, nowTS, analysisBacktestHorizonsForSignal(records, i)))
 	}
 	results = filterAnalysisSignalsByQuality(results, qualityMode)
+	results = filterAnalysisSignalsByNoiseStrategy(results, candles, noiseStrategy)
 	return results, sinceTS, floorToFiveMinute(nowTS) + baseStep, nil
 }
 
-func (a *App) AnalysisBacktest(hours int, interval string, minConfidence float64, qualityMode string) (AnalysisBacktestPageResponse, error) {
+func (a *App) AnalysisBacktest(hours int, interval string, minConfidence float64, qualityMode string, noiseStrategy string) (AnalysisBacktestPageResponse, error) {
 	selectedQuality := normalizeAnalysisBacktestQualityMode(qualityMode)
-	results, sinceTS, chartEndTS, err := a.buildAnalysisBacktestResults(hours, minConfidence, selectedQuality)
+	selectedNoiseStrategy := normalizeAnalysisBacktestNoiseStrategy(noiseStrategy)
+	results, sinceTS, chartEndTS, err := a.buildAnalysisBacktestResults(hours, minConfidence, selectedQuality, selectedNoiseStrategy)
 	if err != nil {
 		return AnalysisBacktestPageResponse{}, err
 	}
@@ -1166,13 +1361,14 @@ func (a *App) AnalysisBacktest(hours int, interval string, minConfidence float64
 		HorizonStats:      buildAnalysisBacktestHorizonStats(results),
 		ConfidenceBuckets: buildAnalysisBacktestConfidenceBuckets(results),
 		QualityMode:       selectedQuality,
+		NoiseStrategy:     selectedNoiseStrategy,
 		ChartSource:       source,
 		ChartInterval:     chartInterval,
 	}, nil
 }
 
 func (a *App) AnalysisBacktest2FA(hours int, interval string, factor string, minConfidence float64, strategy string) (AnalysisBacktest2FAResponse, error) {
-	baseResults, sinceTS, chartEndTS, err := a.buildAnalysisBacktestResults(hours, 0, analysisBacktestQualityAll)
+	baseResults, sinceTS, chartEndTS, err := a.buildAnalysisBacktestResults(hours, 0, analysisBacktestQualityAll, analysisBacktestNoiseNone)
 	if err != nil {
 		return AnalysisBacktest2FAResponse{}, err
 	}
@@ -1272,7 +1468,7 @@ func max(a, b int) int {
 }
 
 func (a *App) debugAnalysisBacktestSummary(hours int) string {
-	resp, err := a.AnalysisBacktest(hours, "5m", 0, analysisBacktestQualityAll)
+	resp, err := a.AnalysisBacktest(hours, "5m", 0, analysisBacktestQualityAll, analysisBacktestNoiseNone)
 	if err != nil {
 		return err.Error()
 	}

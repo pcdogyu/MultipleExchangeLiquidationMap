@@ -126,6 +126,9 @@ type AnalysisSignalResult struct {
 	VerifyHorizonMin  int                           `json:"verify_horizon_min"`
 	SecondFactorKey   string                        `json:"second_factor_key,omitempty"`
 	SecondFactorLabel string                        `json:"second_factor_label,omitempty"`
+	PersistenceScore  float64                       `json:"persistence_score,omitempty"`
+	PersistenceLabel  string                        `json:"persistence_label,omitempty"`
+	PersistenceReason string                        `json:"persistence_reason,omitempty"`
 	VerifyDueTS       int64                         `json:"verify_due_ts"`
 	VerifyClosePrice  float64                       `json:"verify_close_price,omitempty"`
 	Result            string                        `json:"result"`
@@ -211,6 +214,7 @@ type AnalysisBacktestPageResponse struct {
 	HorizonStats      []AnalysisBacktestHorizonStat      `json:"horizon_stats"`
 	ConfidenceBuckets []AnalysisBacktestConfidenceBucket `json:"confidence_buckets,omitempty"`
 	QualityMode       string                             `json:"quality_mode,omitempty"`
+	NoiseStrategy     string                             `json:"noise_strategy,omitempty"`
 	ChartSource       string                             `json:"chart_source,omitempty"`
 	ChartInterval     string                             `json:"chart_interval,omitempty"`
 }

@@ -182,6 +182,11 @@ th{color:var(--muted);font-weight:600}
             <option value="high" selected>&#39640;&#36136;&#37327;</option>
             <option value="all">&#20840;&#37096;&#20449;&#21495;</option>
           </select>
+          <label for="noiseStrategySelect">&#38477;&#22122;</label>
+          <select id="noiseStrategySelect">
+            <option value="none" selected>&#20840;&#37096;</option>
+            <option value="persistence">&#38271;&#21608;&#26399;&#38477;&#22122;</option>
+          </select>
           <button class="primary" type="button" id="reloadBtn">&#21047;&#26032;&#22270;&#34920;</button>
         </div>
         <div class="toolbar-group">
@@ -218,6 +223,7 @@ th{color:var(--muted);font-weight:600}
               <th>&#26102;&#38388;</th>
               <th>&#26041;&#21521;</th>
               <th>&#32622;&#20449;&#24230;</th>
+              <th>&#38477;&#22122;&#35780;&#20998;</th>
               <th>&#20449;&#21495;&#20215;</th>
               <th>5m</th>
               <th>15m</th>
@@ -227,7 +233,7 @@ th{color:var(--muted);font-weight:600}
             </tr>
           </thead>
           <tbody id="historyBody">
-            <tr><td colspan="9" class="empty">&#21152;&#36733;&#20013;...</td></tr>
+            <tr><td colspan="10" class="empty">&#21152;&#36733;&#20013;...</td></tr>
           </tbody>
         </table>
       </div>
@@ -260,6 +266,7 @@ const state={
   candles:[],
   confMin:'0',
   qualityMode:'high',
+  noiseStrategy:'none',
   interval:'5m',
   chartWidth:1600,
   chartHeight:620,
@@ -295,6 +302,8 @@ function fmtTime(ts){const n=Number(ts||0);if(!n)return '-';return new Date(n).t
 function resultLabel(v){if(v==='correct')return ['Correct','ok'];if(v==='wrong')return ['Wrong','bad'];if(v==='pending')return ['Pending','pending'];if(v==='no_data')return ['No data','pending'];return [String(v||'-'),''];}
 function directionLabel(v){return v==='up'?'Up':'Down';}
 function qualityModeLabel(v){return v==='high'?'High quality':'All signals';}
+function noiseStrategyLabel(v){return v==='persistence'?'Long-cycle denoise':'All';}
+function persistenceCell(sig){const score=Number(sig&&sig.persistence_score||0);if(!score)return '-';return score.toFixed(1)+' / '+esc(sig.persistence_label||'-');}
 function horizonByMin(sig,min){for(const h of (sig&&sig.horizons||[])){if(Number(h&&h.horizon_min||0)===min)return h;}return null;}
 function renderHorizonCell(sig,min){const h=horizonByMin(sig,min);if(!h)return '<div class="horizon-pill nodata-pill"><span class="pending">已截断</span><span class="meta">反向信号</span></div>';const res=resultLabel(h.result);if(h.result==='pending')return '<div class="horizon-pill pending-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';if(h.result==='no_data')return '<div class="horizon-pill nodata-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';const isCorrect=h.result==='correct';const cls=isCorrect?'ok':'bad';const pillCls=isCorrect?'up-pill':'down-pill';return '<div class="horizon-pill '+pillCls+'"><span class="price">'+fmtPrice(h.verify_close_price)+'</span><span class="meta '+cls+'">'+fmtDelta(h.delta_price)+' / '+fmtPct(h.delta_pct)+'</span></div>';}
 function clamp(v,min,max){return Math.max(min,Math.min(max,v));}
@@ -525,7 +534,7 @@ function draw(){
 function renderHistory(){
   const body=document.getElementById('historyBody');
   if(!state.signals.length){
-    body.innerHTML='<tr><td colspan="9" class="empty">No signals matched the current filters in the last 24h</td></tr>';
+    body.innerHTML='<tr><td colspan="10" class="empty">No signals matched the current filters in the last 24h</td></tr>';
     return;
   }
   body.innerHTML=state.signals.slice().sort((a,b)=>Number(b.signal_ts||0)-Number(a.signal_ts||0)).map(sig=>{
@@ -534,6 +543,7 @@ function renderHistory(){
       +'<td>'+fmtTime(sig.signal_ts)+'</td>'
       +'<td class="'+dirCls+'">'+directionLabel(sig.direction)+'</td>'
       +'<td>'+fmtConfidence(sig.confidence)+'</td>'
+      +'<td title="'+esc(sig.persistence_reason||'')+'">'+persistenceCell(sig)+'</td>'
       +'<td>'+fmtPrice(sig.signal_price)+'</td>'
       +'<td class="horizon-cell">'+renderHorizonCell(sig,5)+'</td>'
       +'<td class="horizon-cell">'+renderHorizonCell(sig,15)+'</td>'
@@ -616,6 +626,9 @@ function applyBacktestData(d){
   state.qualityMode=String(d.quality_mode||state.qualityMode||'high');
   const qualityModeSelect=document.getElementById('qualityModeSelect');
   if(qualityModeSelect)qualityModeSelect.value=state.qualityMode;
+  state.noiseStrategy=String(d.noise_strategy||state.noiseStrategy||'none');
+  const noiseStrategySelect=document.getElementById('noiseStrategySelect');
+  if(noiseStrategySelect)noiseStrategySelect.value=state.noiseStrategy;
   const intervalSelect=document.getElementById('intervalSelect');
   if(intervalSelect)intervalSelect.value=state.interval;
   state.chartLoading=false;
@@ -632,7 +645,7 @@ function applyBacktestData(d){
 async function loadSignals(){
   state.chartLoading=true;
   draw();
-  const params=new URLSearchParams({hours:'24',interval:String(state.interval||'5m'),conf_min:String(state.confMin||'0'),quality:String(state.qualityMode||'high')});
+  const params=new URLSearchParams({hours:'24',interval:String(state.interval||'5m'),conf_min:String(state.confMin||'0'),quality:String(state.qualityMode||'high'),noise_strategy:String(state.noiseStrategy||'none')});
   const r=await fetch('/api/analysis-backtest?'+params.toString()).catch(()=>null);
   if(!r)throw new Error('Cannot request /api/analysis-backtest');
   if(!r.ok)throw new Error(await r.text().catch(()=>('HTTP '+r.status)));
@@ -668,6 +681,10 @@ function bindControls(){
     state.qualityMode=String(e.target.value||'high');
     await reloadAll();
   });
+  document.getElementById('noiseStrategySelect').addEventListener('change',async e=>{
+    state.noiseStrategy=String(e.target.value||'none');
+    await reloadAll();
+  });
   document.getElementById('reloadBtn').addEventListener('click',reloadAll);
   document.getElementById('widthDownBtn').addEventListener('click',()=>adjustChartSize('width',-180));
   document.getElementById('widthUpBtn').addEventListener('click',()=>adjustChartSize('width',180));
@@ -682,7 +699,7 @@ function bindControls(){
 async function reloadChartOnly(){
   try{
     await loadSignals();
-    document.getElementById('footer').textContent='Range '+qualityModeLabel(state.qualityMode)+' | Confidence '+confidenceFilterLabel(state.confMin)+' | Interval '+state.interval+' | Signals '+state.signals.length+' | K '+state.candles.length;
+    document.getElementById('footer').textContent='Range '+qualityModeLabel(state.qualityMode)+' | Noise '+noiseStrategyLabel(state.noiseStrategy)+' | Confidence '+confidenceFilterLabel(state.confMin)+' | Interval '+state.interval+' | Signals '+state.signals.length+' | K '+state.candles.length;
   }catch(err){
     state.chartLoading=false;
     state.candles=[];
@@ -695,7 +712,7 @@ async function reloadAll(){
   try{
     document.getElementById('footer').textContent='Loading...';
     await loadSignals();
-    document.getElementById('footer').textContent='Range '+qualityModeLabel(state.qualityMode)+' | Confidence '+confidenceFilterLabel(state.confMin)+' | Last 24h signals '+state.signals.length+' | Interval '+state.interval+' | K '+state.candles.length;
+    document.getElementById('footer').textContent='Range '+qualityModeLabel(state.qualityMode)+' | Noise '+noiseStrategyLabel(state.noiseStrategy)+' | Confidence '+confidenceFilterLabel(state.confMin)+' | Last 24h signals '+state.signals.length+' | Interval '+state.interval+' | K '+state.candles.length;
   }catch(err){
     state.chartLoading=false;
     document.getElementById('footer').textContent=String(err&&err.message||err||'Load failed');

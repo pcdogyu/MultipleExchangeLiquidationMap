@@ -14,7 +14,7 @@ func (stubServices) AnalysisSnapshot() (liqmap.AnalysisSnapshot, error) {
 	return liqmap.AnalysisSnapshot{}, nil
 }
 
-func (stubServices) AnalysisBacktest(hours int, interval string, minConfidence float64, qualityMode string) (liqmap.AnalysisBacktestPageResponse, error) {
+func (stubServices) AnalysisBacktest(hours int, interval string, minConfidence float64, qualityMode string, noiseStrategy string) (liqmap.AnalysisBacktestPageResponse, error) {
 	return liqmap.AnalysisBacktestPageResponse{}, nil
 }
 
@@ -32,7 +32,13 @@ func newTestService() *service {
 
 type captureServices struct {
 	stubServices
-	strategy string
+	strategy      string
+	noiseStrategy string
+}
+
+func (s *captureServices) AnalysisBacktest(hours int, interval string, minConfidence float64, qualityMode string, noiseStrategy string) (liqmap.AnalysisBacktestPageResponse, error) {
+	s.noiseStrategy = noiseStrategy
+	return liqmap.AnalysisBacktestPageResponse{}, nil
 }
 
 func (s *captureServices) AnalysisBacktest2FA(hours int, interval string, factor string, minConfidence float64, strategy string) (liqmap.AnalysisBacktest2FAResponse, error) {
@@ -93,5 +99,21 @@ func TestHandleBacktest2FADefaultStrategyIsEmptyForCompatibility(t *testing.T) {
 	}
 	if core.strategy != "" {
 		t.Fatalf("strategy = %q, want empty default", core.strategy)
+	}
+}
+
+func TestHandleBacktestPassesNoiseStrategy(t *testing.T) {
+	core := &captureServices{}
+	svc := newService(core)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/analysis-backtest?noise_strategy=persistence", nil)
+	rec := httptest.NewRecorder()
+	svc.handleBacktest(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if core.noiseStrategy != "persistence" {
+		t.Fatalf("noise strategy = %q, want persistence", core.noiseStrategy)
 	}
 }

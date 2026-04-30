@@ -2,6 +2,7 @@ package liqmap
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -284,6 +285,125 @@ func TestClassifyAnalysisSecondFactorUsesRelativeVolume(t *testing.T) {
 	}
 }
 
+func TestAnalysisPersistenceScorePassesAlignedVolumeSpikeTrend(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	item := AnalysisSignalResult{
+		SignalTS:          baseTS + 12*int64(5*time.Minute/time.Millisecond),
+		Direction:         "up",
+		Summary:           persistenceSummary(80, 70, 65),
+		SecondFactorKey:   analysisSecondFactorVolumeSpike,
+		SecondFactorLabel: analysisSecondFactorLabel(analysisSecondFactorVolumeSpike),
+	}
+	scored := scoreAnalysisSignalPersistence(item, persistenceTrendCandles(baseTS, 1))
+	if scored.PersistenceScore < 65 {
+		t.Fatalf("persistence score = %.1f, want pass >= 65 (%s)", scored.PersistenceScore, scored.PersistenceReason)
+	}
+	if scored.PersistenceLabel != "长周期延续" {
+		t.Fatalf("persistence label = %q", scored.PersistenceLabel)
+	}
+}
+
+func TestAnalysisPersistenceScoreRejectsLowVolumeChopNoise(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	item := AnalysisSignalResult{
+		SignalTS:        baseTS + 12*int64(5*time.Minute/time.Millisecond),
+		Direction:       "up",
+		Summary:         persistenceSummary(80, 70, 65),
+		SecondFactorKey: analysisSecondFactorVolumeLow,
+	}
+	scored := scoreAnalysisSignalPersistence(item, persistenceChopCandles(baseTS))
+	if scored.PersistenceScore >= 65 {
+		t.Fatalf("persistence score = %.1f, want rejected below 65 (%s)", scored.PersistenceScore, scored.PersistenceReason)
+	}
+}
+
+func TestAnalysisPersistenceScoreRejectsConflictWindow(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	item := AnalysisSignalResult{
+		SignalTS:        baseTS + 12*int64(5*time.Minute/time.Millisecond),
+		Direction:       "up",
+		Summary:         persistenceSummary(80, -70, 65),
+		SecondFactorKey: analysisSecondFactorVolumeSpike,
+	}
+	scored := scoreAnalysisSignalPersistence(item, persistenceTrendCandles(baseTS, 1))
+	if scored.PersistenceScore >= 65 {
+		t.Fatalf("persistence score = %.1f, want rejected below 65 (%s)", scored.PersistenceScore, scored.PersistenceReason)
+	}
+}
+
+func TestAnalysisPersistenceCooldownKeepsBestDuplicateSignals(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	minute := int64(time.Minute / time.Millisecond)
+	rows := []AnalysisSignalResult{
+		{ID: 1, SignalTS: baseTS, Direction: "up", PersistenceScore: 70},
+		{ID: 2, SignalTS: baseTS + 5*minute, Direction: "up", PersistenceScore: 82},
+		{ID: 3, SignalTS: baseTS + 21*minute, Direction: "up", PersistenceScore: 75},
+	}
+	filtered := applyAnalysisPersistenceCooldown(rows)
+	if len(filtered) != 2 || filtered[0].ID != 2 || filtered[1].ID != 3 {
+		t.Fatalf("cooldown rows = %+v, want IDs 2 and 3", filtered)
+	}
+}
+
+func TestAnalysisPersistenceCooldownKeepsBestOppositeConflict(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	minute := int64(time.Minute / time.Millisecond)
+	rows := []AnalysisSignalResult{
+		{ID: 1, SignalTS: baseTS, Direction: "up", PersistenceScore: 83},
+		{ID: 2, SignalTS: baseTS + 8*minute, Direction: "down", PersistenceScore: 72},
+		{ID: 3, SignalTS: baseTS + 25*minute, Direction: "down", PersistenceScore: 78},
+	}
+	filtered := applyAnalysisPersistenceCooldown(rows)
+	if len(filtered) != 2 || filtered[0].ID != 1 || filtered[1].ID != 3 {
+		t.Fatalf("opposite cooldown rows = %+v, want IDs 1 and 3", filtered)
+	}
+}
+
+func TestAnalysisPersistenceNoiseStrategyFiltersLowScores(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	step := int64(5 * time.Minute / time.Millisecond)
+	rows := []AnalysisSignalResult{
+		{ID: 1, SignalTS: baseTS + 12*step, Direction: "up", Summary: persistenceSummary(80, 70, 65), SecondFactorKey: analysisSecondFactorVolumeSpike},
+		{ID: 2, SignalTS: baseTS + 20*step, Direction: "up", Summary: persistenceSummary(80, -70, 65), SecondFactorKey: analysisSecondFactorVolumeLow},
+	}
+	all := filterAnalysisSignalsByNoiseStrategy(rows, persistenceTrendCandles(baseTS, 1), analysisBacktestNoiseNone)
+	if len(all) != len(rows) {
+		t.Fatalf("none strategy returned %d rows, want %d", len(all), len(rows))
+	}
+	filtered := filterAnalysisSignalsByNoiseStrategy(rows, persistenceTrendCandles(baseTS, 1), analysisBacktestNoisePersistence)
+	if len(filtered) != 1 || filtered[0].ID != 1 {
+		t.Fatalf("persistence filtered rows = %+v, want only ID 1", filtered)
+	}
+}
+
+func TestAnalysisPersistenceFilterCanImproveLongHorizonStats(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	step := int64(5 * time.Minute / time.Millisecond)
+	kept := backtestSignalForTest(88, "correct", map[int]string{5: "correct", 15: "correct", 30: "correct", 60: "correct"})
+	kept.ID = 1
+	kept.SignalTS = baseTS + 12*step
+	kept.Direction = "up"
+	kept.Summary = persistenceSummary(80, 70, 65)
+	kept.SecondFactorKey = analysisSecondFactorVolumeSpike
+	rejected := backtestSignalForTest(88, "correct", map[int]string{5: "correct", 15: "wrong", 30: "wrong", 60: "wrong"})
+	rejected.ID = 2
+	rejected.SignalTS = baseTS + 20*step
+	rejected.Direction = "up"
+	rejected.Summary = persistenceSummary(80, -70, 65)
+	rejected.SecondFactorKey = analysisSecondFactorVolumeLow
+
+	rows := []AnalysisSignalResult{kept, rejected}
+	before15m, beforeCount := analysisBacktestHorizonCorrectRate(rows, 15)
+	filtered := filterAnalysisSignalsByNoiseStrategy(rows, persistenceTrendCandles(baseTS, 1), analysisBacktestNoisePersistence)
+	after15m, afterCount := analysisBacktestHorizonCorrectRate(filtered, 15)
+	if before15m != 50 || beforeCount != 2 {
+		t.Fatalf("before 15m = %.1f/%d, want 50/2", before15m, beforeCount)
+	}
+	if after15m != 100 || afterCount != 1 {
+		t.Fatalf("after 15m = %.1f/%d, want 100/1", after15m, afterCount)
+	}
+}
+
 func TestAnalysisBacktest2FAStatsUseConfidenceFilteredSignals(t *testing.T) {
 	base := []AnalysisSignalResult{
 		backtestSignalForTest(65, "correct", map[int]string{5: "correct", 15: "correct"}),
@@ -472,6 +592,62 @@ func backtestSignalForTest(confidence float64, result string, horizons map[int]s
 		out.Horizons = append(out.Horizons, AnalysisSignalHorizonResult{
 			HorizonMin: horizonMin,
 			Result:     horizonResult,
+		})
+	}
+	return out
+}
+
+func persistenceSummary(scores ...float64) string {
+	parts := make([]string, 0, len(scores))
+	for i, score := range scores {
+		label := []string{"1D", "7D", "30D"}[i]
+		parts = append(parts, label+" 权重 33% / 分数 "+fmt.Sprintf("%+.1f", score)+" / 有效带 1")
+	}
+	return strings.Join(parts, " | ")
+}
+
+func persistenceTrendCandles(baseTS int64, direction float64) []analysisBacktestCandle {
+	const step = int64(5 * time.Minute / time.Millisecond)
+	out := make([]analysisBacktestCandle, 0, 24)
+	price := 2200.0
+	for i := 0; i < 24; i++ {
+		open := price
+		closePrice := price + direction*2
+		out = append(out, analysisBacktestCandle{
+			TS:          baseTS + int64(i)*step,
+			O:           open,
+			H:           math.Max(open, closePrice) + 1,
+			L:           math.Min(open, closePrice) - 1,
+			C:           closePrice,
+			QuoteVolume: 100,
+		})
+		price = closePrice
+	}
+	return out
+}
+
+func persistenceChopCandles(baseTS int64) []analysisBacktestCandle {
+	const step = int64(5 * time.Minute / time.Millisecond)
+	out := make([]analysisBacktestCandle, 0, 13)
+	for i := 0; i < 13; i++ {
+		open := 2200.0
+		closePrice := 2200.0
+		if i%2 == 0 {
+			closePrice = 2201
+		} else {
+			closePrice = 2199
+		}
+		if i == 12 {
+			open = 2200
+			closePrice = 2200.5
+		}
+		out = append(out, analysisBacktestCandle{
+			TS:          baseTS + int64(i)*step,
+			O:           open,
+			H:           2210,
+			L:           2190,
+			C:           closePrice,
+			QuoteVolume: 100,
 		})
 	}
 	return out

@@ -67,7 +67,8 @@ func (s *service) handleBacktest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	qualityMode := strings.TrimSpace(r.URL.Query().Get("quality"))
-	resp, err := s.core.AnalysisBacktest(hours, interval, minConfidence, qualityMode)
+	noiseStrategy := strings.TrimSpace(r.URL.Query().Get("noise_strategy"))
+	resp, err := s.core.AnalysisBacktest(hours, interval, minConfidence, qualityMode, noiseStrategy)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
