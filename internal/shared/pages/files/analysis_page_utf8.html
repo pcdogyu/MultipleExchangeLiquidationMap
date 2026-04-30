@@ -325,6 +325,11 @@ function renderChangeCard(it){
     +'</div>';
 }
 
+function setFooterText(text){
+  const footer=document.getElementById('footer')||document.getElementById('shared-global-footer');
+  if(footer) footer.textContent=text;
+}
+
 function showLoadError(message){
   const text=message||'分析接口加载失败';
   document.getElementById('title').textContent='加载失败';
@@ -340,7 +345,7 @@ function showLoadError(message){
   document.getElementById('backtestSummary').textContent=text;
   document.getElementById('backtestMeta').textContent='请检查 /api/analysis 响应';
   document.getElementById('rates').innerHTML='';
-  document.getElementById('footer').textContent=text;
+  setFooterText(text);
 }
 
 async function load(){
@@ -363,7 +368,7 @@ async function load(){
   document.getElementById('symbol').textContent=d.symbol||'-';
   document.getElementById('confidence').textContent=fmtPct(d.overview?.confidence);
   document.getElementById('updatedAt').textContent=fmtTime(d.generated_at);
-  document.getElementById('footer').textContent='Dominant exchange: '+((d.dashboard&&d.dashboard.analytics&&d.dashboard.analytics.dominant_exchange)||'-')+' | Alert: '+((d.dashboard&&d.dashboard.analytics&&d.dashboard.analytics.alert&&d.dashboard.analytics.alert.level)||'-');
+  setFooterText('Dominant exchange: '+((d.dashboard&&d.dashboard.analytics&&d.dashboard.analytics.dominant_exchange)||'-')+' | Alert: '+((d.dashboard&&d.dashboard.analytics&&d.dashboard.analytics.alert&&d.dashboard.analytics.alert.level)||'-'));
 
   document.getElementById('broadcastHeadline').textContent=d.broadcast?.headline||'-';
   document.getElementById('broadcastText').textContent=d.broadcast?.text||'-';
