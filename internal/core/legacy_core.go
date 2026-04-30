@@ -934,6 +934,10 @@ func captureElementJPEG(pageURL, selector string, width, height int, prepareScri
 }
 
 func captureElementJPEGWithScale(pageURL, selector string, width, height int, deviceScaleFactor float64, prepareScript, waitScript string) ([]byte, error) {
+	return captureElementJPEGWithScaleQuality(pageURL, selector, width, height, deviceScaleFactor, prepareScript, waitScript, 95)
+}
+
+func captureElementJPEGWithScaleQuality(pageURL, selector string, width, height int, deviceScaleFactor float64, prepareScript, waitScript string, jpegQuality int) ([]byte, error) {
 	chromePath := detectChromePath()
 	if chromePath == "" {
 		return nil, errors.New("chrome/chromium executable not found")
@@ -975,7 +979,7 @@ func captureElementJPEGWithScale(pageURL, selector string, width, height int, de
 	if err := chromedp.Run(taskCtx, actions...); err != nil {
 		return nil, err
 	}
-	return pngToJPEG(pngBytes, 95)
+	return pngToJPEG(pngBytes, jpegQuality)
 }
 
 func captureCanvasJPEGWithScale(pageURL, selector string, width, height int, deviceScaleFactor float64, prepareScript, waitScript string) ([]byte, error) {
@@ -1110,7 +1114,7 @@ func (a *App) captureAnalysisScreenshotJPEG() ([]byte, error) {
 		if(!broadcastText || loading.includes(broadcastText)) return false;
 		return indicators.length > 0 || !!indicatorFallback || titleText==='加载失败' || broadcastText==='加载失败';
 	})()`
-	return captureElementJPEGWithScale(pageURL, "#analysisCapture", 1640, 1760, 1.6, prepare, wait)
+	return captureElementJPEGWithScaleQuality(pageURL, "#analysisCapture", 1640, 1760, 1.25, prepare, wait, 88)
 }
 
 func (a *App) buildAnalysisTelegramText(snapshot AnalysisSnapshot) string {
