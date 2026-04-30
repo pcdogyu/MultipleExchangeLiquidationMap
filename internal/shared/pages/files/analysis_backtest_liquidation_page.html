@@ -113,7 +113,7 @@ th{color:var(--muted);font-weight:600}
     <div class="panel hero-main">
       <div class="small">Liquidation Backtest</div>
       <h1>&#28165;&#31639;&#22238;&#27979;</h1>
-      <div class="small">&#22522;&#20110; 1D / 7D / 30D &#20840;&#37327;&#28165;&#31639;&#28857;&#20301;&#21464;&#21270;&#29983;&#25104;&#26041;&#21521;&#20449;&#21495;&#65292;&#24182;&#23558;&#20449;&#21495;&#26631;&#27880;&#22312;&#25152;&#36873; K &#32447;&#21608;&#26399;&#19978;&#65292;&#32479;&#35745;&#20449;&#21495;&#21457;&#29983;&#21518; 5m / 15m / 30m / 1h &#30340;&#25910;&#30424;&#39564;&#35777;&#32467;&#26524;&#12290;</div>
+      <div class="small">基于真实强平流的 1h / 4h 状态切换生成开仓信号：只有状态从非同向更新为多多或空空时，才标记开多或开空，并统计信号发生后 5m / 15m / 30m / 1h 的收盘验证结果。</div>
     </div>
     <div class="stats">
       <div class="stat"><div class="k">&#24635;&#20449;&#21495;&#25968;</div><div class="v" id="totalSignals">-</div></div>
@@ -129,14 +129,14 @@ th{color:var(--muted);font-weight:600}
       <h2>&#20449;&#21495;&#29983;&#25104;&#21407;&#29702;</h2>
       <div class="principle-card">
         <div class="principle-box">
-          <h3>&#21333;&#22240;&#23376;&#21482;&#30475;&#22810;&#31383;&#21475;&#28165;&#31639;&#24102;&#21464;&#21270;</h3>
-          <p>&#31639;&#27861;&#35835;&#21462;&#26368;&#36817;&#20004;&#20221; 1D / 7D / 30D &#28165;&#31639;&#28857;&#20301;&#24555;&#29031;&#65292;&#25226;&#20840;&#37327;&#28857;&#20301;&#25353;&#20215;&#26684;&#32858;&#21512;&#25104;&#20215;&#26684;&#24102;&#65292;&#20877;&#27604;&#36739; long / short &#28165;&#31639;&#37329;&#39069;&#30340;&#20928;&#21464;&#21270;&#12290;&#31163;&#29616;&#20215;&#36234;&#36817;&#12289;&#21464;&#21270;&#36234;&#26126;&#26174;&#12289;&#22810;&#20010;&#31383;&#21475;&#26041;&#21521;&#36234;&#19968;&#33268;&#65292;&#26041;&#21521;&#20998;&#25968;&#21644;&#32622;&#20449;&#24230;&#36234;&#39640;&#12290;</p>
+          <h3>清算同步只看真实强平流方向</h3>
+          <p>算法按 1h / 4h 两个窗口统计多单爆仓与空单爆仓金额。空单爆仓占优代表价格更容易被向上推动，多单爆仓占优代表价格更容易被向下推动；只有 1h 与 4h 同时达到有效差值阈值并更新为同向状态，才生成可回测的开仓信号。</p>
         </div>
         <div class="principle-points">
-          <div class="principle-pill"><div class="k">&#31532;&#19968;&#27493;</div><div class="v">&#25353;&#20215;&#26684;&#24102;&#32858;&#21512; 1D / 7D / 30D &#20840;&#37327;&#28165;&#31639;&#28857;&#20301;&#65292;&#20998;&#21035;&#32047;&#35745; long&#12289;short&#12289;&#20928;&#21387;&#21147;&#21644;&#24635;&#37329;&#39069;&#12290;</div></div>
-          <div class="principle-pill"><div class="k">&#31532;&#20108;&#27493;</div><div class="v">&#27604;&#36739;&#26368;&#26032;&#24555;&#29031;&#19982;&#19978;&#19968;&#20221;&#24555;&#29031;&#65292;&#31579;&#20986;&#21464;&#21270;&#36275;&#22815;&#22823;&#30340;&#20215;&#26684;&#24102;&#65292;&#35745;&#31639;&#27599;&#20010;&#31383;&#21475;&#33258;&#24049;&#30340;&#26041;&#21521;&#20998;&#25968;&#12290;</div></div>
-          <div class="principle-pill"><div class="k">&#31532;&#19977;&#27493;</div><div class="v">&#26681;&#25454;&#31383;&#21475;&#26032;&#40092;&#24230;&#12289;&#20869;&#37096;&#19968;&#33268;&#24615;&#21644;&#26377;&#25928;&#21464;&#21270;&#37327;&#65292;&#21160;&#24577;&#20998;&#37197; 1D / 7D / 30D &#26435;&#37325;&#12290;</div></div>
-          <div class="principle-pill"><div class="k">&#36755;&#20986;</div><div class="v">&#26368;&#32456;&#36755;&#20986;&#26041;&#21521;&#12289;&#32622;&#20449;&#24230;&#21644;&#25688;&#35201;&#65307;&#20998;&#25968;&#25509;&#36817;&#20013;&#24615;&#26102;&#19981;&#29983;&#25104;&#20449;&#21495;&#12290;</div></div>
+          <div class="principle-pill"><div class="k">第一步</div><div class="v">按当前时间点向前滚动统计 1h / 4h 两个窗口，分别得到多单爆仓金额、空单爆仓金额、总清算金额。</div></div>
+          <div class="principle-pill"><div class="k">第二步</div><div class="v">计算每个窗口的多空差值占比；空单爆仓更多记为向上推动，多单爆仓更多记为向下推动，差值不足阈值则记为中性。</div></div>
+          <div class="principle-pill"><div class="k">第三步</div><div class="v">组合 1h 与 4h 作为开仓状态：从非多多更新为多多时发出开多，从非空空更新为空空时发出开空。</div></div>
+          <div class="principle-pill"><div class="k">第四步</div><div class="v">状态保持在多多或空空时不重复发信号，只把新的开仓点标到 K 线上，并统计 5m / 15m / 30m / 1h 后的验证结果。</div></div>
         </div>
       </div>
     </div>
@@ -169,7 +169,7 @@ th{color:var(--muted);font-weight:600}
             <option value="48h">48h</option>
             <option value="72h">72h</option>
           </select>
-          <label for="confMinSelect">&#32622;&#20449;&#24230;</label>
+          <label for="confMinSelect">&#24378;&#24230;</label>
           <select id="confMinSelect">
             <option value="0">&#20840;&#37096;</option>
             <option value="70">&gt;70</option>
@@ -189,7 +189,7 @@ th{color:var(--muted);font-weight:600}
         </div>
       </div>
 
-      <h2>ETH &#20215;&#26684;&#34892;&#24773;&#19982;&#26041;&#21521;&#31661;&#22836;</h2>
+      <h2>ETH &#20215;&#26684;&#34892;&#24773;&#19982;&#24320;&#20179;&#20449;&#21495;</h2>
       <div class="chart-viewport" id="chartViewport">
         <div class="canvas-wrap" id="canvasWrap">
           <canvas id="chart" width="1600" height="620"></canvas>
@@ -197,7 +197,7 @@ th{color:var(--muted);font-weight:600}
       </div>
       <div class="legend small">
         <div>&#25903;&#25345; 1m / 5m / 15m / 30m / 1h / 4h / 8h / 12h / 24h / 48h / 72h &#21608;&#26399;&#20999;&#25442;&#12290;&#40736;&#26631;&#28378;&#36718;&#32553;&#25918;&#65292;&#25302;&#21160;&#24038;&#21491;&#24179;&#31227;&#65307;Shift + &#28378;&#36718;&#35843;&#25972;&#20215;&#26684;&#39640;&#24230;&#12290;</div>
-        <div><span class="tag"><span class="dot" style="background:#16a34a"></span>&#21521;&#19978;&#20449;&#21495;</span><span class="tag" style="margin-left:12px"><span class="dot" style="background:#dc2626"></span>&#21521;&#19979;&#20449;&#21495;</span></div>
+        <div><span class="tag"><span class="dot" style="background:#16a34a"></span>&#24320;&#22810;</span><span class="tag" style="margin-left:12px"><span class="dot" style="background:#dc2626"></span>&#24320;&#31354;</span></div>
       </div>
       <div class="small meta-line" id="chartMeta">&#22270;&#34920;&#21152;&#36733;&#20013;...</div>
     </div>
@@ -205,14 +205,14 @@ th{color:var(--muted);font-weight:600}
 
   <div class="section">
     <div class="panel">
-      <h2>&#21382;&#21490;&#26041;&#21521;&#35760;&#24405;</h2>
+      <h2>&#21382;&#21490;&#24320;&#20179;&#35760;&#24405;</h2>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
               <th>&#26102;&#38388;</th>
-              <th>&#26041;&#21521;</th>
-              <th>&#32622;&#20449;&#24230;</th>
+              <th>&#20449;&#21495;</th>
+              <th>&#24378;&#24230;</th>
               <th>&#20449;&#21495;&#20215;</th>
               <th>5m</th>
               <th>15m</th>
@@ -286,8 +286,8 @@ function confidenceFilterLabel(v){const n=Number(v||0);return n>0?('>'+n):'All';
 function fmtPct(v){const n=Number(v||0);return isFinite(n)?(n>=0?'+':'')+n.toFixed(2)+'%':'-';}
 function fmtDelta(v){const n=Number(v||0);return isFinite(n)?(n>=0?'+':'')+n.toFixed(1):'-';}
 function fmtTime(ts){const n=Number(ts||0);if(!n)return '-';return new Date(n).toLocaleString('zh-CN',{hour12:false});}
-function resultLabel(v){if(v==='correct')return ['Correct','ok'];if(v==='wrong')return ['Wrong','bad'];if(v==='pending')return ['Pending','pending'];if(v==='no_data')return ['No data','pending'];return [String(v||'-'),''];}
-function directionLabel(v){return v==='up'?'Up':'Down';}
+function resultLabel(v){if(v==='correct')return ['正确','ok'];if(v==='wrong')return ['错误','bad'];if(v==='pending')return ['待验证','pending'];if(v==='no_data')return ['无数据','pending'];return [String(v||'-'),''];}
+function directionLabel(v){return v==='up'?'开多':'开空';}
 function horizonByMin(sig,min){for(const h of (sig&&sig.horizons||[])){if(Number(h&&h.horizon_min||0)===min)return h;}return null;}
 function renderHorizonCell(sig,min){const h=horizonByMin(sig,min);if(!h)return '<div class="horizon-pill nodata-pill"><span class="pending">已截断</span><span class="meta">反向信号</span></div>';const res=resultLabel(h.result);if(h.result==='pending')return '<div class="horizon-pill pending-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';if(h.result==='no_data')return '<div class="horizon-pill nodata-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';const isCorrect=h.result==='correct';const cls=isCorrect?'ok':'bad';const pillCls=isCorrect?'up-pill':'down-pill';return '<div class="horizon-pill '+pillCls+'"><span class="price">'+fmtPrice(h.verify_close_price)+'</span><span class="meta '+cls+'">'+fmtDelta(h.delta_price)+' / '+fmtPct(h.delta_pct)+'</span></div>';}
 function clamp(v,min,max){return Math.max(min,Math.min(max,v));}
@@ -387,7 +387,7 @@ function updateChartMeta(){
   const meta=document.getElementById('chartMeta');
   const count=state.candles.length;
   const visible=count?Math.min(state.viewCount,count):0;
-  meta.textContent='Last 24h price chart | Interval '+cfg.label+' | Source '+state.chartSource+' | Total K '+count+' | Visible '+visible;
+  meta.textContent='最近 24h 开仓信号图 | 周期 '+cfg.label+' | 来源 '+state.chartSource+' | K线 '+count+' | 可见 '+visible;
 }
 function syncChartWidthToViewport(force){
   const viewport=document.getElementById('chartViewport');
@@ -434,6 +434,14 @@ function drawArrow(x,y,dir,color,ctx){
     ctx.moveTo(x-6,y-2);ctx.lineTo(x,y+7);ctx.lineTo(x+6,y-2);
   }
   ctx.stroke();
+  ctx.restore();
+}
+function drawMarkerLabel(x,y,text,color,ctx,W,H){
+  ctx.save();
+  ctx.font='12px sans-serif';
+  ctx.fillStyle=color;
+  const w=ctx.measureText(text).width;
+  ctx.fillText(text,clamp(x-w/2,82,W-28-w),clamp(y,14,H-8));
   ctx.restore();
 }
 function draw(){
@@ -502,8 +510,16 @@ function draw(){
     const idx=candleIndexByTS[String(bucket)];
     if(idx==null)continue;
     const c=view[idx],x=sx(idx);
-    if(sig.direction==='up')drawArrow(x,sy(Number(c.l||0))+18,'up','#16a34a',ctx);
-    if(sig.direction==='down')drawArrow(x,sy(Number(c.h||0))-18,'down','#dc2626',ctx);
+    if(sig.direction==='up'){
+      const y=sy(Number(c.l||0))+18;
+      drawArrow(x,y,'up','#16a34a',ctx);
+      drawMarkerLabel(x,y+28,'开多','#16a34a',ctx,W,H);
+    }
+    if(sig.direction==='down'){
+      const y=sy(Number(c.h||0))-18;
+      drawArrow(x,y,'down','#dc2626',ctx);
+      drawMarkerLabel(x,y-20,'开空','#dc2626',ctx,W,H);
+    }
   }
 
   const labelCount=Math.min(6,Math.max(2,view.length));
@@ -518,7 +534,7 @@ function draw(){
 function renderHistory(){
   const body=document.getElementById('historyBody');
   if(!state.signals.length){
-    body.innerHTML='<tr><td colspan="9" class="empty">No signals matched the current confidence filter in the last 24h</td></tr>';
+    body.innerHTML='<tr><td colspan="9" class="empty">当前强度过滤下最近 24h 没有开仓信号</td></tr>';
     return;
   }
   body.innerHTML=state.signals.slice().sort((a,b)=>Number(b.signal_ts||0)-Number(a.signal_ts||0)).map(sig=>{
@@ -623,8 +639,8 @@ async function loadSignals(){
   state.chartLoading=true;
   draw();
   const params=new URLSearchParams({hours:'24',interval:String(state.interval||'5m'),conf_min:String(state.confMin||'0')});
-  const r=await fetch('/api/analysis-backtest?'+params.toString()).catch(()=>null);
-  if(!r)throw new Error('Cannot request /api/analysis-backtest');
+  const r=await fetch('/api/analysis-backtest-liquidation?'+params.toString()).catch(()=>null);
+  if(!r)throw new Error('Cannot request /api/analysis-backtest-liquidation');
   if(!r.ok)throw new Error(await r.text().catch(()=>('HTTP '+r.status)));
   const d=await r.json().catch(()=>null);
   if(!d)throw new Error('API response is not valid JSON');

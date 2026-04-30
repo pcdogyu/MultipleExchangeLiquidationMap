@@ -69,6 +69,7 @@ func TestNewRouterRegistersCompatibilityAPIs(t *testing.T) {
 		{http.MethodGet, "/api/model-config"},
 		{http.MethodGet, "/api/model-fit?hours=24&min_events=10"},
 		{http.MethodGet, "/api/analysis"},
+		{http.MethodGet, "/api/analysis-backtest-liquidation"},
 		{http.MethodGet, "/api/liquidations?page=1&limit=10"},
 		{http.MethodGet, "/api/klines?interval=1h&limit=10"},
 		{http.MethodGet, "/api/orderbook"},

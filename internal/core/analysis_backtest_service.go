@@ -14,6 +14,9 @@ const analysisSignalVerifyHorizonMin = 5
 
 var analysisBacktestHorizons = []int{5, 15, 30, 60}
 
+const analysisLiquidationBacktestSampleInterval = "5m"
+const analysisLiquidationBacktestSourceGroup = 8
+
 const (
 	analysisSecondFactorAll           = "all"
 	analysisSecondFactorVolumeSpike   = "volume_spike"
@@ -1273,6 +1276,71 @@ func filterAnalysisSignalsBySecondFactor(results []AnalysisSignalResult, factor 
 	return out
 }
 
+func liquidationBacktestSignalRecord(signal TradeSignal, id int64) (AnalysisSignalRecord, bool) {
+	if strings.ToLower(strings.TrimSpace(signal.Action)) != "open" {
+		return AnalysisSignalRecord{}, false
+	}
+
+	direction := ""
+	headline := ""
+	switch strings.ToLower(strings.TrimSpace(signal.Side)) {
+	case "long":
+		direction = "up"
+		headline = "开多"
+	case "short":
+		direction = "down"
+		headline = "开空"
+	default:
+		return AnalysisSignalRecord{}, false
+	}
+
+	symbol := defaultSymbol
+	if symbol == "" {
+		symbol = "ETHUSDT"
+	}
+	summary := strings.TrimSpace(signal.Reason)
+	if summary == "" {
+		summary = "1h/4h 状态更新为同向同步。"
+	}
+
+	return AnalysisSignalRecord{
+		ID:                id,
+		SignalTS:          signal.TS,
+		Symbol:            symbol,
+		SourceGroup:       analysisLiquidationBacktestSourceGroup,
+		Direction:         direction,
+		Confidence:        signal.Strength,
+		SignalPrice:       signal.Price,
+		AnalysisGenerated: signal.TS,
+		Headline:          headline,
+		Summary:           summary,
+		VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+	}, true
+}
+
+func buildLiquidationBacktestSignalRecords(signals []TradeSignal, sinceTS int64, minConfidence float64) []AnalysisSignalRecord {
+	out := make([]AnalysisSignalRecord, 0, len(signals))
+	for _, signal := range signals {
+		if sinceTS > 0 && signal.TS < sinceTS {
+			continue
+		}
+		record, ok := liquidationBacktestSignalRecord(signal, int64(len(out)+1))
+		if !ok {
+			continue
+		}
+		if minConfidence > 0 && record.Confidence <= minConfidence {
+			continue
+		}
+		out = append(out, record)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].SignalTS == out[j].SignalTS {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].SignalTS < out[j].SignalTS
+	})
+	return out
+}
 func candleToMap(c analysisBacktestCandle) map[string]any {
 	return map[string]any{
 		"ts": c.TS,
@@ -1357,6 +1425,43 @@ func (a *App) buildAnalysisBacktestResults(hours int, minConfidence float64, qua
 	return results, sinceTS, floorToFiveMinute(nowTS) + baseStep, nil
 }
 
+func (a *App) buildLiquidationBacktestResults(hours int, minConfidence float64) ([]AnalysisSignalResult, int64, int64, error) {
+	if hours <= 0 {
+		hours = 24
+	}
+	now := time.Now()
+	nowTS := now.UnixMilli()
+	sinceTS := now.Add(-time.Duration(hours) * time.Hour).UnixMilli()
+
+	const baseStep = int64(5 * time.Minute / time.Millisecond)
+	sampleStartTS := floorToFiveMinute(sinceTS - baseStep)
+	sampleEndTS := floorToFiveMinute(nowTS)
+	tradeSignals := a.TradeSignals(TradeSignalOptions{
+		StartTS:  sampleStartTS,
+		EndTS:    sampleEndTS,
+		Symbol:   defaultSymbol,
+		Interval: analysisLiquidationBacktestSampleInterval,
+	})
+	records := buildLiquidationBacktestSignalRecords(tradeSignals, sinceTS, minConfidence)
+
+	startTS := floorToFiveMinute(sinceTS - int64(30*time.Minute/time.Millisecond))
+	endTS := floorToFiveMinute(nowTS) + int64(time.Hour/time.Millisecond) + baseStep
+	limit := int(math.Ceil(float64(endTS-startTS)/float64(baseStep))) + 24
+	if limit < 320 {
+		limit = 320
+	}
+	raw, err := a.FetchKlines("5m", limit, startTS, endTS)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	candles := parseAnalysisBacktestCandles(raw["rows"])
+
+	results := make([]AnalysisSignalResult, 0, len(records))
+	for i, record := range records {
+		results = append(results, buildAnalysisSignalResult(record, candles, nowTS, analysisBacktestHorizonsForSignal(records, i)))
+	}
+	return results, sinceTS, floorToFiveMinute(nowTS) + baseStep, nil
+}
 func (a *App) AnalysisBacktest(hours int, interval string, minConfidence float64, qualityMode string, noiseStrategy string) (AnalysisBacktestPageResponse, error) {
 	selectedQuality := normalizeAnalysisBacktestQualityMode(qualityMode)
 	selectedNoiseStrategy := normalizeAnalysisBacktestNoiseStrategy(noiseStrategy)
@@ -1381,6 +1486,25 @@ func (a *App) AnalysisBacktest(hours int, interval string, minConfidence float64
 	}, nil
 }
 
+func (a *App) AnalysisBacktestLiquidation(hours int, interval string, minConfidence float64) (AnalysisBacktestPageResponse, error) {
+	results, sinceTS, chartEndTS, err := a.buildLiquidationBacktestResults(hours, minConfidence)
+	if err != nil {
+		return AnalysisBacktestPageResponse{}, err
+	}
+	candles, source, chartInterval, err := a.fetchAnalysisBacktestChartCandles(hours, interval, sinceTS, chartEndTS)
+	if err != nil {
+		return AnalysisBacktestPageResponse{}, err
+	}
+	return AnalysisBacktestPageResponse{
+		Candles:           candles,
+		Signals:           results,
+		Summary:           buildAnalysisBacktestSummary(results, hours),
+		HorizonStats:      buildAnalysisBacktestHorizonStats(results),
+		ConfidenceBuckets: buildAnalysisBacktestConfidenceBuckets(results),
+		ChartSource:       source,
+		ChartInterval:     chartInterval,
+	}, nil
+}
 func (a *App) AnalysisBacktest2FA(hours int, interval string, factor string, minConfidence float64, strategy string) (AnalysisBacktest2FAResponse, error) {
 	baseResults, sinceTS, chartEndTS, err := a.buildAnalysisBacktestResults(hours, 0, analysisBacktestQualityAll, analysisBacktestNoiseNone)
 	if err != nil {

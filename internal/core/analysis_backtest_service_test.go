@@ -376,6 +376,25 @@ func TestAnalysisPersistenceCooldownKeepsBestOppositeConflict(t *testing.T) {
 	}
 }
 
+func TestBuildLiquidationBacktestSignalRecordsOnlyUsesOpenStateUpdates(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	signals := []TradeSignal{
+		{TS: baseTS - 1, Side: "long", Action: "open", Price: 2200, Strength: 45, Reason: "before window"},
+		{TS: baseTS, Side: "long", Action: "open", Price: 2210, Strength: 55, Reason: "1h/4h 同时变为多同步，多单开仓。"},
+		{TS: baseTS + 1, Side: "long", Action: "add", Price: 2220, Strength: 65, Reason: "12h/24h 同时确认多头趋势，多单增仓。"},
+		{TS: baseTS + 2, Side: "long", Action: "close", Price: 2190, Strength: 75, Reason: "多单平仓。"},
+		{TS: baseTS + 3, Side: "short", Action: "open", Price: 2180, Strength: 85, Reason: "1h/4h 同时变为空同步，空单开仓。"},
+	}
+
+	records := buildLiquidationBacktestSignalRecords(signals, baseTS, 60)
+	if len(records) != 1 {
+		t.Fatalf("record count = %d, want 1: %+v", len(records), records)
+	}
+	got := records[0]
+	if got.Direction != "down" || got.Headline != "开空" || got.SignalPrice != 2180 || got.Confidence != 85 {
+		t.Fatalf("unexpected record: %+v", got)
+	}
+}
 func TestAnalysisPersistenceNoiseStrategyFiltersLowScores(t *testing.T) {
 	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
 	step := int64(5 * time.Minute / time.Millisecond)

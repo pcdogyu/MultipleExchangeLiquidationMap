@@ -18,6 +18,10 @@ func (stubServices) AnalysisBacktest(hours int, interval string, minConfidence f
 	return liqmap.AnalysisBacktestPageResponse{}, nil
 }
 
+func (stubServices) AnalysisBacktestLiquidation(hours int, interval string, minConfidence float64) (liqmap.AnalysisBacktestPageResponse, error) {
+	return liqmap.AnalysisBacktestPageResponse{}, nil
+}
+
 func (stubServices) AnalysisBacktest2FA(hours int, interval string, factor string, minConfidence float64, strategy string) (liqmap.AnalysisBacktest2FAResponse, error) {
 	return liqmap.AnalysisBacktest2FAResponse{}, nil
 }
@@ -64,6 +68,18 @@ func TestHandleBacktestRejectsWrongMethod(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/analysis-backtest", nil)
 	rec := httptest.NewRecorder()
 	svc.handleBacktest(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleBacktestLiquidationRejectsWrongMethod(t *testing.T) {
+	svc := newTestService()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/analysis-backtest-liquidation", nil)
+	rec := httptest.NewRecorder()
+	svc.handleBacktestLiquidation(rec, req)
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)

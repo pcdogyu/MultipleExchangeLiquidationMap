@@ -76,6 +76,32 @@ func (s *service) handleBacktest(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
+func (s *service) handleBacktestLiquidation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpx.MethodNotAllowed(w)
+		return
+	}
+	hours := 24
+	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 168 {
+			hours = n
+		}
+	}
+	interval := strings.TrimSpace(r.URL.Query().Get("interval"))
+	minConfidence := 0.0
+	if raw := strings.TrimSpace(r.URL.Query().Get("conf_min")); raw != "" {
+		if n, err := strconv.ParseFloat(raw, 64); err == nil && n >= 0 && n <= 100 {
+			minConfidence = n
+		}
+	}
+	resp, err := s.core.AnalysisBacktestLiquidation(hours, interval, minConfidence)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
 func (s *service) handleBacktest2FA(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		httpx.MethodNotAllowed(w)
