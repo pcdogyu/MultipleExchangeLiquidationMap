@@ -184,8 +184,8 @@ th{color:var(--muted);font-weight:600}
           </select>
           <label for="noiseStrategySelect">&#38477;&#22122;</label>
           <select id="noiseStrategySelect">
-            <option value="none" selected>&#20840;&#37096;</option>
-            <option value="persistence">&#38271;&#21608;&#26399;&#38477;&#22122;</option>
+            <option value="persistence" selected>&#38271;&#21608;&#26399;&#38477;&#22122;</option>
+            <option value="none">&#20840;&#37096;</option>
           </select>
           <button class="primary" type="button" id="reloadBtn">&#21047;&#26032;&#22270;&#34920;</button>
         </div>
@@ -266,7 +266,7 @@ const state={
   candles:[],
   confMin:'0',
   qualityMode:'high',
-  noiseStrategy:'none',
+  noiseStrategy:'persistence',
   interval:'5m',
   chartWidth:1600,
   chartHeight:620,
@@ -534,7 +534,7 @@ function draw(){
 function renderHistory(){
   const body=document.getElementById('historyBody');
   if(!state.signals.length){
-    body.innerHTML='<tr><td colspan="10" class="empty">No signals matched the current filters in the last 24h</td></tr>';
+    body.innerHTML='<tr><td colspan="10" class="empty">No long-cycle signals matched the current filters in the last 24h</td></tr>';
     return;
   }
   body.innerHTML=state.signals.slice().sort((a,b)=>Number(b.signal_ts||0)-Number(a.signal_ts||0)).map(sig=>{
@@ -626,7 +626,7 @@ function applyBacktestData(d){
   state.qualityMode=String(d.quality_mode||state.qualityMode||'high');
   const qualityModeSelect=document.getElementById('qualityModeSelect');
   if(qualityModeSelect)qualityModeSelect.value=state.qualityMode;
-  state.noiseStrategy=String(d.noise_strategy||state.noiseStrategy||'none');
+  state.noiseStrategy=String(d.noise_strategy||state.noiseStrategy||'persistence');
   const noiseStrategySelect=document.getElementById('noiseStrategySelect');
   if(noiseStrategySelect)noiseStrategySelect.value=state.noiseStrategy;
   const intervalSelect=document.getElementById('intervalSelect');
@@ -645,7 +645,7 @@ function applyBacktestData(d){
 async function loadSignals(){
   state.chartLoading=true;
   draw();
-  const params=new URLSearchParams({hours:'24',interval:String(state.interval||'5m'),conf_min:String(state.confMin||'0'),quality:String(state.qualityMode||'high'),noise_strategy:String(state.noiseStrategy||'none')});
+  const params=new URLSearchParams({hours:'24',interval:String(state.interval||'5m'),conf_min:String(state.confMin||'0'),quality:String(state.qualityMode||'high'),noise_strategy:String(state.noiseStrategy||'persistence')});
   const r=await fetch('/api/analysis-backtest?'+params.toString()).catch(()=>null);
   if(!r)throw new Error('Cannot request /api/analysis-backtest');
   if(!r.ok)throw new Error(await r.text().catch(()=>('HTTP '+r.status)));
