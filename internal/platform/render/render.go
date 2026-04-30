@@ -42,8 +42,8 @@ const sharedTopNavSnippet = `<style id="shared-top-nav-style">
     ['/channel', '消息通道'],
     ['/analysis', '日内分析'],
     ['/analysis-backtest', '单因子回测'],
-    ['/analysis-backtest-liquidation', '清算回测'],
-    ['/analysis-backtest-2fa', '双因子回测']
+    ['/analysis-backtest-2fa', '双因子回测'],
+    ['/analysis-backtest-liquidation', '多多空空']
   ];
   const menuHTML=items.map(function(item){
     const href=item[0];

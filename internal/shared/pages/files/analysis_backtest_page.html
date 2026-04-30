@@ -246,6 +246,8 @@ th{color:var(--muted);font-weight:600}
 
 <script>
 const DAY_MS=24*60*60*1000;
+const BACKTEST_HOURS=168;
+const BACKTEST_RANGE_LABEL='Last 7d';
 const INTERVAL_CONFIG={
   '1m':{label:'1m',source:'1m',bucketMs:60*1000,direct:true},
   '5m':{label:'5m',source:'5m',bucketMs:5*60*1000,direct:true},
@@ -403,7 +405,7 @@ function updateChartMeta(){
   const meta=document.getElementById('chartMeta');
   const count=state.candles.length;
   const visible=count?Math.min(state.viewCount,count):0;
-  meta.textContent='Last 24h price chart | Interval '+cfg.label+' | Source '+state.chartSource+' | Total K '+count+' | Visible '+visible;
+  meta.textContent=BACKTEST_RANGE_LABEL+' price chart | Interval '+cfg.label+' | Source '+state.chartSource+' | Total K '+count+' | Visible '+visible;
 }
 function syncChartWidthToViewport(force){
   const viewport=document.getElementById('chartViewport');
@@ -534,7 +536,7 @@ function draw(){
 function renderHistory(){
   const body=document.getElementById('historyBody');
   if(!state.signals.length){
-    body.innerHTML='<tr><td colspan="10" class="empty">No long-cycle signals matched the current filters in the last 24h</td></tr>';
+    body.innerHTML='<tr><td colspan="10" class="empty">No long-cycle signals matched the current filters in the last 7d</td></tr>';
     return;
   }
   body.innerHTML=state.signals.slice().sort((a,b)=>Number(b.signal_ts||0)-Number(a.signal_ts||0)).map(sig=>{
@@ -600,6 +602,15 @@ function renderSummary(summary){
   document.getElementById('correctSignals').textContent=Number(summary.horizon_correct_rate||0).toFixed(1)+'%';
   document.getElementById('pendingSignals').textContent=String(summary.pending_count||0);
 }
+function renderStatsLoading(){
+  document.getElementById('totalSignals').textContent='...';
+  document.getElementById('verifiedHorizons').textContent='...';
+  document.getElementById('correctHorizons').textContent='...';
+  document.getElementById('correctSignals').textContent='...';
+  document.getElementById('pendingSignals').textContent='...';
+  const root=document.getElementById('horizonStats');
+  if(root)root.innerHTML='<div class="stat"><div class="k">Refreshing stats</div><div class="v">...</div></div>';
+}
 function renderHorizonStats(stats){
   state.horizonStats=Array.isArray(stats)?stats:[];
   const root=document.getElementById('horizonStats');
@@ -636,16 +647,17 @@ function applyBacktestData(d){
   state.viewCount=Math.max(1,state.candles.length||0);
   state.yZoom=1;
   state.yPan=0;
-  renderSummary(buildSummaryFromSignals(state.signals));
-  renderHorizonStats(buildHorizonStatsFromSignals(state.signals));
+  renderSummary(d.summary||buildSummaryFromSignals(state.signals));
+  renderHorizonStats(d.horizon_stats||buildHorizonStatsFromSignals(state.signals));
   renderHistory();
   updateChartMeta();
   draw();
 }
 async function loadSignals(){
   state.chartLoading=true;
+  renderStatsLoading();
   draw();
-  const params=new URLSearchParams({hours:'24',interval:String(state.interval||'5m'),conf_min:String(state.confMin||'0'),quality:String(state.qualityMode||'high'),noise_strategy:String(state.noiseStrategy||'persistence')});
+  const params=new URLSearchParams({hours:String(BACKTEST_HOURS),interval:String(state.interval||'5m'),conf_min:String(state.confMin||'0'),quality:String(state.qualityMode||'high'),noise_strategy:String(state.noiseStrategy||'persistence'),_:String(Date.now())});
   const r=await fetch('/api/analysis-backtest?'+params.toString()).catch(()=>null);
   if(!r)throw new Error('Cannot request /api/analysis-backtest');
   if(!r.ok)throw new Error(await r.text().catch(()=>('HTTP '+r.status)));
@@ -712,7 +724,7 @@ async function reloadAll(){
   try{
     document.getElementById('footer').textContent='Loading...';
     await loadSignals();
-    document.getElementById('footer').textContent='Range '+qualityModeLabel(state.qualityMode)+' | Noise '+noiseStrategyLabel(state.noiseStrategy)+' | Confidence '+confidenceFilterLabel(state.confMin)+' | Last 24h signals '+state.signals.length+' | Interval '+state.interval+' | K '+state.candles.length;
+    document.getElementById('footer').textContent='Range '+qualityModeLabel(state.qualityMode)+' | Noise '+noiseStrategyLabel(state.noiseStrategy)+' | Confidence '+confidenceFilterLabel(state.confMin)+' | '+BACKTEST_RANGE_LABEL+' signals '+state.signals.length+' | Interval '+state.interval+' | K '+state.candles.length;
   }catch(err){
     state.chartLoading=false;
     document.getElementById('footer').textContent=String(err&&err.message||err||'Load failed');

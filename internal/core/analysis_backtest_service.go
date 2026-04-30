@@ -587,6 +587,20 @@ func (a *App) listAnalysisDirectionSignalsPage(limit, page int) ([]AnalysisSigna
 	return out, rows.Err()
 }
 
+func analysisBacktestSignalLimit(hours int) int {
+	if hours <= 0 {
+		return 500
+	}
+	limit := hours * 12
+	if limit < 500 {
+		return 500
+	}
+	if limit > 5000 {
+		return 5000
+	}
+	return limit
+}
+
 func buildAnalysisBacktestSummary(results []AnalysisSignalResult, hours int) AnalysisBacktestSummary {
 	out := AnalysisBacktestSummary{WindowHours: hours, TotalSignals: len(results)}
 	for _, item := range results {
@@ -1309,7 +1323,7 @@ func (a *App) buildAnalysisBacktestResults(hours int, minConfidence float64, qua
 	now := time.Now()
 	nowTS := now.UnixMilli()
 	sinceTS := now.Add(-time.Duration(hours) * time.Hour).UnixMilli()
-	records, err := a.listAnalysisDirectionSignals(sinceTS, 500, 0)
+	records, err := a.listAnalysisDirectionSignals(sinceTS, analysisBacktestSignalLimit(hours), 0)
 	if err != nil {
 		return nil, 0, 0, err
 	}

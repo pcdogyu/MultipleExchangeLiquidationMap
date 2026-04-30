@@ -150,6 +150,23 @@ func TestAnalysisBacktestStatsUseConfidenceFilteredSignals(t *testing.T) {
 	}
 }
 
+func TestAnalysisBacktestSignalLimitScalesWithHours(t *testing.T) {
+	tests := []struct {
+		hours int
+		want  int
+	}{
+		{hours: 0, want: 500},
+		{hours: 24, want: 500},
+		{hours: 168, want: 2016},
+		{hours: 720, want: 5000},
+	}
+	for _, tt := range tests {
+		if got := analysisBacktestSignalLimit(tt.hours); got != tt.want {
+			t.Fatalf("analysisBacktestSignalLimit(%d) = %d, want %d", tt.hours, got, tt.want)
+		}
+	}
+}
+
 func TestAnalysisSignalHighQualityFilter(t *testing.T) {
 	summary := func(scores ...float64) string {
 		parts := make([]string, 0, len(scores))
