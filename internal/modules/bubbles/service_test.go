@@ -22,6 +22,10 @@ func (stubServices) LatestOKXClose() (map[string]any, error) {
 	return map[string]any{"exchange": "okx"}, nil
 }
 
+func (stubServices) TradeSignals(opts liqmap.TradeSignalOptions) []liqmap.TradeSignal {
+	return []liqmap.TradeSignal{{TS: opts.StartTS, Side: "long", Action: "open", Label: "多单开仓"}}
+}
+
 func newTestService() *service {
 	return newService(stubServices{})
 }
@@ -50,5 +54,20 @@ func TestHandleOKXLatestCloseRejectsWrongMethod(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleTradeSignals(t *testing.T) {
+	svc := newTestService()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/trade-signals?start_ts=123", nil)
+	rec := httptest.NewRecorder()
+	svc.handleTradeSignals(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"action":"open"`) {
+		t.Fatalf("unexpected body: %q", rec.Body.String())
 	}
 }

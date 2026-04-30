@@ -15,6 +15,7 @@ import (
 type Services interface {
 	FetchKlines(interval string, limit int, startTS, endTS int64) (map[string]any, error)
 	LatestOKXClose() (map[string]any, error)
+	TradeSignals(opts liqmap.TradeSignalOptions) []liqmap.TradeSignal
 }
 
 type service struct {
@@ -79,4 +80,32 @@ func (s *service) handleOKXLatestClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (s *service) handleTradeSignals(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpx.MethodNotAllowed(w)
+		return
+	}
+	startTS := int64(0)
+	if raw := strings.TrimSpace(r.URL.Query().Get("start_ts")); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
+			startTS = n
+		}
+	}
+	endTS := int64(0)
+	if raw := strings.TrimSpace(r.URL.Query().Get("end_ts")); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
+			endTS = n
+		}
+	}
+	signals := s.core.TradeSignals(liqmap.TradeSignalOptions{
+		StartTS:  startTS,
+		EndTS:    endTS,
+		Symbol:   r.URL.Query().Get("symbol"),
+		Interval: r.URL.Query().Get("interval"),
+	})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"signals": signals,
+	})
 }

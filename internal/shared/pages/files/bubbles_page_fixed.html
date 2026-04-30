@@ -85,6 +85,9 @@ button{cursor:pointer}
       <label class="small" style="display:inline-flex;align-items:center;gap:6px;margin-left:6px">
         <input id="hist" type="checkbox">历史
       </label>
+      <label class="small" style="display:inline-flex;align-items:center;gap:6px;margin-left:6px">
+        <input id="tradeSigToggle" type="checkbox" checked>交易信号
+      </label>
       <button id="moreBtn" style="display:none" onclick="loadMoreHistory()">向左加载</button>
       <span id="meta" class="small"></span>
     </div>
@@ -97,13 +100,15 @@ button{cursor:pointer}
       <div class="tag">
         <span class="dot" style="background:#dc2626"></span><span>红色=多单爆仓</span>
         <span class="dot" style="margin-left:10px;background:#16a34a"></span><span>绿色=空单爆仓</span>
+        <span class="dot" style="margin-left:10px;background:#22c55e"></span><span>多方信号</span>
+        <span class="dot" style="margin-left:10px;background:#ef4444"></span><span>空方信号</span>
       </div>
     </div>
   </div>
 </div>
 
 <script>
-let candles=[],events=[],viewStart=0,viewCount=120,drag=false,lastX=0,intervalMs=0,latestStart=0,qtyFilter=20,filterApplied=true,bubbleHoverMeta=[],klineSource='-';
+let candles=[],events=[],tradeSignals=[],viewStart=0,viewCount=120,drag=false,lastX=0,intervalMs=0,latestStart=0,qtyFilter=20,filterApplied=true,bubbleHoverMeta=[],tradeSignalHoverMeta=[],klineSource='-';
 function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');requestAnimationFrame(()=>{if(typeof draw==='function')draw();});}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
 function intervalToMs(iv){switch(String(iv||'')){case '1m':return 60e3;case '2m':return 120e3;case '5m':return 300e3;case '10m':return 600e3;case '15m':return 900e3;case '30m':return 1800e3;case '1h':return 3600e3;case '4h':return 14400e3;case '8h':return 28800e3;case '12h':return 43200e3;case '1d':return 86400e3;case '3d':return 3*86400e3;case '7d':return 7*86400e3;default:return 0;}}
@@ -111,9 +116,10 @@ function fit(){const c=document.getElementById('cv');const r=c.getBoundingClient
 function toNum(v){const n=Number(v);return isFinite(n)?n:0;}
 function mapInterval(v){if(v==='10m')return '5m';if(v==='7d')return '1w';return v;}
 function visibleEvents(){return (events||[]).filter(ev=>toNum(ev.qty)>=qtyFilter);}
+function tradeSignalsVisible(){const el=document.getElementById('tradeSigToggle');return !el||!!el.checked;}
 function syncFilterBtn(){const btn=document.getElementById('filterBtn');if(btn)btn.classList.toggle('btn-applied',!!filterApplied);}
 function applyQtyFilter(){const input=document.getElementById('qtyFilter');qtyFilter=Math.max(0,toNum(input&&input.value));if(input)input.value=String(qtyFilter);filterApplied=true;syncFilterBtn();draw();updateMeta();}
-function updateMeta(){const meta=document.getElementById('meta');if(!meta)return;meta.textContent='K线来源 '+(klineSource||((document.getElementById('iv')&&document.getElementById('iv').value)||'-'))+' | 区间清算事件 '+visibleEvents().length+' 条 | 已过滤小于 '+qtyFilter+' ETH';}
+function updateMeta(){const meta=document.getElementById('meta');if(!meta)return;meta.textContent='K线来源 '+(klineSource||((document.getElementById('iv')&&document.getElementById('iv').value)||'-'))+' | 区间清算事件 '+visibleEvents().length+' 条 | 交易信号 '+(tradeSignals||[]).length+' 条 | 已过滤小于 '+qtyFilter+' ETH';}
 function drawMessage(msg){const v=fit(),x=v.x,W=v.w,H=v.h;x.clearRect(0,0,W,H);x.fillStyle=cssVar('--canvas-bg','#fff');x.fillRect(0,0,W,H);x.fillStyle=cssVar('--muted','#64748b');x.font='14px sans-serif';x.fillText(msg,16,26);}
 function fmtAmt(n){n=toNum(n);if(!isFinite(n))return '-';return n.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function fmtQty(n){return toNum(n).toLocaleString('zh-CN',{maximumFractionDigits:4});}
@@ -140,9 +146,32 @@ function showBubbleTip(hit,ev){
   if(top+th>wr.height-10)top=Math.max(8,wr.height-10-th);
   tip.style.left=left+'px';tip.style.top=top+'px';
 }
+function tradeSignalLabel(sig){const side=String(sig&&sig.side||''),action=String(sig&&sig.action||'');const map={long:{open:'多开',add:'多加',reduce:'多减',close:'多平'},short:{open:'空开',add:'空加',reduce:'空减',close:'空平'}};return (map[side]&&map[side][action])||String(sig&&sig.label||'信号');}
+function tradeSignalColor(sig){const side=String(sig&&sig.side||''),action=String(sig&&sig.action||'');if(side==='long'){if(action==='open')return '#22c55e';if(action==='add')return '#15803d';if(action==='reduce')return '#f59e0b';return '#64748b';}if(action==='open')return '#ef4444';if(action==='add')return '#991b1b';if(action==='reduce')return '#f97316';return '#7f1d1d';}
+function showTradeSignalTip(hit,ev){
+  const tip=document.getElementById('bubbleTip');
+  const wrap=document.querySelector('.chart-wrap');
+  if(!tip||!wrap||!hit)return;
+  tip.innerHTML='<div><strong>'+escHTML(String(hit.label||tradeSignalLabel(hit)))+'</strong></div>'+
+    '<div>方向: '+(String(hit.side)==='long'?'多单':'空单')+'</div>'+
+    '<div>动作: '+escHTML(tradeSignalLabel(hit))+'</div>'+
+    '<div>价格: '+fmtPrice(hit.price)+'</div>'+
+    '<div>时间: '+fmtTime(hit.ts)+'</div>'+
+    '<div>强度: '+toNum(hit.strength).toFixed(1)+'</div>'+
+    '<div>原因: '+escHTML(String(hit.reason||'-'))+'</div>';
+  tip.style.display='block';
+  const wr=wrap.getBoundingClientRect();
+  let left=(ev.clientX-wr.left)+14,top=(ev.clientY-wr.top)+14;
+  tip.style.left='0px';tip.style.top='0px';
+  const tw=tip.offsetWidth||240,th=tip.offsetHeight||130;
+  if(left+tw>wr.width-10)left=Math.max(8,wr.width-10-tw);
+  if(top+th>wr.height-10)top=Math.max(8,wr.height-10-th);
+  tip.style.left=left+'px';tip.style.top=top+'px';
+}
+function escHTML(s){return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
 function parseRows(rows,interval){let cs=(rows||[]).map(r=>({t:toNum(r[0]),o:toNum(r[1]),h:toNum(r[2]),l:toNum(r[3]),c:toNum(r[4])}));if(interval==='2m'){const out=[];for(let i=0;i+1<cs.length;i+=2){const a=cs[i],b=cs[i+1];out.push({t:a.t,o:a.o,h:Math.max(a.h,b.h),l:Math.min(a.l,b.l),c:b.c});}cs=out;}if(interval==='10m'){const out=[];for(let i=0;i+1<cs.length;i+=2){const a=cs[i],b=cs[i+1];out.push({t:a.t,o:a.o,h:Math.max(a.h,b.h),l:Math.min(a.l,b.l),c:b.c});}cs=out;}if(interval==='7d'){const out=[];for(let i=0;i+6<cs.length;i+=7){const a=cs[i],g=cs.slice(i,i+7),z=g[g.length-1];out.push({t:a.t,o:a.o,h:Math.max(...g.map(v=>v.h)),l:Math.min(...g.map(v=>v.l)),c:z.c});}cs=out;}return cs;}
 function cssVar(name,fallback){try{const v=getComputedStyle(document.documentElement).getPropertyValue(name).trim();return v||fallback;}catch(_){return fallback;}}
-function draw(){const v=fit(),x=v.x,W=v.w,H=v.h,padL=82,padR=82,padT=18,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;x.clearRect(0,0,W,H);bubbleHoverMeta=[];hideBubbleTip();const bg=cssVar('--canvas-bg','#fff');const muted=cssVar('--muted','#64748b');const isDark=document.documentElement.getAttribute('data-theme')==='dark';const grid=isDark?'rgba(148,163,184,0.30)':'rgba(148,163,184,0.48)';const axis=isDark?'rgba(148,163,184,0.62)':'rgba(100,116,139,0.68)';x.fillStyle=bg;x.fillRect(0,0,W,H);if(!candles.length){x.fillStyle=muted;x.fillText('暂无数据',16,24);return;}const s=Math.max(0,Math.min(candles.length-1,viewStart)),e=Math.max(s+10,Math.min(candles.length,s+viewCount));const cs=candles.slice(s,e);const rawMinP=Math.min(...cs.map(v=>v.l)),rawMaxP=Math.max(...cs.map(v=>v.h));const rawSpan=Math.max(0.1,rawMaxP-rawMinP);const yStep=nicePriceStep(rawSpan,9);const minP=Math.floor(rawMinP/yStep)*yStep;const maxP=Math.ceil(rawMaxP/yStep)*yStep;const span=Math.max(yStep,maxP-minP);const sx=i=>padL+(i/Math.max(1,cs.length-1))*pw,sy=p=>padT+((maxP-p)/span)*ph;const yGridValues=[];for(let price=maxP;price>=minP-(yStep*0.5);price-=yStep){yGridValues.push(Math.round(price*100)/100)}const xGridSteps=12;const rightAxisX=W-padR;x.lineWidth=1;x.font='12px sans-serif';x.strokeStyle=axis;x.beginPath();x.moveTo(padL,padT);x.lineTo(padL,by);x.moveTo(rightAxisX,padT);x.lineTo(rightAxisX,by);x.moveTo(padL,by);x.lineTo(rightAxisX,by);x.stroke();x.strokeStyle=grid;for(const val of yGridValues){const y=sy(val),label=fmtPrice(val);x.beginPath();x.moveTo(padL,y);x.lineTo(rightAxisX,y);x.stroke();x.strokeStyle=axis;x.beginPath();x.moveTo(padL-6,y);x.lineTo(padL,y);x.moveTo(rightAxisX,y);x.lineTo(rightAxisX+6,y);x.stroke();x.strokeStyle=grid;x.fillStyle=muted;x.fillText(label,8,y+4);const lw=x.measureText(label).width;x.fillText(label,W-8-lw,y+4);}for(let i=0;i<=xGridSteps;i++){const ratio=i/xGridSteps;const px=padL+pw*ratio;x.beginPath();x.moveTo(px,padT);x.lineTo(px,by);x.stroke();}x.globalAlpha=1;const bodyW=Math.max(3,Math.min(12,pw/Math.max(20,cs.length)));for(let i=0;i<cs.length;i++){const c=cs[i],px=sx(i),yo=sy(c.o),yc=sy(c.c),yh=sy(c.h),yl=sy(c.l),up=c.c>=c.o;x.strokeStyle=up?'#22c55e':'#f87171';x.beginPath();x.moveTo(px,yh);x.lineTo(px,yl);x.stroke();x.fillStyle=up?'rgba(34,197,94,0.82)':'rgba(248,113,113,0.82)';x.fillRect(px-bodyW/2,Math.min(yo,yc),bodyW,Math.max(1,Math.abs(yc-yo)));}
+function draw(){const v=fit(),x=v.x,W=v.w,H=v.h,padL=82,padR=82,padT=18,padB=42,pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;x.clearRect(0,0,W,H);bubbleHoverMeta=[];tradeSignalHoverMeta=[];hideBubbleTip();const bg=cssVar('--canvas-bg','#fff');const muted=cssVar('--muted','#64748b');const isDark=document.documentElement.getAttribute('data-theme')==='dark';const grid=isDark?'rgba(148,163,184,0.30)':'rgba(148,163,184,0.48)';const axis=isDark?'rgba(148,163,184,0.62)':'rgba(100,116,139,0.68)';x.fillStyle=bg;x.fillRect(0,0,W,H);if(!candles.length){x.fillStyle=muted;x.fillText('暂无数据',16,24);return;}const s=Math.max(0,Math.min(candles.length-1,viewStart)),e=Math.max(s+10,Math.min(candles.length,s+viewCount));const cs=candles.slice(s,e);const rawMinP=Math.min(...cs.map(v=>v.l)),rawMaxP=Math.max(...cs.map(v=>v.h));const rawSpan=Math.max(0.1,rawMaxP-rawMinP);const yStep=nicePriceStep(rawSpan,9);const minP=Math.floor(rawMinP/yStep)*yStep;const maxP=Math.ceil(rawMaxP/yStep)*yStep;const span=Math.max(yStep,maxP-minP);const sx=i=>padL+(i/Math.max(1,cs.length-1))*pw,sy=p=>padT+((maxP-p)/span)*ph;const yGridValues=[];for(let price=maxP;price>=minP-(yStep*0.5);price-=yStep){yGridValues.push(Math.round(price*100)/100)}const xGridSteps=12;const rightAxisX=W-padR;x.lineWidth=1;x.font='12px sans-serif';x.strokeStyle=axis;x.beginPath();x.moveTo(padL,padT);x.lineTo(padL,by);x.moveTo(rightAxisX,padT);x.lineTo(rightAxisX,by);x.moveTo(padL,by);x.lineTo(rightAxisX,by);x.stroke();x.strokeStyle=grid;for(const val of yGridValues){const y=sy(val),label=fmtPrice(val);x.beginPath();x.moveTo(padL,y);x.lineTo(rightAxisX,y);x.stroke();x.strokeStyle=axis;x.beginPath();x.moveTo(padL-6,y);x.lineTo(padL,y);x.moveTo(rightAxisX,y);x.lineTo(rightAxisX+6,y);x.stroke();x.strokeStyle=grid;x.fillStyle=muted;x.fillText(label,8,y+4);const lw=x.measureText(label).width;x.fillText(label,W-8-lw,y+4);}for(let i=0;i<=xGridSteps;i++){const ratio=i/xGridSteps;const px=padL+pw*ratio;x.beginPath();x.moveTo(px,padT);x.lineTo(px,by);x.stroke();}x.globalAlpha=1;const bodyW=Math.max(3,Math.min(12,pw/Math.max(20,cs.length)));for(let i=0;i<cs.length;i++){const c=cs[i],px=sx(i),yo=sy(c.o),yc=sy(c.c),yh=sy(c.h),yl=sy(c.l),up=c.c>=c.o;x.strokeStyle=up?'#22c55e':'#f87171';x.beginPath();x.moveTo(px,yh);x.lineTo(px,yl);x.stroke();x.fillStyle=up?'rgba(34,197,94,0.82)':'rgba(248,113,113,0.82)';x.fillRect(px-bodyW/2,Math.min(yo,yc),bodyW,Math.max(1,Math.abs(yc-yo)));}
 function upperBound(arr,v){let lo=0,hi=arr.length;while(lo<hi){const mid=(lo+hi)>>1;if(arr[mid]<=v)lo=mid+1;else hi=mid;}return lo;}
 const t0=cs[0].t,t1=cs[cs.length-1].t;
 const spanMs=(intervalMs>0?intervalMs:intervalToMs(document.getElementById('iv').value||''))||0;
@@ -171,22 +200,67 @@ for(const ev of vis){
   x.beginPath();x.fillStyle=color;x.strokeStyle=stroke;x.lineWidth=isLatest?2.1:1.5;x.arc(px,py,r,0,Math.PI*2);x.fill();x.stroke();
   bubbleHoverMeta.push({px:px,py:py,r:r,event:ev});
 }
+if(tradeSignalsVisible()){
+  const visibleSignals=(tradeSignals||[]).filter(sig=>{const tt=toNum(sig.ts);return tt>=t0&&(tEnd>t0?tt<tEnd:tt<=t1);});
+  const slotCount={};
+  for(const sig of visibleSignals){
+    const tt=toNum(sig.ts);
+    const idx=Math.max(0,Math.min(times.length-1,upperBound(times,tt)-1));
+    let px=sx(idx);
+    if(spanMs>0&&idx<times.length-1){
+      const step=sx(idx+1)-sx(idx);
+      const frac=Math.max(0,Math.min(1,(tt-times[idx])/spanMs));
+      px+=step*frac;
+    }
+    const side=String(sig.side||'');
+    const key=String(idx)+'|'+side;
+    const slot=slotCount[key]||0;
+    slotCount[key]=slot+1;
+    const c=cs[idx];
+    const baseY=side==='long'?sy(c.l)+26:sy(c.h)-26;
+    const py=Math.max(padT+12,Math.min(by-12,baseY+(side==='long'?slot*18:-slot*18)));
+    const color=tradeSignalColor(sig);
+    const label=tradeSignalLabel(sig);
+    const alpha=Math.max(.72,Math.min(1,toNum(sig.strength)/100+.35));
+    x.save();x.globalAlpha=alpha;x.strokeStyle=color;x.fillStyle=color;x.lineWidth=2;
+    if(sig.action==='open'){
+      x.beginPath();
+      if(side==='long'){x.moveTo(px,py-9);x.lineTo(px-7,py+5);x.lineTo(px+7,py+5);}
+      else{x.moveTo(px,py+9);x.lineTo(px-7,py-5);x.lineTo(px+7,py-5);}
+      x.closePath();x.fill();
+    }else if(sig.action==='add'){
+      x.beginPath();x.moveTo(px-7,py);x.lineTo(px+7,py);x.moveTo(px,py-7);x.lineTo(px,py+7);x.stroke();
+    }else if(sig.action==='reduce'){
+      x.beginPath();x.moveTo(px-8,py);x.lineTo(px+8,py);x.stroke();
+    }else{
+      x.beginPath();x.moveTo(px-7,py-7);x.lineTo(px+7,py+7);x.moveTo(px+7,py-7);x.lineTo(px-7,py+7);x.stroke();
+    }
+    x.font='11px sans-serif';x.fillStyle=color;
+    const tw=x.measureText(label).width;
+    const labelY=side==='long'?py+18:py-12;
+    x.fillText(label,Math.max(padL,Math.min(px-tw/2,W-padR-tw)),labelY);
+    x.restore();
+    tradeSignalHoverMeta.push({px:px,py:py,r:13,signal:sig});
+  }
+}
 x.lineWidth=1;x.fillStyle=muted;for(let i=0;i<=8;i++){const k=Math.floor((cs.length-1)*i/8),px=sx(k),t=new Date(cs[k].t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});x.fillText(t,Math.max(padL,Math.min(px-34,W-padR-68)),H-10);}}
 function uniqByT(list){const out=[];const seen=new Set();for(const it of (list||[])){const t=toNum(it.t);if(!t||seen.has(t))continue;seen.add(t);out.push(it);}out.sort((a,b)=>a.t-b.t);return out;}
 function mergeEvents(a,b){const out=[];const key=e=>String(toNum(e.event_ts))+'|'+String(e.exchange||'')+'|'+String(e.side||'')+'|'+String(toNum(e.price))+'|'+String(toNum(e.qty));const seen=new Set();for(const it of (a||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}for(const it of (b||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}out.sort((x,y)=>toNum(x.event_ts)-toNum(y.event_ts));return out;}
+function mergeTradeSignals(a,b){const out=[];const key=s=>String(toNum(s.ts))+'|'+String(s.side||'')+'|'+String(s.action||'')+'|'+String(toNum(s.price));const seen=new Set();for(const it of (a||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}for(const it of (b||[])){const k=key(it);if(seen.has(k))continue;seen.add(k);out.push(it);}out.sort((x,y)=>toNum(x.ts)-toNum(y.ts));return out;}
 function setMoreBtnVisible(){const cb=document.getElementById('hist');const b=document.getElementById('moreBtn');if(!cb||!b)return;b.style.display=cb.checked?'inline-block':'none';}
-async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');if(!kr.ok){const msg='K线加载失败: '+await kr.text();candles=[];events=[];klineSource='-';updateMeta();drawMessage(msg);return;}const kd=await kr.json();klineSource=kd.source||iv;candles=uniqByT(parseRows(kd.rows||[],iv));if(!candles.length){events=[];updateMeta();drawMessage('K线加载成功，但返回为空');return;}intervalMs=(candles.length>=2)?Math.max(0,toNum(candles[candles.length-1].t)-toNum(candles[candles.length-2].t)):intervalToMs(iv);if(!(intervalMs>0))intervalMs=intervalToMs(iv);latestStart=candles.length?toNum(candles[candles.length-1].t):0;events=[];if(candles.length){const startTS=toNum(candles[0].t);const endTS=latestStart+(intervalMs>0?intervalMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];}viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);setMoreBtnVisible();updateMeta();draw();}
-async function loadMoreHistory(){const cb=document.getElementById('hist');if(!cb||!cb.checked)return;if(!candles.length)return;const iv=document.getElementById('iv').value;const endTS=Math.max(0,toNum(candles[0].t)-1);const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500&end_ts='+encodeURIComponent(endTS));if(!kr.ok){document.getElementById('meta').textContent='历史 K 线加载失败: '+await kr.text();return;}const kd=await kr.json();klineSource=kd.source||klineSource;const more=uniqByT(parseRows(kd.rows||[],iv));if(!more.length){document.getElementById('meta').textContent='没有更多历史 K 线';return;}const added=more.filter(x=>toNum(x.t)<toNum(candles[0].t));if(!added.length){document.getElementById('meta').textContent='没有更多历史 K 线';return;}candles=uniqByT(added.concat(candles));const spanMs=(intervalMs>0?intervalMs:intervalToMs(iv));const startTS=toNum(added[0].t),endTS2=toNum(added[added.length-1].t)+(spanMs>0?spanMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS2));const ed=await er.json();events=mergeEvents(ed.rows||[],events);viewStart=Math.max(0,viewStart+added.length);updateMeta();draw();}
+async function load(){const iv=document.getElementById('iv').value;const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500');if(!kr.ok){const msg='K线加载失败: '+await kr.text();candles=[];events=[];tradeSignals=[];klineSource='-';updateMeta();drawMessage(msg);return;}const kd=await kr.json();klineSource=kd.source||iv;candles=uniqByT(parseRows(kd.rows||[],iv));if(!candles.length){events=[];tradeSignals=[];updateMeta();drawMessage('K线加载成功，但返回为空');return;}intervalMs=(candles.length>=2)?Math.max(0,toNum(candles[candles.length-1].t)-toNum(candles[candles.length-2].t)):intervalToMs(iv);if(!(intervalMs>0))intervalMs=intervalToMs(iv);latestStart=candles.length?toNum(candles[candles.length-1].t):0;events=[];tradeSignals=[];if(candles.length){const startTS=toNum(candles[0].t);const endTS=latestStart+(intervalMs>0?intervalMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS));const ed=await er.json();events=ed.rows||[];const sr=await fetch('/api/trade-signals?start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS)+'&interval='+encodeURIComponent(iv)).catch(()=>null);if(sr&&sr.ok){const sd=await sr.json().catch(()=>({signals:[]}));tradeSignals=sd.signals||[];}}viewCount=Math.min(160,Math.max(50,Math.floor(candles.length*0.45)));viewStart=Math.max(0,candles.length-viewCount);setMoreBtnVisible();updateMeta();draw();}
+async function loadMoreHistory(){const cb=document.getElementById('hist');if(!cb||!cb.checked)return;if(!candles.length)return;const iv=document.getElementById('iv').value;const endTS=Math.max(0,toNum(candles[0].t)-1);const kr=await fetch('/api/klines?interval='+encodeURIComponent(iv)+'&limit=500&end_ts='+encodeURIComponent(endTS));if(!kr.ok){document.getElementById('meta').textContent='历史 K 线加载失败: '+await kr.text();return;}const kd=await kr.json();klineSource=kd.source||klineSource;const more=uniqByT(parseRows(kd.rows||[],iv));if(!more.length){document.getElementById('meta').textContent='没有更多历史 K 线';return;}const added=more.filter(x=>toNum(x.t)<toNum(candles[0].t));if(!added.length){document.getElementById('meta').textContent='没有更多历史 K 线';return;}candles=uniqByT(added.concat(candles));const spanMs=(intervalMs>0?intervalMs:intervalToMs(iv));const startTS=toNum(added[0].t),endTS2=toNum(added[added.length-1].t)+(spanMs>0?spanMs:0);const er=await fetch('/api/liquidations?limit=5000&page=1&start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS2));const ed=await er.json();events=mergeEvents(ed.rows||[],events);const sr=await fetch('/api/trade-signals?start_ts='+encodeURIComponent(startTS)+'&end_ts='+encodeURIComponent(endTS2)+'&interval='+encodeURIComponent(iv)).catch(()=>null);if(sr&&sr.ok){const sd=await sr.json().catch(()=>({signals:[]}));tradeSignals=mergeTradeSignals(sd.signals||[],tradeSignals);}viewStart=Math.max(0,viewStart+added.length);updateMeta();draw();}
 const c=document.getElementById('cv');
 c.addEventListener('wheel',e=>{if(!candles.length)return;e.preventDefault();const right=Math.min(candles.length,viewStart+viewCount);const factor=e.deltaY<0?0.88:1.12;const nextCount=Math.max(30,Math.min(candles.length,Math.round(viewCount*factor)));viewCount=nextCount;viewStart=Math.max(0,Math.min(candles.length-viewCount,right-viewCount));draw();},{passive:false});
 c.addEventListener('mousedown',e=>{drag=true;lastX=e.clientX;});
-c.addEventListener('mousemove',e=>{const rect=c.getBoundingClientRect();const mx=e.clientX-rect.left,my=e.clientY-rect.top;let hit=null,dist=1e18;for(const it of bubbleHoverMeta){const d=Math.hypot(mx-it.px,my-it.py);if(d<=it.r+3&&d<dist){dist=d;hit=it.event;}}if(hit)showBubbleTip(hit,e);else hideBubbleTip();});
+c.addEventListener('mousemove',e=>{const rect=c.getBoundingClientRect();const mx=e.clientX-rect.left,my=e.clientY-rect.top;let sigHit=null,sigDist=1e18;for(const it of tradeSignalHoverMeta){const d=Math.hypot(mx-it.px,my-it.py);if(d<=it.r+3&&d<sigDist){sigDist=d;sigHit=it.signal;}}if(sigHit){showTradeSignalTip(sigHit,e);return;}let hit=null,dist=1e18;for(const it of bubbleHoverMeta){const d=Math.hypot(mx-it.px,my-it.py);if(d<=it.r+3&&d<dist){dist=d;hit=it.event;}}if(hit)showBubbleTip(hit,e);else hideBubbleTip();});
 c.addEventListener('mouseleave',()=>hideBubbleTip());
 window.addEventListener('mouseup',()=>drag=false);
 window.addEventListener('mousemove',e=>{if(!drag||!candles.length)return;const dx=e.clientX-lastX;lastX=e.clientX;const shift=Math.round(-dx/8);if(shift!==0){viewStart=Math.max(0,Math.min(candles.length-viewCount,viewStart+shift));draw();}});
 window.addEventListener('resize',()=>draw());
 document.getElementById('iv').addEventListener('change',load);
 document.getElementById('hist').addEventListener('change',setMoreBtnVisible);
+document.getElementById('tradeSigToggle').addEventListener('change',()=>{updateMeta();draw();});
 document.getElementById('qtyFilter').addEventListener('input',()=>{filterApplied=false;syncFilterBtn();});
 document.getElementById('qtyFilter').addEventListener('change',applyQtyFilter);
 async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束，但状态未知，请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
