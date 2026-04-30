@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.PageTitle}}</title>
+<style>
+body{margin:0;background:#f5f7fb;color:#1f2937;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
+.nav{height:56px;background:#0b1220;border-bottom:1px solid #243145;display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
+.nav-left,.nav-right{display:flex;align-items:center;gap:20px}
+.brand{font-size:18px;font-weight:700;color:#eef3f9}
+.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}
+.menu a.active{color:#fff;font-weight:700}
+.upgrade{color:#fff;font-weight:700;text-decoration:none}
+.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}
+.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}
+.theme-toggle button.label{cursor:default;opacity:.92}
+.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}
+.wrap{max-width:980px;margin:0 auto;padding:22px}
+.panel{border:1px solid #dce3ec;background:#fff;margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.small{font-size:12px;color:#6b7280}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.field label{display:block;font-size:12px;color:#6b7280}
+.field input,.field select{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827;margin-top:6px}
+.field input:disabled{background:#f1f5f9;color:#64748b;cursor:not-allowed}
+button.primary{background:#22c55e;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}
+button.secondary{background:#fff;color:#111827;border:1px solid #cbd5e1;padding:10px 16px;border-radius:8px;cursor:pointer}
+.q{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:6px;border-radius:999px;border:1px solid #cbd5e1;color:#475569;font-size:12px;line-height:1;cursor:help;background:#fff}
+table{width:100%;border-collapse:collapse}
+th,td{padding:8px;border:1px solid #e2e8f0;text-align:left}
+[data-theme="dark"] body{background:#000;color:#e5e7eb}
+[data-theme="dark"] .nav{background:#000;border-bottom-color:#111827}
+[data-theme="dark"] .panel{background:#000;border-color:#1f2937}
+[data-theme="dark"] .small,[data-theme="dark"] .field label,.theme-toggle button.label{color:#cbd5e1}
+[data-theme="dark"] .field input,[data-theme="dark"] .field select,[data-theme="dark"] button.secondary{background:#000;color:#f8fafc;border-color:#475569}
+[data-theme="dark"] .q{background:#000;color:#cbd5e1;border-color:#334155}
+[data-theme="dark"] h2,[data-theme="dark"] h3,[data-theme="dark"] th,[data-theme="dark"] td{color:#f8fafc}
+.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}
+.upgrade-modal.show{display:flex}
+.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}
+.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}
+.upgrade-title{font-size:14px;font-weight:700}
+.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}
+.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}
+.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}
+.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}
+</style>
+</head>
+<body>
+<div class="nav">
+  <div class="nav-left">
+    <div class="brand">ETH Liquidation Map</div>
+    <div class="menu"><a href="/">&#28165;&#31639;&#28909;&#21306;</a><a href="/config" class="active">&#27169;&#22411;&#37197;&#32622;</a><a href="/monitor">&#38647;&#21306;&#30417;&#25511;</a><a href="/map">&#30424;&#21475;&#27719;&#24635;</a><a href="/liquidations">&#24378;&#24179;&#28165;&#31639;</a><a href="/bubbles">&#27668;&#27873;&#22270;</a><a href="/webdatasource">&#39029;&#38754;&#25968;&#25454;&#28304;</a><a href="/channel">&#28040;&#24687;&#36890;&#36947;</a><a href="/analysis">&#26085;&#20869;&#20998;&#26512;</a><a href="/analysis-backtest">&#21333;&#22240;&#23376;&#22238;&#27979;</a><a href="/analysis-backtest-liquidation">&#28165;&#31639;&#22238;&#27979;</a><a href="/analysis-backtest-2fa">&#21452;&#22240;&#23376;&#22238;&#27979;</a></div>
+  </div>
+  <div class="nav-right">
+    <div class="theme-toggle">
+      <button class="label" type="button">主题</button>
+      <button id="themeDark" onclick="setTheme('dark')">深色</button>
+      <button id="themeLight" onclick="setTheme('light')">浅色</button>
+    </div>
+    <a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a>
+  </div>
+</div>
+
+<div class="wrap">
+  {{if .ShowAnalysisInfo}}
+  <div class="panel">
+    <h2 style="margin-top:0">日内分析</h2>
+    <div class="small">首版先承接模型参数与说明，后续会在这里补充分析结果、评分与回测摘要。</div>
+    <div class="small" style="margin-top:8px">当前页面可直接编辑与日内分析相关的模型参数，保存后会与“模型配置”页面保持同步。</div>
+  </div>
+  {{end}}
+  <div class="panel">
+    <h2 style="margin-top:0">清算地图模型参数</h2>
+    <div class="small">修改后会立刻影响 OI 增量模型的计算与展示。</div>
+
+    <div class="grid" style="margin-top:14px">
+      <div class="field"><label>回看窗口（天）</label><input id="lookback" type="number" min="0" max="30" step="1" disabled></div>
+      <div class="field"><label>时间桶（分钟）</label><input id="bucket" type="number" min="1" max="30" step="1"></div>
+      <div class="field"><label>价格步长</label><input id="step" type="number" min="1" max="50" step="0.5"></div>
+      <div class="field"><label>价格范围（±）</label><input id="range" type="number" min="100" max="1000" step="10"></div>
+
+      <div class="field" style="grid-column:1/-1">
+        <label>杠杆固定档位：1x / 5x / 10x / 20x / 30x / 50x / 100x</label>
+        <div class="small" style="margin-top:6px">分别配置权重、维护保证金率和资金费率缩放系数。可按交易所覆盖权重和维护保证金率。</div>
+
+        <div class="row" style="margin-top:10px;justify-content:space-between">
+          <div class="field" style="min-width:280px">
+            <label>编辑范围（权重 / mm）</label>
+            <select id="ex_scope">
+              <option value="global">全局</option>
+              <option value="binance">Binance</option>
+              <option value="okx">OKX</option>
+              <option value="bybit">Bybit</option>
+            </select>
+            <div class="small" style="margin-top:6px">资金费率缩放系数始终使用全局配置。</div>
+          </div>
+
+          <div class="row" style="margin-top:18px">
+            <input id="fit_hours" type="number" min="1" max="168" step="1" value="24" style="width:88px;height:34px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:0 10px">
+            <span class="small">小时</span>
+            <input id="fit_min" type="number" min="5" max="200" step="1" value="25" style="width:76px;height:34px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:0 10px">
+            <span class="small">条</span>
+            <button class="secondary" type="button" onclick="fitScope()">拟合</button>
+            <button class="secondary" type="button" onclick="clearScope()">清空覆盖</button>
+            <span id="fitMsg" class="small"></span>
+          </div>
+        </div>
+
+        <div style="overflow:auto;margin-top:10px">
+          <table>
+            <thead>
+              <tr style="background:#f1f5f9">
+                <th>杠杆</th>
+                <th>权重</th>
+                <th>维护保证金率 <span class="q" title="用于计算清算价格，数值越大，清算价格越靠近现价。">?</span></th>
+                <th>资金费率缩放系数 <span class="q" title="用于根据 funding rate 调整多空分配倾向。">?</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>1x</td><td><input id="w_1" type="number" step="0.01" min="0" max="100"></td><td><input id="mm_1" type="number" step="0.0001"></td><td><input id="fs_1" type="number" step="100"></td></tr>
+              <tr><td>5x</td><td><input id="w_5" type="number" step="0.01" min="0" max="100"></td><td><input id="mm_5" type="number" step="0.0001"></td><td><input id="fs_5" type="number" step="100"></td></tr>
+              <tr><td>10x</td><td><input id="w_10" type="number" step="0.01" min="0" max="100"></td><td><input id="mm_10" type="number" step="0.0001"></td><td><input id="fs_10" type="number" step="100"></td></tr>
+              <tr><td>20x</td><td><input id="w_20" type="number" step="0.01" min="0" max="100"></td><td><input id="mm_20" type="number" step="0.0001"></td><td><input id="fs_20" type="number" step="100"></td></tr>
+              <tr><td>30x</td><td><input id="w_30" type="number" step="0.01" min="0" max="100"></td><td><input id="mm_30" type="number" step="0.0001"></td><td><input id="fs_30" type="number" step="100"></td></tr>
+              <tr><td>50x</td><td><input id="w_50" type="number" step="0.01" min="0" max="100"></td><td><input id="mm_50" type="number" step="0.0001"></td><td><input id="fs_50" type="number" step="100"></td></tr>
+              <tr><td>100x</td><td><input id="w_100" type="number" step="0.01" min="0" max="100"></td><td><input id="mm_100" type="number" step="0.0001"></td><td><input id="fs_100" type="number" step="100"></td></tr>
+              <tr style="background:#f8fafc"><td style="font-weight:700">合计</td><td><span id="w_sum" style="font-weight:700">-</span>%</td><td></td><td></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="field"><label>清算强度缩放系数</label><input id="scale" type="number" step="0.1" min="0.1" max="50"></div>
+      <div class="field"><label>时间衰减系数 k</label><input id="decay" type="number" step="0.1"></div>
+      <div class="field"><label>邻近价位扩散比例</label><input id="neighbor" type="number" step="0.01"></div>
+    </div>
+
+    <div class="row" style="margin-top:14px">
+      <button class="primary" onclick="save()">保存</button>
+      <button class="secondary" onclick="reloadCfg()">重载</button>
+      <span id="msg" class="small" style="margin-left:10px"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
+function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
+let lastCfg=null;
+let currentScope='global';
+let scopeCleared=false;
+
+async function reloadWindowLookback(){
+  const el=document.getElementById('lookback');
+  if(!el) return;
+  const d=await fetch('/api/dashboard').then(r=>r.json()).catch(()=>null);
+  if(!d||!(d.window_days===0||d.window_days)) return;
+  el.value=String(d.window_days);
+}
+
+function bind(cfg){
+  lastCfg=cfg;
+  scopeCleared=false;
+  document.getElementById('bucket').value=cfg.BucketMin||5;
+  document.getElementById('step').value=cfg.PriceStep||5;
+  document.getElementById('range').value=cfg.PriceRange||400;
+  const levs=[1,5,10,20,30,50,100];
+  const fs=csvNums(cfg.FundingScaleCSV,levs.length);
+  const defFS=Number(cfg.FundingScale||7000);
+  for(let i=0;i<levs.length;i++){
+    const lv=levs[i];
+    const fi=isFinite(fs[i])?fs[i]:defFS;
+    const fsEl=document.getElementById('fs_'+lv);
+    if(fsEl) fsEl.value=String(fi);
+  }
+  const scopeSel=document.getElementById('ex_scope');
+  if(scopeSel){
+    if(!currentScope) currentScope='global';
+    scopeSel.value=currentScope;
+    scopeSel.onchange=()=>{currentScope=scopeSel.value||'global';scopeCleared=false;renderScope();};
+  }
+  renderScope();
+  document.getElementById('scale').value=cfg.IntensityScale||1.0;
+  document.getElementById('decay').value=cfg.DecayK||2.2;
+  document.getElementById('neighbor').value=cfg.NeighborShare||0.28;
+}
+
+function toNum(v){const n=Number(String(v??'').trim());return isFinite(n)?n:NaN;}
+function csvNums(raw,n){const parts=String(raw||'').split(',');if(parts.length===1){const v=toNum(parts[0]);return Array.from({length:n},()=>v);}const out=[];for(let i=0;i<n;i++) out.push(toNum(parts[i]));return out;}
+
+function getScopeCSV(scope,kind){
+  const cfg=lastCfg||{};
+  const s=String(scope||'global');
+  if(kind==='w'){
+    if(s==='binance') return String(cfg.WeightCSVBinance||'').trim()||String(cfg.WeightCSV||'').trim();
+    if(s==='okx') return String(cfg.WeightCSVOKX||'').trim()||String(cfg.WeightCSV||'').trim();
+    if(s==='bybit') return String(cfg.WeightCSVBybit||'').trim()||String(cfg.WeightCSV||'').trim();
+    return String(cfg.WeightCSV||'').trim();
+  }
+  if(kind==='mm'){
+    if(s==='binance') return String(cfg.MaintMarginCSVBinance||'').trim()||String(cfg.MaintMarginCSV||'').trim();
+    if(s==='okx') return String(cfg.MaintMarginCSVOKX||'').trim()||String(cfg.MaintMarginCSV||'').trim();
+    if(s==='bybit') return String(cfg.MaintMarginCSVBybit||'').trim()||String(cfg.MaintMarginCSV||'').trim();
+    return String(cfg.MaintMarginCSV||'').trim();
+  }
+  return '';
+}
+
+function renderScope(){
+  const cfg=lastCfg||{};
+  const levs=[1,5,10,20,30,50,100];
+  const defW=1/levs.length, defMM=Number(cfg.MaintMargin||0.005);
+  const w=csvNums(getScopeCSV(currentScope,'w'),levs.length);
+  const mm=csvNums(getScopeCSV(currentScope,'mm'),levs.length);
+  for(let i=0;i<levs.length;i++){
+    const lv=levs[i];
+    const wi=isFinite(w[i])?w[i]:defW;
+    const mi=isFinite(mm[i])?mm[i]:defMM;
+    const wEl=document.getElementById('w_'+lv),mmEl=document.getElementById('mm_'+lv);
+    if(wEl) wEl.value=(wi*100).toFixed(2);
+    if(mmEl) mmEl.value=String(mi);
+  }
+  const sumEl=document.getElementById('w_sum');
+  if(sumEl){
+    const s=levs.map(lv=>Number((document.getElementById('w_'+lv)||{}).value||0)).reduce((a,b)=>a+(isFinite(b)?b:0),0);
+    sumEl.textContent=s.toFixed(2);
+  }
+  const msg=document.getElementById('fitMsg');
+  if(msg){
+    msg.textContent=(currentScope==='global')?'当前编辑范围：全局':('当前编辑范围：'+currentScope.toUpperCase());
+  }
+}
+
+async function fitScope(){
+  const msg=document.getElementById('fitMsg');
+  if(!msg) return;
+  msg.textContent='正在拟合...';
+  const hours=Math.max(1,Math.min(168,Number((document.getElementById('fit_hours')||{}).value||24)||24));
+  const minEvents=Math.max(5,Math.min(200,Number((document.getElementById('fit_min')||{}).value||25)||25));
+  const ex=(currentScope==='global')?'':currentScope;
+  const u='/api/model-fit?hours='+encodeURIComponent(String(hours))+'&min_events='+encodeURIComponent(String(minEvents))+(ex?('&exchange='+encodeURIComponent(ex)):'&mode=global');
+  const r=await fetch(u).catch(()=>null);
+  if(!r){msg.textContent='拟合失败：请求未成功发出';return;}
+  if(!r.ok){msg.textContent='拟合失败：HTTP '+String(r.status);return;}
+  const d=await r.json().catch(()=>null);
+  if(!d){msg.textContent='拟合失败：返回数据无法解析';return;}
+  if(!d.suggestions||!d.suggestions.length){
+    const cs=d.counts||{};
+    const parts=[];
+    for(const k of ['binance','okx','bybit']){
+      const n=Number(((cs[k]||{}).count)||0);
+      if(n>0) parts.push(k+':'+n);
+    }
+    msg.textContent='拟合失败：有效事件不足，最少需要 '+String(minEvents)+' 条，窗口 '+String(hours)+'h'+(parts.length?(' '+parts.join(' ')):'');
+    return;
+  }
+  const sug=d.suggestions[0];
+  if(!sug||!sug.weight_csv||!sug.maint_margin_csv){msg.textContent='拟合失败：无有效结果';return;}
+  if(!lastCfg) lastCfg={};
+  if(currentScope==='binance'){lastCfg.WeightCSVBinance=sug.weight_csv;lastCfg.MaintMarginCSVBinance=sug.maint_margin_csv;}
+  else if(currentScope==='okx'){lastCfg.WeightCSVOKX=sug.weight_csv;lastCfg.MaintMarginCSVOKX=sug.maint_margin_csv;}
+  else if(currentScope==='bybit'){lastCfg.WeightCSVBybit=sug.weight_csv;lastCfg.MaintMarginCSVBybit=sug.maint_margin_csv;}
+  else {lastCfg.WeightCSV=sug.weight_csv;lastCfg.MaintMarginCSV=sug.maint_margin_csv;}
+  scopeCleared=false;
+  renderScope();
+  msg.textContent='拟合完成，使用了 '+String(sug.count||0)+' 条事件';
+}
+
+function clearScope(){
+  const msg=document.getElementById('fitMsg');
+  if(currentScope==='global'){
+    if(msg) msg.textContent='全局配置不能清空覆盖';
+    return;
+  }
+  scopeCleared=true;
+  if(msg) msg.textContent='当前交易所覆盖已标记为清空，保存后会回退到全局配置';
+}
+
+async function reloadCfg(){
+  const cfg=await fetch('/api/model-config').then(r=>r.json()).catch(()=>null);
+  if(cfg) bind(cfg);
+  reloadWindowLookback();
+}
+
+async function save(){
+  const levs=[1,5,10,20,30,50,100];
+  const levCSV=levs.join(',');
+  const wList=[],mmList=[],fsList=[];
+  for(const lv of levs){
+    const w=Number((document.getElementById('w_'+lv)||{}).value||0);
+    const mm=Number((document.getElementById('mm_'+lv)||{}).value||0);
+    const fs=Number((document.getElementById('fs_'+lv)||{}).value||0);
+    wList.push(isFinite(w)?w:0);
+    mmList.push(isFinite(mm)?mm:0);
+    fsList.push(isFinite(fs)?fs:0);
+  }
+  const sumW=wList.reduce((a,b)=>a+b,0);
+  const sumEl=document.getElementById('w_sum');
+  if(sumEl) sumEl.textContent=(isFinite(sumW)?sumW:0).toFixed(2);
+
+  if(!(scopeCleared && currentScope!=='global')){
+    if(!(sumW>0)){document.getElementById('msg').textContent='保存失败：权重合计必须为 100.00%';return;}
+    if(Math.abs(sumW-100)>0.01){document.getElementById('msg').textContent='输入有误：权重合计必须等于 100.00%，当前为 '+sumW.toFixed(2)+'%';return;}
+    for(let i=0;i<wList.length;i++) wList[i]=wList[i]/100.0;
+    for(const v of mmList){if(!(v>0&&v<=0.02)){document.getElementById('msg').textContent='输入有误：维护保证金率必须在 (0, 0.02]';return;}}
+  }else{
+    for(let i=0;i<wList.length;i++) wList[i]=wList[i]/100.0;
+  }
+  for(const v of fsList){if(!(v>=1000&&v<=20000)){document.getElementById('msg').textContent='输入有误：资金费率缩放系数必须在 [1000, 20000]';return;}}
+
+  const mmCSV=(scopeCleared && currentScope!=='global')?'':mmList.map(v=>String(v)).join(',');
+  const fsCSV=fsList.map(v=>String(v)).join(',');
+  const wCSV=(scopeCleared && currentScope!=='global')?'':wList.map(v=>String(v)).join(',');
+  const prev=k=>String((lastCfg&&lastCfg[k])||'').trim();
+  const body={
+    LookbackMin:Number((lastCfg&&lastCfg.LookbackMin)||1440),
+    BucketMin:Number(document.getElementById('bucket').value||5),
+    PriceStep:Number(document.getElementById('step').value||5),
+    PriceRange:Number(document.getElementById('range').value||400),
+    LeverageCSV:levCSV,
+    WeightCSV:(currentScope==='global'?wCSV:prev('WeightCSV')),
+    WeightCSVBinance:(currentScope==='binance'?(scopeCleared?'':wCSV):prev('WeightCSVBinance')),
+    WeightCSVOKX:(currentScope==='okx'?(scopeCleared?'':wCSV):prev('WeightCSVOKX')),
+    WeightCSVBybit:(currentScope==='bybit'?(scopeCleared?'':wCSV):prev('WeightCSVBybit')),
+    MaintMargin:mmList[0]||0.005,
+    MaintMarginCSV:(currentScope==='global'?mmCSV:prev('MaintMarginCSV')),
+    MaintMarginCSVBinance:(currentScope==='binance'?(scopeCleared?'':mmCSV):prev('MaintMarginCSVBinance')),
+    MaintMarginCSVOKX:(currentScope==='okx'?(scopeCleared?'':mmCSV):prev('MaintMarginCSVOKX')),
+    MaintMarginCSVBybit:(currentScope==='bybit'?(scopeCleared?'':mmCSV):prev('MaintMarginCSVBybit')),
+    FundingScale:fsList[0]||7000,
+    FundingScaleCSV:fsCSV,
+    IntensityScale:Number(document.getElementById('scale').value||1.0),
+    DecayK:Number(document.getElementById('decay').value||2.2),
+    NeighborShare:Number(document.getElementById('neighbor').value||0.28)
+  };
+  const r=await fetch('/api/model-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok){document.getElementById('msg').textContent='保存成功';await reloadCfg();bindWeightSumLive();}
+  else{document.getElementById('msg').textContent='保存失败';}
+}
+
+function bindWeightSumLive(){
+  const levs=[1,5,10,20,30,50,100];
+  const sumEl=document.getElementById('w_sum');
+  if(!sumEl) return;
+  function recalc(){
+    const s=levs.map(lv=>Number((document.getElementById('w_'+lv)||{}).value||0)).reduce((a,b)=>a+(isFinite(b)?b:0),0);
+    sumEl.textContent=(isFinite(s)?s:0).toFixed(2);
+  }
+  for(const lv of levs){
+    const el=document.getElementById('w_'+lv);
+    if(el) el.addEventListener('input',recalc);
+  }
+  recalc();
+}
+
+async function loadFooter(){try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束，但状态未知，请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
+async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
+
+initTheme();
+bind({
+  LookbackMin:{{.LookbackMin}},
+  BucketMin:{{.BucketMin}},
+  PriceStep:{{.PriceStep}},
+  PriceRange:{{.PriceRange}},
+  LeverageCSV:{{printf "%q" .LeverageCSV}},
+  WeightCSV:{{printf "%q" .WeightCSV}},
+  MaintMargin:{{.MaintMargin}},
+  MaintMarginCSV:{{printf "%q" .MaintMarginCSV}},
+  FundingScale:{{.FundingScale}},
+  FundingScaleCSV:{{printf "%q" .FundingScaleCSV}},
+  IntensityScale:{{.IntensityScale}},
+  DecayK:{{.DecayK}},
+  NeighborShare:{{.NeighborShare}}
+});
+bindWeightSumLive();
+reloadCfg();
+loadFooter();
+</script>
+
+<div id="upgradeModal" class="upgrade-modal">
+  <div class="upgrade-card">
+    <div class="upgrade-head">
+      <div class="upgrade-title">升级过程</div>
+      <button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button>
+    </div>
+    <pre id="upgradeLog" class="upgrade-log"></pre>
+    <div id="upgradeFoot" class="upgrade-foot">等待开始...</div>
+  </div>
+</div>
+<div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
+</body>
+</html>

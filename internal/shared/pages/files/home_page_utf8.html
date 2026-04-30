@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ETH Liquidation Map</title>
+<style>
+:root{--bg:#e8edf4;--nav:#0b1220;--nav-border:#243145;--panel:#ffffff;--line:#dfe6ee;--left:#c2cad7;--left-head:#b7c0cf;--right:#efe9cf;--right-head:#e7dfbe;--text:#3b4c63;--muted:#67778d;--accent:#d3873e;--ctl-bg:#fff;--ctl-border:#b6c4d5}
+[data-theme="dark"]{--bg:#000;--nav:#000;--nav-border:#111827;--panel:#000;--line:#1f2937;--left:#0f172a;--left-head:#0b1220;--right:#111827;--right-head:#0b1220;--text:#e5e7eb;--muted:#cbd5e1;--accent:#fbbf24;--ctl-bg:#000;--ctl-border:#475569}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
+.nav{height:56px;background:var(--nav);border-bottom:1px solid var(--nav-border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
+.nav-left,.nav-right{display:flex;align-items:center;gap:20px}
+.brand{font-size:18px;font-weight:700;color:#eef3f9}
+.menu a{color:#d6deea;text-decoration:none;font-size:16px;margin-right:18px}
+.menu a.active{color:#fff;font-weight:700}
+.upgrade{color:#fff;font-weight:700;text-decoration:none}
+.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}
+.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:#e5e7eb;cursor:pointer}
+.theme-toggle button.label{cursor:default;opacity:.92}
+.theme-toggle button.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}
+.wrap{width:100%;max-width:none;margin:0 auto;padding:16px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.panel{border:1px solid var(--line);background:var(--panel);margin:14px 0;padding:16px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,.03)}
+#status{background:var(--nav);color:#eef3f9;padding:10px 12px;border-radius:8px;font-weight:700;text-align:center}
+.btns button{margin-right:8px;background:var(--ctl-bg);color:var(--text);border:1px solid var(--ctl-border);padding:8px 14px;border-radius:8px;cursor:pointer}
+.btns button.active{background:var(--nav);color:#fff;border-color:var(--nav)}
+.grid{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+.dual{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.hint{color:var(--muted);font-size:12px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.table-wrap{width:100%;overflow-x:auto}
+.table-wrap table{min-width:640px}
+table{width:100%;border-collapse:collapse}
+th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:center}
+.heat-table thead tr:first-child th{background:#d5dce6;font-size:18px}
+.heat-table .col-threshold{background:#d8d9dc}
+.heat-table .col-up-price,.heat-table .col-up-size{background:var(--left)}
+.heat-table .col-down-price,.heat-table .col-down-size{background:var(--right)}
+.heat-table thead .col-up-price,.heat-table thead .col-up-size{background:var(--left-head)}
+.heat-table thead .col-down-price,.heat-table thead .col-down-size{background:var(--right-head)}
+.heat-table .col-up-size,.heat-table .col-down-size{color:var(--accent);font-weight:700}
+.panel h3,.top h2,.top .hint{text-align:center}
+.heatmap-wrap{position:relative;border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:10px}
+#liqHeatMap{width:100%;height:320px;display:block;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+.liq-tip{position:absolute;display:none;min-width:180px;max-width:280px;background:rgba(15,23,42,.96);color:#e2e8f0;border:1px solid rgba(148,163,184,.25);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.5;box-shadow:0 10px 28px rgba(2,6,23,.35);pointer-events:none}
+.liq-tip .t{font-weight:800;margin-bottom:6px}
+.liq-tip .row{display:flex;justify-content:space-between;gap:10px}
+.liq-dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.liq-dot.binance{background:rgba(249,115,22,.9)}
+.liq-dot.okx{background:rgba(234,179,8,.9)}
+.liq-dot.bybit{background:rgba(103,232,249,.9)}
+.desc{font-size:12px;color:var(--muted);line-height:1.5;margin-top:8px}
+.upgrade-modal{position:fixed;inset:0;background:rgba(2,6,23,.55);display:none;align-items:center;justify-content:center;z-index:9999}
+.upgrade-modal.show{display:flex}
+.upgrade-card{width:min(880px,92vw);max-height:82vh;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 30px rgba(2,6,23,.45);overflow:hidden}
+.upgrade-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #334155}
+.upgrade-title{font-size:14px;font-weight:700}
+.upgrade-close{background:transparent;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;cursor:pointer}
+.upgrade-log{margin:0;padding:12px;white-space:pre-wrap;overflow:auto;max-height:62vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45}
+.upgrade-foot{padding:8px 12px;border-top:1px solid #334155;font-size:12px;color:#94a3b8}
+.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:#64748b;text-align:center}
+@media (max-width:960px){.dual{grid-template-columns:1fr}.menu{display:none}}
+</style>
+</head>
+<body>
+<div class="nav">
+  <div class="nav-left">
+    <div class="brand">ETH Liquidation Map</div>
+    <div class="menu"><a href="/" class="active">&#28165;&#31639;&#28909;&#21306;</a><a href="/config">&#27169;&#22411;&#37197;&#32622;</a><a href="/monitor">&#38647;&#21306;&#30417;&#25511;</a><a href="/map">&#30424;&#21475;&#27719;&#24635;</a><a href="/liquidations">&#24378;&#24179;&#28165;&#31639;</a><a href="/bubbles">&#27668;&#27873;&#22270;</a><a href="/webdatasource">&#39029;&#38754;&#25968;&#25454;&#28304;</a><a href="/channel">&#28040;&#24687;&#36890;&#36947;</a><a href="/analysis">&#26085;&#20869;&#20998;&#26512;</a><a href="/analysis-backtest">&#21333;&#22240;&#23376;&#22238;&#27979;</a><a href="/analysis-backtest-liquidation">&#28165;&#31639;&#22238;&#27979;</a><a href="/analysis-backtest-2fa">&#21452;&#22240;&#23376;&#22238;&#27979;</a></div>
+  </div>
+  <div class="nav-right">
+    <div class="theme-toggle">
+      <button class="label" type="button">主题</button>
+      <button id="themeDark" onclick="setTheme('dark')">深色</button>
+      <button id="themeLight" onclick="setTheme('light')">浅色</button>
+    </div>
+    <a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="panel top">
+    <div>
+      <h2 style="margin:0 0 6px 0">ETH 清算热区</h2>
+      <div class="hint">按 <span class="mono">0</span> / <span class="mono">1</span> / <span class="mono">7</span> / <span class="mono">3</span> 切换 日内 / 1天 / 7天 / 30天</div>
+    </div>
+    <div class="btns">
+      <button data-days="0">日内</button>
+      <button data-days="1">1天</button>
+      <button data-days="7">7天</button>
+      <button data-days="30">30天</button>
+    </div>
+  </div>
+
+  <div class="panel"><div id="status">loading...</div></div>
+
+  <div class="grid">
+    <div class="panel">
+      <h3>ETH 清算地图（OI 增量模型）</h3>
+      <div class="heatmap-wrap">
+        <canvas id="liqHeatMap" width="1400" height="320"></canvas>
+        <div id="liqTip" class="liq-tip"></div>
+        <div class="hint">滚轮缩放，`Shift + 滚轮` 横向平移，按住鼠标左键可左右拖动。X 轴为价格，左轴为单价位清算金额，右轴为从当前价累计到该价位的清算金额。</div>
+        <div id="liqDesc" class="desc"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="dual">
+    <div class="panel">
+      <h3>市场状态</h3>
+      <div id="market" class="table-wrap"><div class="hint">加载中...</div></div>
+    </div>
+    <div class="panel">
+      <h3>分层清算区间</h3>
+      <div id="bands" class="table-wrap"><div class="hint">加载中...</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentDays=1;
+let liqMapData=null;
+let modelConfig=null;
+let liqHoverMeta=null;
+let liqViewMin=null,liqViewMax=null,liqDrag=false,liqLastX=0;
+const exOrder=['binance','okx','bybit'];
+const exColor={binance:'rgba(249,115,22,0.78)',okx:'rgba(234,179,8,0.76)',bybit:'rgba(103,232,249,0.76)'};
+function setTheme(t){const theme=(t==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme);}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');}
+function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
+function windowLabel(v){return Number(v)===0?'日内':(Number(v)+'天');}
+async function setWindow(days){currentDays=days;await fetch('/api/window',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days})});renderActive();load();}
+function renderActive(){document.querySelectorAll('button[data-days]').forEach(b=>b.classList.toggle('active',Number(b.dataset.days)===currentDays));}
+function fmtPrice(n){return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1});}
+function fmtAmount(n){n=Number(n);if(!isFinite(n))return '-';const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'亿';if(a>=1e6)return (n/1e6).toFixed(2)+'百万';return (n/1e4).toFixed(2)+'万';}
+function fmt4(n){return Number(n).toFixed(8);}
+function fitCanvas(id){const c=document.getElementById(id);if(!c)return null;const dpr=window.devicePixelRatio||1;const rect=c.getBoundingClientRect();const W=Math.max(320,Math.floor(rect.width));const H=Math.max(220,Math.floor(rect.height));const rw=Math.floor(W*dpr),rh=Math.floor(H*dpr);if(c.width!==rw||c.height!==rh){c.width=rw;c.height=rh;}const x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);return {c,x,W,H};}
+function hideLiqTip(){const tip=document.getElementById('liqTip');if(tip)tip.style.display='none';}
+function showLiqTip(meta,ev){const tip=document.getElementById('liqTip');if(!tip||!meta||!meta.pts||!meta.pts.length)return;const rect=meta.c.getBoundingClientRect();const mx=ev.clientX-rect.left;let best=null,bd=1e18;for(const it of meta.pts){const d=Math.abs(mx-it.px);if(d<bd){bd=d;best=it;}}const hitW=Math.max(meta.hitW||0,meta.barW||0);if(!best||bd>(hitW*0.5)){hideLiqTip();return;}const hasCum=Number(best.cumTotal||0)>0;const lines=[];lines.push('<div class="t">价格 '+fmtPrice(best.p)+'</div>');lines.push('<div class="row"><span>单价位清算额</span><span>'+fmtAmount(best.total)+'</span></div>');if(hasCum)lines.push('<div class="row"><span>从当前价累计</span><span>'+fmtAmount(best.cumTotal)+'</span></div>');for(const ex of exOrder){const exact=Number((best.ex||{})[ex]||0);const cum=Number((best.cumEx||{})[ex]||0);const v=hasCum?cum:exact;if(!(v>0))continue;lines.push('<div class="row"><span><span class="liq-dot '+ex+'"></span>'+ex.toUpperCase()+(hasCum?' 累计':'')+'</span><span>'+fmtAmount(v)+'</span></div>');}tip.innerHTML=lines.join('');tip.style.display='block';const wrap=document.querySelector('.heatmap-wrap');const wr=wrap?wrap.getBoundingClientRect():rect;let left=(ev.clientX-wr.left)+14,top=(ev.clientY-wr.top)+14;tip.style.left='0px';tip.style.top='0px';const tw=tip.offsetWidth||220,th=tip.offsetHeight||90;if(left+tw>wr.width-10)left=Math.max(8,wr.width-10-tw);if(top+th>wr.height-10)top=Math.max(8,wr.height-10-th);tip.style.left=left+'px';tip.style.top=top+'px';}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function bindLiqHover(){const c=document.getElementById('liqHeatMap');if(!c||c.dataset.bound==='1')return;c.dataset.bound='1';c.addEventListener('mousemove',e=>{if(liqDrag&&liqHoverMeta&&liqViewMin!=null&&liqViewMax!=null){const rect=c.getBoundingClientRect();const dx=e.clientX-liqLastX;liqLastX=e.clientX;const s=liqHoverMeta;const pw=s.pw||Math.max(1,rect.width-86);const span=(liqViewMax-liqViewMin);const dp=-(dx/pw)*span;liqViewMin+=dp;liqViewMax+=dp;const baseMin=s.baseMin,baseMax=s.baseMax;const w=liqViewMax-liqViewMin;if(liqViewMin<baseMin){liqViewMin=baseMin;liqViewMax=baseMin+w;}if(liqViewMax>baseMax){liqViewMax=baseMax;liqViewMin=baseMax-w;}drawLiqHeat();return;}if(!liqHoverMeta)return;showLiqTip(liqHoverMeta,e);});c.addEventListener('mouseleave',()=>{liqDrag=false;hideLiqTip();});c.addEventListener('mousedown',e=>{if(e.button!==0)return;liqDrag=true;liqLastX=e.clientX;});window.addEventListener('mouseup',()=>{liqDrag=false;});c.addEventListener('wheel',e=>{if(!liqHoverMeta)return;e.preventDefault();const s=liqHoverMeta;const rect=c.getBoundingClientRect();const mx=e.clientX-rect.left;const pw=s.pw||Math.max(1,rect.width-86);const ratio=clamp((mx-(s.padL||66))/pw,0,1);const baseMin=s.baseMin,baseMax=s.baseMax;const curMin=(liqViewMin==null?baseMin:liqViewMin);const curMax=(liqViewMax==null?baseMax:liqViewMax);let span=curMax-curMin;if(!(span>0))span=baseMax-baseMin;const focus=curMin+span*ratio;const isPan=Math.abs(e.deltaX)>Math.abs(e.deltaY)||e.shiftKey;if(isPan){const d=(Math.abs(e.deltaX)>0?e.deltaX:e.deltaY);const pan=-(d/pw)*span;let vMin=curMin+pan;let vMax=curMax+pan;if(vMin<baseMin){vMin=baseMin;vMax=baseMin+span;}if(vMax>baseMax){vMax=baseMax;vMin=baseMax-span;}liqViewMin=vMin;liqViewMax=vMax;}else{const factor=(e.deltaY<0?0.88:1.14);const full=(baseMax-baseMin);const nextSpan=clamp(span*factor,full*0.08,full);let vMin=focus-nextSpan*ratio;let vMax=vMin+nextSpan;if(vMin<baseMin){vMin=baseMin;vMax=baseMin+nextSpan;}if(vMax>baseMax){vMax=baseMax;vMin=baseMax-nextSpan;}liqViewMin=vMin;liqViewMax=vMax;}drawLiqHeat();},{passive:false});}
+function drawLiqHeat(){const v=fitCanvas('liqHeatMap');if(!v)return;const {c,x,W,H}=v;x.clearRect(0,0,W,H);x.fillStyle='#fff';x.fillRect(0,0,W,H);const d=liqMapData;if(!d||!d.prices||!d.intensity_grid||!d.prices.length){hideLiqTip();liqHoverMeta=null;x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const rows=d.prices.length;const cols=((d.intensity_grid&&d.intensity_grid[0])?d.intensity_grid[0].length:0);if(rows<2||cols<1){hideLiqTip();liqHoverMeta=null;x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const per=(d.per_exchange)||{};const all=[];for(let ri=0;ri<rows;ri++){const p=Number(d.prices[ri]||0);if(!(p>0))continue;const exVals={};let total=0;for(const ex of exOrder){const arr=per[ex]||per[ex.toUpperCase()]||null;const vv=Number((arr&&arr[ri])||0);if(vv>0){exVals[ex]=vv;total+=vv;}}if(!(total>0)){let s=0;for(let ci=0;ci<cols;ci++)s+=Math.max(0,Number((d.intensity_grid[ri]||[])[ci]||0));if(s>0){total=s;exVals.unknown=s;}}if(total>0)all.push({ri:ri,p:p,total:total,ex:exVals});}if(!all.length){hideLiqTip();liqHoverMeta=null;x.fillStyle='#64748b';x.font='13px sans-serif';x.fillText('暂无清算地图数据',16,24);return;}const cp=Number(d.current_price||0);const cumShortAll=[];const cumLongAll=[];if(cp>0){let runS=0;const runSEx={binance:0,okx:0,bybit:0};for(const it of all){if(it.p<cp)continue;runS+=it.total;const exTotals={};for(const ex of exOrder){runSEx[ex]+=Number((it.ex||{})[ex]||0);if(runSEx[ex]>0)exTotals[ex]=runSEx[ex];}it.cumShortTotal=runS;it.cumShortEx=exTotals;cumShortAll.push({p:it.p,v:runS});}let runL=0;const runLEx={binance:0,okx:0,bybit:0};for(let i=all.length-1;i>=0;i--){const it=all[i];if(it.p>cp)continue;runL+=it.total;const exTotals={};for(const ex of exOrder){runLEx[ex]+=Number((it.ex||{})[ex]||0);if(runLEx[ex]>0)exTotals[ex]=runLEx[ex];}it.cumLongTotal=runL;it.cumLongEx=exTotals;cumLongAll.push({p:it.p,v:runL});}cumLongAll.reverse();}const baseMin=all[0].p,baseMax=all[all.length-1].p;const padL=66,padR=60,padT=16,padB=42;const pw=W-padL-padR,ph=H-padT-padB,by=padT+ph;const fullSpan=Math.max(1e-6,baseMax-baseMin);if(liqViewMin==null||liqViewMax==null||liqViewMin>=liqViewMax||liqViewMin<baseMin||liqViewMax>baseMax){liqViewMin=baseMin;liqViewMax=baseMax;}const minP=liqViewMin,maxP=liqViewMax,span=Math.max(1e-6,maxP-minP);const pts=all.filter(it=>it.p>=minP&&it.p<=maxP);const maxV=Math.max(1,...pts.map(it=>it.total));const sx=v=>padL+((v-minP)/span)*pw;const sy=v=>by-(v/maxV)*ph;x.strokeStyle='#e2e8f0';x.strokeRect(padL,padT,pw,ph);x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*(i/4),val=maxV*(1-i/4);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle='#475569';x.fillText(fmtAmount(val),6,y+4);}const minLabelGap=12;const approxLabelW=Math.max(36,x.measureText(fmtPrice(minP)).width,x.measureText(fmtPrice(maxP)).width);const maxTicks=Math.max(2,Math.floor(pw/(approxLabelW+minLabelGap)));const tickCount=Math.max(2,Math.min(10,maxTicks));for(let i=0;i<=tickCount;i++){const p=minP+span*(i/tickCount),px=sx(p);x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(px,by);x.lineTo(px,by+4);x.stroke();const label=fmtPrice(p);const lw=x.measureText(label).width;const tx=Math.max(padL,Math.min(px-lw/2,W-padR-lw));x.fillStyle='#64748b';x.fillText(label,tx,by+18);}const barW=Math.max(2,Math.min(12,pw/Math.max(40,pts.length)));for(const it of pts){const px=sx(it.p);let acc=0;for(const ex of exOrder){const vv=Number((it.ex||{})[ex]||0);if(!(vv>0))continue;const y0=sy(acc),y1=sy(acc+vv);x.fillStyle=exColor[ex]||'rgba(148,163,184,0.6)';x.fillRect(px-barW/2,y1,barW,Math.max(1,y0-y1));acc+=vv;}if(acc<=0){const y=sy(it.total);x.fillStyle=(cp>0?(it.p<=cp):(it.p<=(minP+maxP)/2))?'rgba(249,115,22,0.78)':'rgba(125,211,252,0.78)';x.fillRect(px-barW/2,y,barW,by-y);}}const cumShort=cumShortAll.filter(it=>it.p>=minP&&it.p<=maxP);const cumLong=cumLongAll.filter(it=>it.p>=minP&&it.p<=maxP);const maxCum=Math.max(0,...(cumShort.length?cumShort.map(it=>it.v):[0]),...(cumLong.length?cumLong.map(it=>it.v):[0]));if(maxCum>0){const scy=v=>by-(v/maxCum)*ph;x.fillStyle='#475569';x.fillText('累计',W-padR+8,padT-4);for(let i=0;i<=4;i++){const y=padT+ph*(i/4),val=maxCum*(1-i/4);x.fillStyle='#64748b';x.fillText(fmtAmount(val),W-padR+8,y+4);}const drawLine=(arr,color,fillColor)=>{if(!arr||arr.length<2)return;x.lineWidth=2;x.strokeStyle=color;x.beginPath();for(let i=0;i<arr.length;i++){const px=sx(arr[i].p);const py=scy(arr[i].v);if(i===0)x.moveTo(px,py);else x.lineTo(px,py);}x.stroke();if(fillColor){x.lineTo(sx(arr[arr.length-1].p),by);x.lineTo(sx(arr[0].p),by);x.closePath();x.fillStyle=fillColor;x.fill();}};drawLine(cumShort,'rgba(16,185,129,0.95)','rgba(16,185,129,0.10)');drawLine(cumLong,'rgba(239,68,68,0.95)','rgba(239,68,68,0.10)');}x.lineWidth=1;if(cp>=minP&&cp<=maxP){const cpX=sx(cp);x.strokeStyle='rgba(220,38,38,0.9)';x.setLineDash([5,4]);x.beginPath();x.moveTo(cpX,padT);x.lineTo(cpX,by);x.stroke();x.setLineDash([]);x.fillStyle='#111827';const txt='当前价 '+fmtPrice(cp);const tw=x.measureText(txt).width;x.fillText(txt,Math.max(padL,Math.min(cpX+4,W-padR-tw)),padT+12);}x.fillStyle='#475569';x.fillText('清算金额',padL,padT-4);const xt='价格';const xtw=x.measureText(xt).width;x.fillText(xt,padL+pw/2-xtw/2,H-8);liqHoverMeta={c:c,pts:pts.map(it=>({p:it.p,total:it.total,ex:it.ex,cumTotal:(it.p>=cp?Number(it.cumShortTotal||0):Number(it.cumLongTotal||0)),cumEx:(it.p>=cp?(it.cumShortEx||{}):(it.cumLongEx||{})),px:sx(it.p)})),barW:barW,hitW:barW,pw:pw,padL:padL,baseMin:baseMin,baseMax:baseMax,fullSpan:fullSpan};}
+function renderLiqDesc(cfg,dash){if(!cfg){const el=document.getElementById('liqDesc');if(el)el.textContent='';return;}const levs=String(cfg.leverage_csv||cfg.LeverageCSV||cfg.leverage_levels||cfg.leverage||'10,25,50,100');const ws=String(cfg.weight_csv||cfg.WeightCSV||cfg.leverage_weights||cfg.weights||'0.25,0.25,0.25,0.25');const mm=Number(cfg.maint_margin||cfg.MaintMargin||cfg.mm||0.005);const mmCSV=String(cfg.maint_margin_csv||cfg.MaintMarginCSV||cfg.mm_csv||'').trim();const fs=Number(cfg.funding_scale||cfg.FundingScale||7000);const dk=Number(cfg.decay_k||cfg.DecayK||2.2);const ns=Number(cfg.neighbor_share||cfg.NeighborShare||0.28);const bucket=Number(cfg.bucket_min||cfg.BucketMin||5);const step=Number(cfg.price_step||cfg.PriceStep||5);const range=Number(cfg.price_range||cfg.PriceRange||400);const wd=Number((dash&&dash.window_days));const cutoff=Number((dash&&dash.window_cutoff));let windowText='1天';if(wd===0){windowText='日内（08:00 起）';}else if(wd===7||wd===30||wd===1){windowText=wd+'天';}let minsText='';if(wd===0&&cutoff>0){const mins=Math.max(60,Math.ceil((Date.now()-cutoff)/60000));minsText='（约 '+mins+' 分钟）';}const el=document.getElementById('liqDesc');if(el){const mmText=mmCSV?('mm（按档位）'+mmCSV):('mm='+mm.toFixed(4));el.textContent='数据源：Binance / Bybit / OKX 公开接口。模型按 OI 增量、杠杆权重、资金费率和维持保证金估算清算强度。杠杆档位 '+levs+'，权重 '+ws+'，多空比例采用 clamp(base + funding * '+fs+', 0.2, 0.8)，清算价采用 mark*(1±1/lev∓mm)，'+mmText+'；时间衰减为 exp(-'+dk.toFixed(2)+'*age)，邻近扩散系数 '+ns.toFixed(2)+'。当前回看 '+windowText+minsText+'，时间桶 '+bucket+' 分钟，价格步长 '+step+'，范围 ±'+range+'。参数调整入口：/config。';}}
+function renderTable(rows,headers){if(!rows||!rows.length)return '<div class="hint">暂无数据</div>';let html='<table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>';for(const r of rows)html+='<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>';return html+'</tbody></table>';}
+function buildHeatBandsFromModel(model){if(!model||!model.prices||!model.intensity_grid||!model.prices.length)return [];const rows=model.prices.length,cols=((model.intensity_grid&&model.intensity_grid[0])?model.intensity_grid[0].length:0);if(rows<1||cols<1)return [];const cp=Number(model.current_price||0);if(!(cp>0))return [];const pts=[];for(let ri=0;ri<rows;ri++){const p=Number(model.prices[ri]||0);if(!(p>0))continue;let s=0;for(let ci=0;ci<cols;ci++)s+=Math.max(0,Number((model.intensity_grid[ri]||[])[ci]||0));if(s>0)pts.push({price:p,notional:s});}if(!pts.length)return [];const showBands=[10,20,30,40,50,60,80,100,150];return showBands.map(band=>{let upPrice=0,upNotional=0,upMax=0,downPrice=0,downNotional=0,downMax=0;for(const pt of pts){const dist=pt.price-cp;if(dist>=0&&dist<=band){upNotional+=pt.notional;if(pt.notional>upMax){upMax=pt.notional;upPrice=pt.price;}}if(dist<=0&&Math.abs(dist)<=band){downNotional+=pt.notional;if(pt.notional>downMax){downMax=pt.notional;downPrice=pt.price;}}}return {band,up_price:upPrice,up_notional_usd:upNotional,down_price:downPrice,down_notional_usd:downNotional};});}
+function renderHeatReport(){const bands=buildHeatBandsFromModel(liqMapData);if(!bands.length)return '<div class="hint">暂无数据</div>';let html='<table class="heat-table"><thead><tr><th rowspan="2" class="col-threshold">点数阈值</th><th colspan="2">下方多单</th><th colspan="2">上方空单</th></tr><tr><th class="col-down-price">清算价格</th><th class="col-down-size">清算规模</th><th class="col-up-price">清算价格</th><th class="col-up-size">清算规模</th></tr></thead><tbody>';const toScale=n=>{n=Number(n||0);const a=Math.abs(n);if(a>=1e8)return (n/1e8).toFixed(2)+'亿';if(a>=1e4)return (n/1e4).toFixed(2)+'万';return n.toFixed(2);};for(const b of bands){html+='<tr><td class="col-threshold">'+b.band+'点内</td><td class="col-down-price">'+(Number(b.down_price)>0?fmtPrice(b.down_price):'-')+'</td><td class="col-down-size">'+toScale(b.down_notional_usd)+'</td><td class="col-up-price">'+(Number(b.up_price)>0?fmtPrice(b.up_price):'-')+'</td><td class="col-up-size">'+toScale(b.up_notional_usd)+'</td></tr>';}html+='</tbody></table>';return html;}
+async function load(){const cfg=await fetch('/api/model-config').then(r=>r.json()).catch(()=>null);modelConfig=cfg;const bucket=Number(cfg&&cfg.BucketMin||cfg&&cfg.bucket_min||5);const step=Number(cfg&&cfg.PriceStep||cfg&&cfg.price_step||5);const range=Number(cfg&&cfg.PriceRange||cfg&&cfg.price_range||400);const d=await fetch('/api/dashboard').then(r=>r.json());currentDays=(d.window_days===0||d.window_days)?d.window_days:currentDays;renderActive();renderLiqDesc(cfg,d);const mapUrl='/api/model/liquidation-map?bucket_min='+bucket+'&price_step='+step+'&price_range='+range;liqMapData=await fetch(mapUrl).then(m=>m.json()).catch(()=>null);document.getElementById('status').textContent='当前价: '+fmtPrice(d.current_price)+' | 周期: '+windowLabel(d.window_days)+' | 更新时间: '+new Date(d.generated_at).toLocaleString('zh-CN',{hour12:false});const marketEl=document.getElementById('market');if(marketEl){marketEl.innerHTML=renderTable((d.states||[]).map(s=>[s.exchange,fmtPrice(s.mark_price),s.oi_qty?fmtAmount(s.oi_qty*s.mark_price):'-',s.oi_value_usd?fmtAmount(s.oi_value_usd):'-',s.funding_rate==null?'-':fmt4(s.funding_rate)]),['交易所','标记价','OI数量','OI价值USD','Funding']);}const bandsEl=document.getElementById('bands');if(bandsEl){bandsEl.innerHTML=renderHeatReport();}drawLiqHeat();}
+async function openUpgradeModal(){const m=document.getElementById('upgradeModal'),logEl=document.getElementById('upgradeLog'),foot=document.getElementById('upgradeFoot');if(!m||!logEl||!foot)return;m.classList.add('show');logEl.textContent='';foot.textContent='正在触发升级...';const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({error:'response parse failed',output:''}));if(d.error){logEl.textContent=String(d.output||'');foot.textContent='触发失败: '+d.error;return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(res=>setTimeout(res,1000));const pr=await fetch('/api/upgrade/progress').then(x=>x.json()).catch(()=>null);if(!pr)continue;logEl.textContent=String(pr.log||'');logEl.scrollTop=logEl.scrollHeight;if(pr.done){foot.textContent=(String(pr.exit_code||'')==='0')?'升级完成并已重启':'升级完成，退出码 '+String(pr.exit_code||'?');return;}if(!pr.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束，但状态未知，请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+function closeUpgradeModal(){const m=document.getElementById('upgradeModal');if(m)m.classList.remove('show');}
+async function doUpgrade(event){if(event)event.preventDefault();openUpgradeModal();return false;}
+initTheme();document.querySelectorAll('button[data-days]').forEach(b=>b.onclick=()=>setWindow(Number(b.dataset.days)));document.addEventListener('keydown',e=>{if(e.key==='0')setWindow(0);if(e.key==='1')setWindow(1);if(e.key==='7')setWindow(7);if(e.key==='3')setWindow(30);});bindLiqHover();window.addEventListener('resize',()=>drawLiqHeat());setInterval(load,5000);load();(async()=>{try{const r=await fetch('/api/version');const v=await r.json();const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - '+(v.commit_time||'-')+' - '+(v.commit_id||'-')+' - '+(v.branch||'-');}catch(_){const el=document.getElementById('globalFooter');if(el)el.textContent='Code by Yuhao@jiansutech.com - - - -';}})();
+</script>
+
+<div id="upgradeModal" class="upgrade-modal">
+  <div class="upgrade-card">
+    <div class="upgrade-head">
+      <div class="upgrade-title">升级过程</div>
+      <button class="upgrade-close" onclick="closeUpgradeModal()">关闭</button>
+    </div>
+    <pre id="upgradeLog" class="upgrade-log"></pre>
+    <div id="upgradeFoot" class="upgrade-foot">等待开始...</div>
+  </div>
+</div>
+<div id="globalFooter" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
+</body>
+</html>

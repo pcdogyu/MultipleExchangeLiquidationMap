@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>双因子回测</title>
+<style>
+:root{--bg:#f4efe7;--ink:#172033;--muted:#63708a;--card:#fffdf8;--line:#e5dccd;--nav:#101827;--navInk:#f6f7fb;--up:#16a34a;--down:#dc2626;--grid:rgba(23,32,51,.12);--shadow:0 12px 36px rgba(17,24,39,.08)}
+[data-theme="dark"]{--bg:#000;--ink:#f8fafc;--muted:#cbd5e1;--card:#000;--line:#263041;--nav:#000;--navInk:#f8fafc;--grid:rgba(255,255,255,.16);--shadow:none}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at top left,#fff8ee,transparent 28%),linear-gradient(180deg,#f8f4ed 0%,#efe8dc 100%);color:var(--ink);font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+[data-theme="dark"] body{background:#000}
+.nav{height:58px;background:var(--nav);border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:20}
+.nav-left,.nav-right{display:flex;align-items:center;gap:20px}
+.brand{font-size:18px;font-weight:700;color:var(--navInk)}
+.menu a{color:#cdd5e4;text-decoration:none;font-size:15px;margin-right:16px}
+.menu a.active{color:#fff;font-weight:700}
+.nav-right a{color:#fff;text-decoration:none;font-size:14px;padding:8px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.18)}
+.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}
+.theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,0.45);background:transparent;color:var(--navInk);cursor:pointer}
+.theme-toggle button.label{cursor:default;opacity:.92}
+.theme-toggle button.active{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.18);color:#fff}
+.wrap{width:100%;max-width:none;margin:0;padding:24px 18px 40px}
+.hero{display:grid;grid-template-columns:1.15fr .85fr;gap:16px}
+.panel{background:rgba(255,253,248,.92);border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow);padding:20px}
+.hero-main{background:linear-gradient(140deg,rgba(194,106,45,.15),rgba(20,116,111,.08)),var(--card)}
+.hero-main h1{margin:8px 0 10px;font-size:34px}
+.small{font-size:12px;color:var(--muted);line-height:1.6}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.horizon-stats{grid-template-columns:repeat(4,minmax(0,1fr))}
+.stat{padding:16px;border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,.68)}
+.stat .k{font-size:12px;color:var(--muted)}
+.stat .v{margin-top:8px;font-size:28px;font-weight:800}
+.principle-card{display:grid;grid-template-columns:1.1fr .9fr;gap:16px}
+.principle-box{padding:16px 18px;border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,.62)}
+.principle-box h3{margin:0 0 10px;font-size:15px}
+.principle-box p{margin:0;font-size:13px;color:var(--ink);line-height:1.75}
+.principle-points{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.principle-pill{padding:12px 14px;border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.72)}
+.principle-pill .k{font-size:12px;color:var(--muted)}
+.principle-pill .v{margin-top:6px;font-size:13px;font-weight:700;line-height:1.6;color:var(--ink)}
+.section{margin-top:18px}
+.section h2{margin:0 0 10px;font-size:18px}
+.toolbar{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.toolbar-group{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.toolbar label{font-size:12px;color:var(--muted)}
+.toolbar select,.toolbar button{height:38px;border:1px solid #d8deea;border-radius:12px;background:#fff;color:var(--ink);font:inherit;padding:0 12px}
+.toolbar button{cursor:pointer}
+.toolbar button.primary{background:#0f766e;color:#fff;border-color:#0f766e;font-weight:700}
+.toolbar button.secondary{background:#fff}
+.size-pill{padding:0 10px;height:38px;border-radius:999px;border:1px solid var(--line);display:inline-flex;align-items:center;background:rgba(255,255,255,.65);font-size:12px;color:var(--muted)}
+.chart-panel{padding:18px}
+.chart-viewport{overflow:auto;padding-bottom:4px}
+.canvas-wrap{position:relative;border:1px solid var(--line);border-radius:16px;background:#0b0f16;padding:12px;display:inline-block;min-width:100%}
+.canvas-wrap.grabbing{cursor:grabbing}
+#chart{display:block;border-radius:12px;background:#05080d;cursor:grab}
+.legend{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:10px}
+.legend .tag{display:inline-flex;align-items:center;gap:6px}
+.dot{width:10px;height:10px;border-radius:999px;display:inline-block}
+.meta-line{margin-top:8px}
+.table-wrap{overflow:auto}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px;text-align:left;white-space:nowrap}
+th{color:var(--muted);font-weight:600}
+.horizon-cell{white-space:normal;min-width:132px}
+.horizon-pill{display:inline-flex;flex-direction:column;gap:4px;min-width:110px;padding:8px 10px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.72);line-height:1.25}
+.horizon-pill .price{font-weight:800;color:var(--ink)}
+.horizon-pill .meta{font-size:11px}
+.horizon-pill.up-pill{background:rgba(22,163,74,.10);border-color:rgba(22,163,74,.28)}
+.horizon-pill.down-pill{background:rgba(220,38,38,.10);border-color:rgba(220,38,38,.28)}
+.horizon-pill.pending-pill{background:rgba(217,119,6,.10);border-color:rgba(217,119,6,.24)}
+.horizon-pill.nodata-pill{background:rgba(100,116,139,.10);border-color:rgba(100,116,139,.20)}
+.up{color:var(--up);font-weight:700}
+.down{color:var(--down);font-weight:700}
+.ok{color:var(--up);font-weight:700}
+.bad{color:var(--down);font-weight:700}
+.pending{color:#d97706;font-weight:700}
+.empty{padding:18px 0;color:var(--muted)}
+.footer{margin-top:20px;font-size:12px;color:var(--muted);text-align:center}
+[data-theme="dark"] .panel,[data-theme="dark"] .stat,[data-theme="dark"] .size-pill{background:#000;border-color:var(--line);box-shadow:none}
+[data-theme="dark"] .principle-box,[data-theme="dark"] .principle-pill{background:#000;border-color:var(--line)}
+[data-theme="dark"] .hero-main{background:linear-gradient(140deg,rgba(245,158,11,.10),rgba(94,234,212,.06)),#0f172a}
+[data-theme="dark"] th,[data-theme="dark"] td{border-bottom-color:#263041}
+[data-theme="dark"] .horizon-pill{background:#020617;border-color:#334155}
+[data-theme="dark"] .horizon-pill.up-pill{background:rgba(22,163,74,.14);border-color:rgba(34,197,94,.28)}
+[data-theme="dark"] .horizon-pill.down-pill{background:rgba(220,38,38,.14);border-color:rgba(248,113,113,.28)}
+[data-theme="dark"] .horizon-pill.pending-pill{background:rgba(217,119,6,.14);border-color:rgba(251,191,36,.24)}
+[data-theme="dark"] .horizon-pill.nodata-pill{background:rgba(51,65,85,.45);border-color:#334155}
+[data-theme="dark"] .toolbar select,[data-theme="dark"] .toolbar button{background:#000;color:#f8fafc;border-color:#475569}
+@media (max-width:1100px){.hero,.stats{grid-template-columns:1fr}.horizon-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:1100px){.principle-card,.principle-points{grid-template-columns:1fr}}
+@media (max-width:980px){.menu{display:none}.wrap{padding:18px 12px 32px}.toolbar{flex-direction:column;align-items:stretch}}
+</style>
+</head>
+<body>
+<div class="nav">
+  <div class="nav-left">
+    <div class="brand">ETH Liquidation Map</div>
+    <div class="menu"><a href="/">&#28165;&#31639;&#28909;&#21306;</a><a href="/config">&#27169;&#22411;&#37197;&#32622;</a><a href="/monitor">&#38647;&#21306;&#30417;&#25511;</a><a href="/map">&#30424;&#21475;&#27719;&#24635;</a><a href="/liquidations">&#24378;&#24179;&#28165;&#31639;</a><a href="/bubbles">&#27668;&#27873;&#22270;</a><a href="/webdatasource">&#39029;&#38754;&#25968;&#25454;&#28304;</a><a href="/channel">&#28040;&#24687;&#36890;&#36947;</a><a href="/analysis">&#26085;&#20869;&#20998;&#26512;</a><a href="/analysis-backtest">&#21333;&#22240;&#23376;&#22238;&#27979;</a><a href="/analysis-backtest-liquidation">&#28165;&#31639;&#22238;&#27979;</a><a href="/analysis-backtest-2fa" class="active">&#21452;&#22240;&#23376;&#22238;&#27979;</a></div>
+  </div>
+    <div class="nav-right">
+    <div class="theme-toggle">
+      <button class="label" type="button">&#20027;&#39064;</button>
+      <button id="themeDark" type="button" onclick="setTheme('dark')">&#28145;&#33394;</button>
+      <button id="themeLight" type="button" onclick="setTheme('light')">&#27973;&#33394;</button>
+    </div>
+    <a href="/config">&#21319;&#32423;</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="hero">
+    <div class="panel hero-main">
+      <div class="small">双因子回测</div>
+      <h1>双因子回测</h1>
+      <div class="small">在基础方向信号之外，叠加信号所在 5m 成交量相对均量作为第二因子，比较放量、正常、缩量分组下的历史命中表现。</div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">总信号数</div><div class="v" id="totalSignals">-</div></div>
+      <div class="stat"><div class="k">已验证数</div><div class="v" id="verifiedHorizons">-</div></div>
+      <div class="stat"><div class="k">正确验证数</div><div class="v" id="correctHorizons">-</div></div>
+      <div class="stat"><div class="k">正确率</div><div class="v" id="correctSignals">-</div></div>
+      <div class="stat"><div class="k">待验证</div><div class="v" id="pendingSignals">-</div></div>
+      <div class="stat"><div class="k">第二因子</div><div class="v" id="factorName">全部</div></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="panel">
+      <h2>信号生成逻辑</h2>
+      <div class="principle-card">
+        <div class="principle-box">
+          <h3>先计算基础信号，再叠加第二因子</h3>
+          <p>页面先沿用单因子清算方向信号，再给每条信号追加成交量第二因子分组。基础信号来自 <code>1D / 7D / 30D</code> 清算快照变化，第二因子则根据信号所在 5m 成交量相对前 12 根均量进行分类。</p>
+        </div>
+        <div class="principle-points">
+          <div class="principle-pill">
+            <div class="k">第一步</div>
+            <div class="v">生成基础方向、置信度和信号价格。</div>
+          </div>
+          <div class="principle-pill">
+            <div class="k">第二步</div>
+            <div class="v">读取信号所在 5m 成交量，并与前 12 根 5m K 线平均成交量比较；比例 &gt;= 1.2 为放量，&lt; 0.8 为缩量，其余为正常。</div>
+          </div>
+          <div class="principle-pill">
+            <div class="k">第三步</div>
+            <div class="v">按当前第二因子和置信度阈值过滤信号。</div>
+          </div>
+          <div class="principle-pill">
+            <div class="k">当前规则</div>
+            <div class="v">放量 +8，正常不变，缩量 -8，最后再应用页面置信度筛选。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="panel">
+      <h2>多周期验证统计</h2>
+      <div class="stats horizon-stats" id="horizonStats">
+        <div class="stat"><div class="k">加载中</div><div class="v">-</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="panel">
+      <h2>按置信度分桶统计</h2>
+      <div class="small" id="confidenceBucketMeta">按当前第二因子统计全部置信度档位，方便直接比较不同分数段的历史表现。</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>置信度档位</th>
+              <th>成交量因子</th>
+              <th>信号数</th>
+              <th>已验证</th>
+              <th>正确</th>
+              <th>错误</th>
+              <th>待验证</th>
+              <th>无数据</th>
+              <th>正确率</th>
+            </tr>
+          </thead>
+          <tbody id="confidenceBucketBody">
+            <tr><td colspan="9" class="empty">加载中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="panel chart-panel">
+      <div class="toolbar">
+        <div class="toolbar-group">
+          <label for="strategySelect">策略模式</label>
+          <select id="strategySelect">
+            <option value="preferred" selected>优选组合</option>
+            <option value="all">全量</option>
+          </select>
+          <label for="intervalSelect">K线周期</label>
+          <select id="intervalSelect">
+            <option value="1m">1m</option>
+            <option value="5m" selected>5m</option>
+            <option value="15m">15m</option>
+            <option value="30m">30m</option>
+            <option value="1h">1h</option>
+            <option value="4h">4h</option>
+            <option value="8h">8h</option>
+            <option value="12h">12h</option>
+            <option value="24h">24h</option>
+            <option value="48h">48h</option>
+            <option value="72h">72h</option>
+          </select>
+          <label for="confMinSelect">置信度</label>
+          <select id="confMinSelect">
+            <option value="0">全部</option>
+            <option value="70">&gt;70</option>
+            <option value="80">&gt;80</option>
+            <option value="85">&gt;85</option>
+            <option value="90">&gt;90</option>
+          </select>
+          <button class="primary" type="button" id="reloadBtn">刷新图表</button>
+        </div>
+        <div class="toolbar-group">
+          <label for="factor2Select">第二因子</label>
+          <select id="factor2Select">
+            <option value="all">全部</option>
+          </select>
+          <button class="secondary" type="button" id="widthDownBtn">宽度 -</button>
+          <button class="secondary" type="button" id="widthUpBtn">宽度 +</button>
+          <button class="secondary" type="button" id="heightDownBtn">高度 -</button>
+          <button class="secondary" type="button" id="heightUpBtn">高度 +</button>
+          <button class="secondary" type="button" id="resetViewBtn">重置视图</button>
+          <span class="size-pill" id="sizeInfo">1600 x 620</span>
+        </div>
+      </div>
+
+      <h2>ETH 价格行情与方向箭头</h2>
+      <div class="chart-viewport" id="chartViewport">
+        <div class="canvas-wrap" id="canvasWrap">
+          <canvas id="chart" width="1600" height="620"></canvas>
+        </div>
+      </div>
+      <div class="legend small">
+        <div>支持 1m / 5m / 15m / 30m / 1h / 4h / 8h / 12h / 24h / 48h / 72h 周期切换。滚轮缩放，拖动平移，Shift + 滚轮单独调整价格高度。</div>
+        <div>
+          <span class="tag"><span class="dot" style="background:#16a34a"></span>向上信号</span>
+          <span class="tag" style="margin-left:12px"><span class="dot" style="background:#dc2626"></span>向下信号</span>
+        </div>
+      </div>
+      <div class="small meta-line" id="factorMeta">第二因子统计加载中...</div>
+      <div class="small meta-line" id="chartMeta">图表加载中...</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="panel">
+      <h2>历史方向记录</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>方向</th>
+              <th>置信度</th>
+              <th>第二因子</th>
+              <th>信号价</th>
+              <th>5m</th>
+              <th>15m</th>
+              <th>30m</th>
+              <th>1h</th>
+              <th>结论</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody">
+            <tr><td colspan="10" class="empty">加载中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer" id="footer">双因子回测加载中...</div>
+</div>
+
+<script>
+const DAY_MS=24*60*60*1000;
+const INTERVAL_CONFIG={
+  '1m':{label:'1m',source:'1m',bucketMs:60*1000,direct:true},
+  '5m':{label:'5m',source:'5m',bucketMs:5*60*1000,direct:true},
+  '15m':{label:'15m',source:'15m',bucketMs:15*60*1000,direct:true},
+  '30m':{label:'30m',source:'30m',bucketMs:30*60*1000,direct:true},
+  '1h':{label:'1h',source:'1h',bucketMs:60*60*1000,direct:true},
+  '4h':{label:'4h',source:'1h',bucketMs:4*60*60*1000,direct:false},
+  '8h':{label:'8h',source:'1h',bucketMs:8*60*60*1000,direct:false},
+  '12h':{label:'12h',source:'1h',bucketMs:12*60*60*1000,direct:false},
+  '24h':{label:'24h',source:'1h',bucketMs:24*60*60*1000,direct:false},
+  '48h':{label:'48h',source:'1h',bucketMs:48*60*60*1000,direct:false},
+  '72h':{label:'72h',source:'1h',bucketMs:72*60*60*1000,direct:false}
+};
+const state={
+  signals:[],
+  summary:{},
+  factorOptions:[],
+  secondFactor:'all',
+  horizonStats:[],
+  confidenceBuckets:[],
+  candles:[],
+  confMin:'0',
+  strategyMode:'preferred',
+  interval:'5m',
+  chartWidth:1600,
+  chartHeight:620,
+  manualSized:false,
+  viewStart:0,
+  viewCount:0,
+  yZoom:1,
+  yPan:0,
+  dragging:false,
+  dragLastX:0,
+  dragLastY:0,
+  chartSource:'-',
+  chartLoading:false,
+  loadSeq:0
+};
+
+function setTheme(t){
+  const theme=t==='dark'?'dark':'light';
+  document.documentElement.setAttribute('data-theme',theme);
+  try{localStorage.setItem('theme',theme);}catch(_){}
+  const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');
+  if(bd)bd.classList.toggle('active',theme==='dark');
+  if(bl)bl.classList.toggle('active',theme==='light');
+  draw();
+}
+function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';}catch(_){}setTheme(t);}
+function esc(s){return String(s==null?'':s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
+function fmtPrice(v){const n=Number(v||0);return isFinite(n)?n.toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1}):'-';}
+function fmtConfidence(v){const n=Number(v||0);return isFinite(n)?n.toFixed(1)+'%':'-';}
+function confidenceFilterLabel(v){const n=Number(v||0);return n>0?('>'+n):'全部';}
+function strategyLabel(v){return String(v||'')==='preferred'?'优选组合':'全量';}
+function normalizeStrategyMode(v){return String(v||'').trim()==='preferred'?'preferred':'all';}
+function fmtPct(v){const n=Number(v||0);return isFinite(n)?(n>=0?'+':'')+n.toFixed(2)+'%':'-';}
+function fmtDelta(v){const n=Number(v||0);return isFinite(n)?(n>=0?'+':'')+n.toFixed(1):'-';}
+function fmtTime(ts){const n=Number(ts||0);if(!n)return '-';return new Date(n).toLocaleString('zh-CN',{hour12:false});}
+function resultLabel(v){if(v==='correct')return ['正确','ok'];if(v==='wrong')return ['错误','bad'];if(v==='pending')return ['待验证','pending'];if(v==='no_data')return ['无数据','pending'];return [String(v||'-'),''];}
+function directionLabel(v){return v==='up'?'向上':'向下';}
+function factorLabel(v){if(v==='volume_spike')return '放量';if(v==='volume_normal')return '正常';if(v==='volume_low')return '缩量';if(v==='insufficient')return '样本不足';return '全部';}
+function normalizeSecondFactor(v){v=String(v||'').trim();if(v==='volume_spike'||v==='volume_normal'||v==='volume_low')return v;return 'all';}
+function filterSignalsBySecondFactor(signals,factor){
+  const rows=Array.isArray(signals)?signals:[];
+  const key=normalizeSecondFactor(factor);
+  if(key==='all')return rows.slice();
+  return rows.filter(sig=>String(sig&&sig.second_factor_key||'')===key);
+}
+function horizonByMin(sig,min){for(const h of (sig&&sig.horizons||[])){if(Number(h&&h.horizon_min||0)===min)return h;}return null;}
+function renderHorizonCell(sig,min){const h=horizonByMin(sig,min);if(!h)return '<div class="horizon-pill nodata-pill"><span class="pending">已截断</span><span class="meta">反向信号</span></div>';const res=resultLabel(h.result);if(h.result==='pending')return '<div class="horizon-pill pending-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';if(h.result==='no_data')return '<div class="horizon-pill nodata-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';const isCorrect=h.result==='correct';const cls=isCorrect?'ok':'bad';const pillCls=isCorrect?'up-pill':'down-pill';return '<div class="horizon-pill '+pillCls+'"><span class="price">'+fmtPrice(h.verify_close_price)+'</span><span class="meta '+cls+'">'+fmtDelta(h.delta_price)+' / '+fmtPct(h.delta_pct)+'</span></div>';}
+function clamp(v,min,max){return Math.max(min,Math.min(max,v));}
+function uniqByTS(rows){const out=[];const seen=new Set();for(const row of rows){const ts=Number(row.ts||0);if(!ts||seen.has(ts))continue;seen.add(ts);out.push(row);}return out.sort((a,b)=>Number(a.ts||0)-Number(b.ts||0));}
+function parseRows(rows){
+  const out=[];
+  for(const row of (rows||[])){
+    if(!Array.isArray(row)||row.length<5)continue;
+    const ts=Number(row[0]||0),o=Number(row[1]||0),h=Number(row[2]||0),l=Number(row[3]||0),c=Number(row[4]||0);
+    if(!ts||![o,h,l,c].every(Number.isFinite))continue;
+    out.push({ts,o,h,l,c});
+  }
+  return uniqByTS(out);
+}
+function parseCandleMaps(rows){
+  const out=[];
+  for(const row of (rows||[])){
+    if(!row||typeof row!=='object')continue;
+    const ts=Number(row.ts||0),o=Number(row.o||0),h=Number(row.h||0),l=Number(row.l||0),c=Number(row.c||0);
+    if(!ts||![o,h,l,c].every(Number.isFinite))continue;
+    out.push({ts,o,h,l,c});
+  }
+  return uniqByTS(out);
+}
+function bucketStart(ts,ms){return ms>0?Math.floor(Number(ts||0)/ms)*ms:Number(ts||0);}
+function aggregateCandles(rows,ms){
+  if(!ms||!Array.isArray(rows)||!rows.length)return [];
+  const out=[];
+  let current=null;
+  for(const row of rows){
+    const b=bucketStart(row.ts,ms);
+    if(!current||current.ts!==b){
+      if(current)out.push(current);
+      current={ts:b,o:row.o,h:row.h,l:row.l,c:row.c};
+      continue;
+    }
+    current.h=Math.max(current.h,row.h);
+    current.l=Math.min(current.l,row.l);
+    current.c=row.c;
+  }
+  if(current)out.push(current);
+  return out;
+}
+async function fetchKlineBatch(interval,limit,startTS,endTS){
+  const params=new URLSearchParams({interval,limit:String(limit)});
+  if(startTS>0)params.set('start_ts',String(startTS));
+  if(endTS>0)params.set('end_ts',String(endTS));
+  const r=await fetch('/api/klines?'+params.toString());
+  if(!r.ok)throw new Error(await r.text().catch(()=>('HTTP '+r.status)));
+  const d=await r.json();
+  return {rows:parseRows(d.rows||[]),source:d.source||interval};
+}
+async function fetchRangeRows(interval,startTS,endTS,targetCount){
+  let combined=[];
+  let cursorEnd=endTS;
+  let source='-';
+  for(let i=0;i<6;i++){
+    const remaining=Math.max(0,targetCount-combined.length);
+    const limit=Math.max(50,Math.min(1000,remaining+40));
+    const batch=await fetchKlineBatch(interval,limit,startTS,cursorEnd);
+    source=batch.source||source;
+    if(!batch.rows.length)break;
+    combined=uniqByTS(batch.rows.concat(combined));
+    const oldest=Number(batch.rows[0].ts||0);
+    if(oldest<=startTS||batch.rows.length<limit)break;
+    cursorEnd=oldest-1;
+  }
+  return {rows:combined.filter(row=>row.ts>=startTS&&row.ts<=endTS),source};
+}
+async function loadChartCandles(){
+  state.chartLoading=true;
+  const meta=document.getElementById('chartMeta');
+  meta.textContent='图表加载中...';
+  draw();
+  const cfg=INTERVAL_CONFIG[state.interval]||INTERVAL_CONFIG['5m'];
+  const endTS=Date.now();
+  const startTS=endTS-DAY_MS;
+  const targetCount=Math.ceil((endTS-startTS)/cfg.bucketMs)+8;
+  const base=await fetchRangeRows(cfg.source,startTS,endTS,targetCount);
+  let chartRows=base.rows;
+  if(!cfg.direct)chartRows=aggregateCandles(base.rows,cfg.bucketMs);
+  chartRows=chartRows.filter(row=>row.ts<=endTS&&row.ts>=startTS-cfg.bucketMs);
+  state.candles=chartRows;
+  state.chartSource=base.source;
+  state.viewStart=0;
+  state.viewCount=Math.max(1,chartRows.length||0);
+  state.yZoom=1;
+  state.yPan=0;
+  state.chartLoading=false;
+  updateChartMeta();
+  draw();
+}
+function updateChartMeta(){
+  const cfg=INTERVAL_CONFIG[state.interval]||INTERVAL_CONFIG['5m'];
+  const size=document.getElementById('sizeInfo');
+  if(size)size.textContent=state.chartWidth+' x '+state.chartHeight;
+  const meta=document.getElementById('chartMeta');
+  const count=state.candles.length;
+  const visible=count?Math.min(state.viewCount,count):0;
+  meta.textContent='Last 24h price chart | Interval '+cfg.label+' | Source '+state.chartSource+' | Total K '+count+' | Visible '+visible;
+}
+function syncChartWidthToViewport(force){
+  const viewport=document.getElementById('chartViewport');
+  if(!viewport)return;
+  const available=Math.max(900,Math.floor(viewport.clientWidth-26));
+  if(force||!state.manualSized||state.chartWidth<available){
+    state.chartWidth=available;
+  }
+}
+function applyCanvasSize(){
+  syncChartWidthToViewport(false);
+  const c=document.getElementById('chart');
+  c.style.width=state.chartWidth+'px';
+  c.style.height=state.chartHeight+'px';
+  updateChartMeta();
+}
+function fit(){
+  applyCanvasSize();
+  const c=document.getElementById('chart');
+  const rect=c.getBoundingClientRect();
+  const dpr=window.devicePixelRatio||1;
+  const w=Math.max(720,Math.floor(rect.width));
+  const h=Math.max(420,Math.floor(rect.height));
+  c.width=Math.floor(w*dpr);
+  c.height=Math.floor(h*dpr);
+  const x=c.getContext('2d');
+  x.setTransform(dpr,0,0,dpr,0,0);
+  return {c,x,w,h};
+}
+function bgColor(){return document.documentElement.getAttribute('data-theme')==='dark'?'#05080d':'#ffffff';}
+function textColor(){return document.documentElement.getAttribute('data-theme')==='dark'?'#e2e8f0':'#172033';}
+function mutedColor(){return document.documentElement.getAttribute('data-theme')==='dark'?'#94a3b8':'#63708a';}
+function gridColor(){return document.documentElement.getAttribute('data-theme')==='dark'?'rgba(255,255,255,.16)':'rgba(23,32,51,.12)';}
+function drawArrow(x,y,dir,color,ctx){
+  ctx.save();
+  ctx.strokeStyle=color;
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  if(dir==='up'){
+    ctx.moveTo(x,y+16);ctx.lineTo(x,y-7);
+    ctx.moveTo(x-6,y+2);ctx.lineTo(x,y-7);ctx.lineTo(x+6,y+2);
+  }else{
+    ctx.moveTo(x,y-16);ctx.lineTo(x,y+7);
+    ctx.moveTo(x-6,y-2);ctx.lineTo(x,y+7);ctx.lineTo(x+6,y-2);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+function draw(){
+  const v=fit(),ctx=v.x,W=v.w,H=v.h,padL=78,padR=22,padT=18,padB=54;
+  const canvasWrap=document.getElementById('canvasWrap');
+  canvasWrap.classList.toggle('grabbing',state.dragging);
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle=bgColor();
+  ctx.fillRect(0,0,W,H);
+  ctx.font='12px sans-serif';
+  if(state.chartLoading){
+    ctx.fillStyle=textColor();
+    ctx.fillText('图表加载中...',20,30);
+    return;
+  }
+  if(!state.candles.length){
+    ctx.fillStyle=textColor();
+    ctx.fillText('No K data',20,30);
+    return;
+  }
+  const total=state.candles.length;
+  const viewCount=clamp(Math.round(state.viewCount||total),1,total);
+  const viewStart=clamp(Math.round(state.viewStart||0),0,Math.max(0,total-viewCount));
+  state.viewCount=viewCount;
+  state.viewStart=viewStart;
+  const view=state.candles.slice(viewStart,viewStart+viewCount);
+  const pw=W-padL-padR,ph=H-padT-padB;
+  const rawMin=Math.min(...view.map(v=>Number(v.l||0)));
+  const rawMax=Math.max(...view.map(v=>Number(v.h||0)));
+  const rawSpan=Math.max(1e-6,rawMax-rawMin);
+  const span=Math.max(rawSpan/Math.max(.2,state.yZoom),1e-6);
+  const center=(rawMax+rawMin)/2+state.yPan;
+  const minP=center-span/2;
+  const maxP=center+span/2;
+  const sx=i=>padL+(i/Math.max(1,view.length-1))*pw;
+  const sy=p=>padT+((maxP-p)/Math.max(1e-6,maxP-minP))*ph;
+
+  ctx.strokeStyle=gridColor();
+  ctx.lineWidth=1;
+  for(let i=0;i<=6;i++){
+    const y=padT+(ph*i/6);
+    ctx.beginPath();ctx.moveTo(padL,y);ctx.lineTo(W-padR,y);ctx.stroke();
+    const price=maxP-((maxP-minP)*i/6);
+    ctx.fillStyle=mutedColor();
+    ctx.fillText(fmtPrice(price),8,y+4);
+  }
+  for(let i=0;i<=8;i++){
+    const x=padL+(pw*i/8);
+    ctx.beginPath();ctx.moveTo(x,padT);ctx.lineTo(x,H-padB);ctx.stroke();
+  }
+
+  const bodyW=Math.max(3,Math.min(16,pw/Math.max(18,view.length)));
+  for(let i=0;i<view.length;i++){
+    const c=view[i],x=sx(i),o=Number(c.o||0),h=Number(c.h||0),l=Number(c.l||0),close=Number(c.c||0),up=close>=o;
+    ctx.strokeStyle=up?'#22c55e':'#f87171';
+    ctx.beginPath();ctx.moveTo(x,sy(h));ctx.lineTo(x,sy(l));ctx.stroke();
+    ctx.fillStyle=up?'rgba(34,197,94,.82)':'rgba(248,113,113,.82)';
+    ctx.fillRect(x-bodyW/2,Math.min(sy(o),sy(close)),bodyW,Math.max(1,Math.abs(sy(close)-sy(o))));
+  }
+
+  const cfg=INTERVAL_CONFIG[state.interval]||INTERVAL_CONFIG['5m'];
+  const candleIndexByTS={};
+  view.forEach((c,idx)=>{candleIndexByTS[String(Number(c.ts||0))]=idx;});
+  for(const sig of state.signals){
+    const bucket=bucketStart(Number(sig.signal_ts||0),cfg.bucketMs);
+    const idx=candleIndexByTS[String(bucket)];
+    if(idx==null)continue;
+    const c=view[idx],x=sx(idx);
+    if(sig.direction==='up')drawArrow(x,sy(Number(c.l||0))+18,'up','#16a34a',ctx);
+    if(sig.direction==='down')drawArrow(x,sy(Number(c.h||0))-18,'down','#dc2626',ctx);
+  }
+
+  const labelCount=Math.min(6,Math.max(2,view.length));
+  for(let i=0;i<labelCount;i++){
+    const idx=Math.round((view.length-1)*(labelCount===1?0:(i/(labelCount-1))));
+    const x=sx(idx);
+    const text=new Date(Number(view[idx].ts||0)).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
+    ctx.fillStyle=textColor();
+    ctx.fillText(text,Math.max(padL,Math.min(x-34,W-padR-82)),H-10);
+  }
+}
+function renderHistory(){
+  const body=document.getElementById('historyBody');
+  if(!state.signals.length){
+    body.innerHTML='<tr><td colspan="10" class="empty">当前筛选条件下暂无符合要求的双因子回测信号</td></tr>';
+    return;
+  }
+  body.innerHTML=state.signals.slice().sort((a,b)=>Number(b.signal_ts||0)-Number(a.signal_ts||0)).map(sig=>{
+    const dirCls=sig.direction==='up'?'up':'down';
+    return '<tr>'
+      +'<td>'+fmtTime(sig.signal_ts)+'</td>'
+      +'<td class="'+dirCls+'">'+directionLabel(sig.direction)+'</td>'
+      +'<td>'+fmtConfidence(sig.confidence)+'</td>'
+      +'<td>'+esc(sig.second_factor_label||factorLabel(sig.second_factor_key))+'</td>'
+      +'<td>'+fmtPrice(sig.signal_price)+'</td>'
+      +'<td class="horizon-cell">'+renderHorizonCell(sig,5)+'</td>'
+      +'<td class="horizon-cell">'+renderHorizonCell(sig,15)+'</td>'
+      +'<td class="horizon-cell">'+renderHorizonCell(sig,30)+'</td>'
+      +'<td class="horizon-cell">'+renderHorizonCell(sig,60)+'</td>'
+      +'<td>'+esc(sig.headline||sig.summary||'-')+'</td>'
+      +'</tr>';
+  }).join('');
+}
+function renderFactorOptions(options,selected){
+  state.factorOptions=Array.isArray(options)?options:[];
+  state.secondFactor=normalizeSecondFactor(selected||state.secondFactor||'all');
+  const select=document.getElementById('factor2Select');
+  if(select){
+    select.innerHTML=state.factorOptions.map(opt=>'<option value="'+esc(opt.key)+'">'+esc(opt.label)+' ('+Number(opt.total_signals||0)+')</option>').join('');
+    if(!select.innerHTML)select.innerHTML='<option value="all">全部</option>';
+    select.value=state.secondFactor;
+  }
+  const current=state.factorOptions.find(opt=>String(opt.key||'')===String(state.secondFactor||''));
+  const factorName=document.getElementById('factorName');
+  if(factorName)factorName.textContent=current&&current.label?current.label:factorLabel(state.secondFactor);
+  const factorMeta=document.getElementById('factorMeta');
+  if(factorMeta){
+    factorMeta.textContent=state.factorOptions.map(opt=>{
+      const total=Number(opt.total_signals||0);
+      const rate=Number(opt.correct_rate||0).toFixed(1);
+      return String(opt.label||factorLabel(opt.key))+': '+total+' 条 / '+rate+'%';
+    }).join(' | ');
+  }
+}
+function renderStrategyMeta(d){
+  state.strategyMode=normalizeStrategyMode(d&&d.strategy_mode||state.strategyMode||'preferred');
+  const select=document.getElementById('strategySelect');
+  if(select)select.value=state.strategyMode;
+  const meta=document.getElementById('factorMeta');
+  if(!meta)return;
+  const groups=Array.isArray(d&&d.strategy_groups)?d.strategy_groups:[];
+  if(state.strategyMode!=='preferred'){
+    meta.textContent='策略模式 全量 | '+meta.textContent;
+    return;
+  }
+  if(!d||!d.strategy_active){
+    meta.textContent='策略模式 优选组合未启用：暂无满足样本下限的优选组合，当前回退显示全量 | '+meta.textContent;
+    return;
+  }
+  const selected=groups.filter(g=>g&&g.selected).slice(0,4).map(g=>{
+    return factorLabel(g.factor_key)+' '+String(g.label||'-')+' 5m '+Number(g.five_minute_correct_rate||0).toFixed(1)+'% / 综合 '+Number(g.composite_score||0).toFixed(1)+'%';
+  });
+  meta.textContent='策略模式 优选组合已启用'+(selected.length?(' | 入选 '+selected.join('； ')):'')+' | '+meta.textContent;
+}
+const BACKTEST_HORIZON_MINS=[5,15,30,60];
+function backtestResultCounts(target,result){
+  switch(String(result||'')){
+    case 'correct': target.correct_count++; break;
+    case 'wrong': target.wrong_count++; break;
+    case 'pending': target.pending_count++; break;
+    case 'no_data': target.no_data_count++; break;
+  }
+}
+function backtestCorrectRate(correct,wrong){const verified=Number(correct||0)+Number(wrong||0);return verified>0?Math.round((Number(correct||0)/verified)*1000)/10:0;}
+function buildSummaryFromSignals(signals){
+  const rows=Array.isArray(signals)?signals:[];
+  const out={total_signals:rows.length,correct_count:0,wrong_count:0,pending_count:0,no_data_count:0,correct_rate:0,verified_horizon_count:0,correct_horizon_count:0,horizon_correct_rate:0};
+  for(const sig of rows){
+    backtestResultCounts(out,sig&&sig.result);
+    for(const h of (Array.isArray(sig&&sig.horizons)?sig.horizons:[])){
+      const result=String(h&&h.result||'');
+      if(result==='correct'||result==='wrong')out.verified_horizon_count++;
+      if(result==='correct')out.correct_horizon_count++;
+    }
+  }
+  out.correct_rate=backtestCorrectRate(out.correct_count,out.wrong_count);
+  out.horizon_correct_rate=out.verified_horizon_count>0?Math.round((out.correct_horizon_count/out.verified_horizon_count)*1000)/10:0;
+  return out;
+}
+function buildHorizonStatsFromSignals(signals){
+  const rows=Array.isArray(signals)?signals:[];
+  return BACKTEST_HORIZON_MINS.map(min=>{
+    const out={horizon_min:min,label:min===60?'1h':(min+'m'),total_signals:0,correct_count:0,wrong_count:0,pending_count:0,no_data_count:0,correct_rate:0};
+    for(const sig of rows){
+      const h=horizonByMin(sig,min);
+      if(!h)continue;
+      out.total_signals++;
+      backtestResultCounts(out,h.result);
+    }
+    out.correct_rate=backtestCorrectRate(out.correct_count,out.wrong_count);
+    return out;
+  });
+}
+function renderSummary(summary){
+  state.summary=summary||{};
+  document.getElementById('totalSignals').textContent=String(summary.total_signals||0);
+  document.getElementById('verifiedHorizons').textContent=String(summary.verified_horizon_count||0);
+  document.getElementById('correctHorizons').textContent=String(summary.correct_horizon_count||0);
+  document.getElementById('correctSignals').textContent=Number(summary.horizon_correct_rate||0).toFixed(1)+'%';
+  document.getElementById('pendingSignals').textContent=String(summary.pending_count||0);
+}
+function renderHorizonStats(stats){
+  state.horizonStats=Array.isArray(stats)?stats:[];
+  const root=document.getElementById('horizonStats');
+  if(!root)return;
+  if(!state.horizonStats.length){
+    root.innerHTML='<div class="stat"><div class="k">暂无统计</div><div class="v">-</div></div>';
+    return;
+  }
+  root.innerHTML=state.horizonStats.map(stat=>{
+    const label=String(stat.label||((Number(stat.horizon_min||0)===60)?'1h':(String(stat.horizon_min||0)+'m')));
+    const total=Number(stat.total_signals||0);
+    const rate=Number(stat.correct_rate||0).toFixed(1)+'%';
+    const verified=Number(stat.correct_count||0)+Number(stat.wrong_count||0);
+    return '<div class="stat"><div class="k">'+esc(label)+' 收盘判断</div><div class="v">'+rate+'</div><div class="small">样本 '+total+' | 已验证 '+verified+' | 待验证 '+Number(stat.pending_count||0)+'</div></div>';
+  }).join('');
+}
+function renderConfidenceBuckets(rows,selectedFactor){
+  state.confidenceBuckets=Array.isArray(rows)?rows:[];
+  const body=document.getElementById('confidenceBucketBody');
+  const meta=document.getElementById('confidenceBucketMeta');
+  const factor=normalizeSecondFactor(selectedFactor||state.secondFactor||'all');
+  if(meta){
+    meta.textContent='当前第二因子 '+factorLabel(factor)+' 的置信度分桶统计；切换第二因子会重新统计这张表。';
+  }
+  if(!body)return;
+  if(!state.confidenceBuckets.length){
+    body.innerHTML='<tr><td colspan="9" class="empty">当前条件下暂无可统计的置信度分桶样本</td></tr>';
+    return;
+  }
+  body.innerHTML=state.confidenceBuckets.map(bucket=>{
+    const total=Number(bucket.total_signals||0);
+    const correct=Number(bucket.correct_count||0);
+    const wrong=Number(bucket.wrong_count||0);
+    const pending=Number(bucket.pending_count||0);
+    const noData=Number(bucket.no_data_count||0);
+    const verified=correct+wrong;
+    return '<tr>'
+      +'<td>'+esc(bucket.label||'-')+'</td>'
+      +'<td>'+esc(factorLabel(factor))+'</td>'
+      +'<td>'+total+'</td>'
+      +'<td>'+verified+'</td>'
+      +'<td class="ok">'+correct+'</td>'
+      +'<td class="bad">'+wrong+'</td>'
+      +'<td class="pending">'+pending+'</td>'
+      +'<td>'+noData+'</td>'
+      +'<td>'+(verified>0?(Number(bucket.correct_rate||0).toFixed(1)+'%'):'-')+'</td>'
+      +'</tr>';
+  }).join('');
+}
+function renderBacktestViews(){
+  renderSummary(buildSummaryFromSignals(state.signals));
+  renderHorizonStats(buildHorizonStatsFromSignals(state.signals));
+  renderHistory();
+  updateChartMeta();
+  draw();
+}
+function applyBacktestData(d,selectedFactor){
+  const factor=normalizeSecondFactor(selectedFactor||d.selected_factor||state.secondFactor||'all');
+  state.signals=filterSignalsBySecondFactor(d.signals||[],factor);
+  state.candles=parseCandleMaps(d.candles||[]);
+  state.chartSource=d.chart_source||'-';
+  if(d.chart_interval)state.interval=String(d.chart_interval);
+  const confMinSelect=document.getElementById('confMinSelect');
+  if(confMinSelect)confMinSelect.value=String(state.confMin||'0');
+  const intervalSelect=document.getElementById('intervalSelect');
+  if(intervalSelect)intervalSelect.value=state.interval;
+  state.chartLoading=false;
+  state.viewStart=0;
+  state.viewCount=Math.max(1,state.candles.length||0);
+  state.yZoom=1;
+  state.yPan=0;
+  renderFactorOptions(d.factor_options||[],factor);
+  renderStrategyMeta(d);
+  renderConfidenceBuckets(d.confidence_buckets||[],factor);
+  renderBacktestViews();
+}
+async function loadSignals(){
+  const seq=++state.loadSeq;
+  const requestedFactor=normalizeSecondFactor(state.secondFactor||'all');
+  const requestedStrategy=normalizeStrategyMode(state.strategyMode||'preferred');
+  state.chartLoading=true;
+  const bucketBody=document.getElementById('confidenceBucketBody');
+  if(bucketBody)bucketBody.innerHTML='<tr><td colspan="9" class="empty">统计刷新中...</td></tr>';
+  const bucketMeta=document.getElementById('confidenceBucketMeta');
+  if(bucketMeta)bucketMeta.textContent='正在按当前筛选重新统计置信度分桶...';
+  draw();
+  const params=new URLSearchParams({hours:'24',interval:String(state.interval||'5m'),factor2:requestedFactor,conf_min:String(state.confMin||'0'),strategy:requestedStrategy,_:String(Date.now())});
+  const r=await fetch('/api/analysis-backtest-2fa?'+params.toString(),{cache:'no-store'}).catch(()=>null);
+  if(!r)throw new Error('无法连接 /api/analysis-backtest-2fa');
+  if(!r.ok)throw new Error(await r.text().catch(()=>('HTTP '+r.status)));
+  const d=await r.json().catch(()=>null);
+  if(!d)throw new Error('回测接口返回了无法解析的 JSON');
+  if(seq!==state.loadSeq)return false;
+  applyBacktestData(d,requestedFactor);
+  return true;
+}
+function resetViewState(){
+  state.viewStart=0;
+  state.viewCount=Math.max(1,state.candles.length||0);
+  state.yZoom=1;
+  state.yPan=0;
+  updateChartMeta();
+  draw();
+}
+function adjustChartSize(type,delta){
+  state.manualSized=true;
+  if(type==='width')state.chartWidth=clamp(state.chartWidth+delta,900,3600);
+  if(type==='height')state.chartHeight=clamp(state.chartHeight+delta,420,1400);
+  applyCanvasSize();
+  draw();
+}
+function bindControls(){
+  document.getElementById('intervalSelect').addEventListener('change',async e=>{
+    state.interval=String(e.target.value||'5m');
+    await reloadAll();
+  });
+  document.getElementById('confMinSelect').addEventListener('change',async e=>{
+    state.confMin=String(e.target.value||'0');
+    await reloadAll();
+  });
+  document.getElementById('strategySelect').addEventListener('change',async e=>{
+    state.strategyMode=normalizeStrategyMode(e.target.value||'preferred');
+    await reloadAll();
+  });
+  const factorSelect=document.getElementById('factor2Select');
+  const handleFactorChange=async e=>{
+    state.secondFactor=normalizeSecondFactor(e.target.value||'all');
+    await reloadAll();
+  };
+  factorSelect.addEventListener('change',handleFactorChange);
+  factorSelect.addEventListener('input',handleFactorChange);
+  document.getElementById('reloadBtn').addEventListener('click',reloadAll);
+  document.getElementById('widthDownBtn').addEventListener('click',()=>adjustChartSize('width',-180));
+  document.getElementById('widthUpBtn').addEventListener('click',()=>adjustChartSize('width',180));
+  document.getElementById('heightDownBtn').addEventListener('click',()=>adjustChartSize('height',-80));
+  document.getElementById('heightUpBtn').addEventListener('click',()=>adjustChartSize('height',80));
+  document.getElementById('resetViewBtn').addEventListener('click',()=>{
+    state.manualSized=false;
+    syncChartWidthToViewport(true);
+    resetViewState();
+  });
+}
+async function reloadChartOnly(){
+  try{
+    const applied=await loadSignals();
+    if(!applied)return;
+    document.getElementById('footer').textContent='策略 '+strategyLabel(state.strategyMode)+' | 因子 '+factorLabel(state.secondFactor)+' | 置信度 '+confidenceFilterLabel(state.confMin)+' | 周期 '+state.interval+' | 信号 '+state.signals.length+' | K线 '+state.candles.length;
+  }catch(err){
+    state.chartLoading=false;
+    state.candles=[];
+    draw();
+    document.getElementById('chartMeta').textContent='图表加载失败: '+String(err&&err.message||err||'未知错误');
+    document.getElementById('footer').textContent='图表加载失败';
+  }
+}
+async function reloadAll(){
+  try{
+    document.getElementById('footer').textContent='加载中...';
+    const applied=await loadSignals();
+    if(!applied)return;
+    document.getElementById('footer').textContent='策略 '+strategyLabel(state.strategyMode)+' | 因子 '+factorLabel(state.secondFactor)+' | 置信度 '+confidenceFilterLabel(state.confMin)+' | 近24小时信号 '+state.signals.length+' | 周期 '+state.interval+' | K线 '+state.candles.length;
+  }catch(err){
+    state.chartLoading=false;
+    document.getElementById('footer').textContent=String(err&&err.message||err||'加载失败');
+    draw();
+  }
+}
+function bindChartInteractions(){
+  const c=document.getElementById('chart');
+  c.addEventListener('wheel',e=>{
+    if(!state.candles.length)return;
+    e.preventDefault();
+    if(e.shiftKey){
+      const factor=e.deltaY<0?1.12:0.88;
+      state.yZoom=clamp(state.yZoom*factor,.5,12);
+      draw();
+      return;
+    }
+    const rect=c.getBoundingClientRect();
+    const ratio=clamp((e.clientX-rect.left-78)/Math.max(1,rect.width-100),0,1);
+    const anchor=state.viewStart+Math.round((state.viewCount-1)*ratio);
+    const nextCount=clamp(Math.round(state.viewCount*(e.deltaY<0?0.86:1.16)),1,state.candles.length);
+    state.viewCount=nextCount;
+    state.viewStart=clamp(anchor-Math.round((nextCount-1)*ratio),0,Math.max(0,state.candles.length-nextCount));
+    updateChartMeta();
+    draw();
+  },{passive:false});
+  c.addEventListener('mousedown',e=>{
+    if(!state.candles.length)return;
+    state.dragging=true;
+    state.dragLastX=e.clientX;
+    state.dragLastY=e.clientY;
+    draw();
+  });
+  window.addEventListener('mouseup',()=>{
+    if(!state.dragging)return;
+    state.dragging=false;
+    draw();
+  });
+  window.addEventListener('mousemove',e=>{
+    if(!state.dragging||!state.candles.length)return;
+    const dx=e.clientX-state.dragLastX;
+    const dy=e.clientY-state.dragLastY;
+    state.dragLastX=e.clientX;
+    state.dragLastY=e.clientY;
+    const pxPerCandle=Math.max(4,(state.chartWidth-100)/Math.max(1,state.viewCount-1));
+    const shift=Math.round(-dx/pxPerCandle);
+    if(shift!==0){
+      state.viewStart=clamp(state.viewStart+shift,0,Math.max(0,state.candles.length-state.viewCount));
+    }
+    const view=state.candles.slice(state.viewStart,state.viewStart+state.viewCount);
+    if(view.length){
+      const rawMin=Math.min(...view.map(v=>Number(v.l||0)));
+      const rawMax=Math.max(...view.map(v=>Number(v.h||0)));
+      const span=Math.max((rawMax-rawMin)/Math.max(.2,state.yZoom),1e-6);
+      state.yPan+=dy/Math.max(100,state.chartHeight-72)*span;
+    }
+    updateChartMeta();
+    draw();
+  });
+}
+
+initTheme();
+bindControls();
+bindChartInteractions();
+syncChartWidthToViewport(true);
+applyCanvasSize();
+window.addEventListener('resize',()=>{syncChartWidthToViewport(false);draw();});
+reloadAll();
+</script>
+</body>
+</html>
+
