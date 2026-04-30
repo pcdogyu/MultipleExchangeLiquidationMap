@@ -12,6 +12,9 @@ server.log
 *.log
 *.disabled
 *test*
+!*_test.go
+!internal/core/analysis_backtest_service.go
+!internal/shared/pages/files/analysis_backtest_liquidation_page.html
 
 # certificates / keys
 pem/

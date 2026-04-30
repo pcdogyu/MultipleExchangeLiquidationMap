@@ -17,8 +17,16 @@ func (s *analysisModuleAdapter) AnalysisSnapshot() (liqmap.AnalysisSnapshot, err
 	return s.app.BuildAnalysisSnapshot()
 }
 
-func (s *analysisModuleAdapter) AnalysisBacktest(hours int, minConfidence float64, horizons []int) (liqmap.AnalysisBacktestPageResponse, error) {
-	return s.app.AnalysisBacktest(hours, minConfidence, horizons)
+func (s *analysisModuleAdapter) AnalysisBacktest(hours int, interval string, minConfidence float64, qualityMode string, noiseStrategy string) (liqmap.AnalysisBacktestPageResponse, error) {
+	return s.app.AnalysisBacktest(hours, interval, minConfidence, qualityMode, noiseStrategy)
+}
+
+func (s *analysisModuleAdapter) AnalysisBacktestLiquidation(hours int, interval string, minConfidence float64) (liqmap.AnalysisBacktestPageResponse, error) {
+	return s.app.AnalysisBacktestLiquidation(hours, interval, minConfidence)
+}
+
+func (s *analysisModuleAdapter) AnalysisBacktest2FA(hours int, interval string, factor string, minConfidence float64, strategy string) (liqmap.AnalysisBacktest2FAResponse, error) {
+	return s.app.AnalysisBacktest2FA(hours, interval, factor, minConfidence, strategy)
 }
 
 func (s *analysisModuleAdapter) AnalysisBacktestHistory(limit, page int) (liqmap.AnalysisBacktestHistoryResponse, error) {

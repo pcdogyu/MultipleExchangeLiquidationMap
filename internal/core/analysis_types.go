@@ -104,6 +104,7 @@ type AnalysisSignalRecord struct {
 	Symbol            string  `json:"symbol"`
 	SourceGroup       int     `json:"source_group"`
 	Direction         string  `json:"direction"`
+	Confidence        float64 `json:"confidence"`
 	SignalPrice       float64 `json:"signal_price"`
 	AnalysisGenerated int64   `json:"analysis_generated_at"`
 	Headline          string  `json:"headline"`
@@ -112,21 +113,37 @@ type AnalysisSignalRecord struct {
 }
 
 type AnalysisSignalResult struct {
-	ID                int64   `json:"id"`
-	SignalTS          int64   `json:"signal_ts"`
-	Symbol            string  `json:"symbol"`
-	SourceGroup       int     `json:"source_group"`
-	Direction         string  `json:"direction"`
-	SignalPrice       float64 `json:"signal_price"`
-	AnalysisGenerated int64   `json:"analysis_generated_at"`
-	Headline          string  `json:"headline"`
-	Summary           string  `json:"summary"`
-	VerifyHorizonMin  int     `json:"verify_horizon_min"`
-	VerifyDueTS       int64   `json:"verify_due_ts"`
-	VerifyClosePrice  float64 `json:"verify_close_price,omitempty"`
-	Result            string  `json:"result"`
-	DeltaPrice        float64 `json:"delta_price,omitempty"`
-	DeltaPct          float64 `json:"delta_pct,omitempty"`
+	ID                int64                         `json:"id"`
+	SignalTS          int64                         `json:"signal_ts"`
+	Symbol            string                        `json:"symbol"`
+	SourceGroup       int                           `json:"source_group"`
+	Direction         string                        `json:"direction"`
+	Confidence        float64                       `json:"confidence"`
+	SignalPrice       float64                       `json:"signal_price"`
+	AnalysisGenerated int64                         `json:"analysis_generated_at"`
+	Headline          string                        `json:"headline"`
+	Summary           string                        `json:"summary"`
+	VerifyHorizonMin  int                           `json:"verify_horizon_min"`
+	SecondFactorKey   string                        `json:"second_factor_key,omitempty"`
+	SecondFactorLabel string                        `json:"second_factor_label,omitempty"`
+	PersistenceScore  float64                       `json:"persistence_score,omitempty"`
+	PersistenceLabel  string                        `json:"persistence_label,omitempty"`
+	PersistenceReason string                        `json:"persistence_reason,omitempty"`
+	VerifyDueTS       int64                         `json:"verify_due_ts"`
+	VerifyClosePrice  float64                       `json:"verify_close_price,omitempty"`
+	Result            string                        `json:"result"`
+	DeltaPrice        float64                       `json:"delta_price,omitempty"`
+	DeltaPct          float64                       `json:"delta_pct,omitempty"`
+	Horizons          []AnalysisSignalHorizonResult `json:"horizons,omitempty"`
+}
+
+type AnalysisSignalHorizonResult struct {
+	HorizonMin       int     `json:"horizon_min"`
+	VerifyDueTS      int64   `json:"verify_due_ts"`
+	VerifyClosePrice float64 `json:"verify_close_price,omitempty"`
+	Result           string  `json:"result"`
+	DeltaPrice       float64 `json:"delta_price,omitempty"`
+	DeltaPct         float64 `json:"delta_pct,omitempty"`
 }
 
 type AnalysisBacktestSummary struct {
@@ -139,67 +156,98 @@ type AnalysisBacktestSummary struct {
 	CorrectRate  float64 `json:"correct_rate"`
 }
 
-type AnalysisBacktestFilters struct {
-	RequestedHours int     `json:"requested_hours"`
-	WindowHours    int     `json:"window_hours"`
-	MinConfidence  float64 `json:"min_confidence"`
-	Horizons       []int   `json:"horizons"`
-	DataStartTS    int64   `json:"data_start_ts"`
-	DataEndTS      int64   `json:"data_end_ts"`
+type AnalysisBacktestHorizonStat struct {
+	HorizonMin   int     `json:"horizon_min"`
+	Label        string  `json:"label"`
+	TotalSignals int     `json:"total_signals"`
+	CorrectCount int     `json:"correct_count"`
+	WrongCount   int     `json:"wrong_count"`
+	PendingCount int     `json:"pending_count"`
+	NoDataCount  int     `json:"no_data_count"`
+	CorrectRate  float64 `json:"correct_rate"`
 }
 
-type AnalysisBacktestFactorSummary struct {
-	Emitted         int     `json:"emitted"`
-	Verified        int     `json:"verified"`
-	Correct         int     `json:"correct"`
-	Wrong           int     `json:"wrong"`
-	Pending         int     `json:"pending"`
-	NoData          int     `json:"no_data"`
-	WinRateVerified float64 `json:"win_rate_verified"`
+type AnalysisBacktestConfidenceBucket struct {
+	Label        string  `json:"label"`
+	MinInclusive float64 `json:"min_inclusive"`
+	MaxExclusive float64 `json:"max_exclusive,omitempty"`
+	TotalSignals int     `json:"total_signals"`
+	CorrectCount int     `json:"correct_count"`
+	WrongCount   int     `json:"wrong_count"`
+	PendingCount int     `json:"pending_count"`
+	NoDataCount  int     `json:"no_data_count"`
+	CorrectRate  float64 `json:"correct_rate"`
 }
 
-type AnalysisBacktestHorizonSummary struct {
-	HorizonMin int                           `json:"horizon_min"`
-	Single     AnalysisBacktestFactorSummary `json:"single"`
-	Composite  AnalysisBacktestFactorSummary `json:"composite"`
-	Winner     string                        `json:"winner"`
+type AnalysisBacktestConfidenceFactorBucket struct {
+	Label        string  `json:"label"`
+	MinInclusive float64 `json:"min_inclusive"`
+	MaxExclusive float64 `json:"max_exclusive,omitempty"`
+	FactorKey    string  `json:"factor_key"`
+	FactorLabel  string  `json:"factor_label"`
+	TotalSignals int     `json:"total_signals"`
+	CorrectCount int     `json:"correct_count"`
+	WrongCount   int     `json:"wrong_count"`
+	PendingCount int     `json:"pending_count"`
+	NoDataCount  int     `json:"no_data_count"`
+	CorrectRate  float64 `json:"correct_rate"`
 }
 
-type AnalysisBacktestHorizonResult struct {
-	HorizonMin       int     `json:"horizon_min"`
-	VerifyDueTS      int64   `json:"verify_due_ts"`
-	VerifyClosePrice float64 `json:"verify_close_price,omitempty"`
-	Result           string  `json:"result"`
-	DeltaPrice       float64 `json:"delta_price,omitempty"`
-	DeltaPct         float64 `json:"delta_pct,omitempty"`
-}
-
-type AnalysisBacktestFactorSignal struct {
-	Included       bool                            `json:"included"`
-	Direction      string                          `json:"direction"`
-	Confidence     float64                         `json:"confidence"`
-	SignalPrice    float64                         `json:"signal_price"`
-	ShortRisk      float64                         `json:"short_risk_score"`
-	LongRisk       float64                         `json:"long_risk_score"`
-	HorizonResults []AnalysisBacktestHorizonResult `json:"horizon_results"`
-}
-
-type AnalysisBacktestPairedSignal struct {
-	SignalTS      int64                        `json:"signal_ts"`
-	Symbol        string                       `json:"symbol"`
-	SnapshotPrice float64                      `json:"snapshot_price"`
-	Single        AnalysisBacktestFactorSignal `json:"single"`
-	Composite     AnalysisBacktestFactorSignal `json:"composite"`
+type AnalysisBacktestStrategyGroup struct {
+	FactorKey             string  `json:"factor_key"`
+	FactorLabel           string  `json:"factor_label"`
+	Label                 string  `json:"label"`
+	MinInclusive          float64 `json:"min_inclusive"`
+	MaxExclusive          float64 `json:"max_exclusive,omitempty"`
+	TotalSignals          int     `json:"total_signals"`
+	SampleCount           int     `json:"sample_count"`
+	FiveMinuteCorrectRate float64 `json:"five_minute_correct_rate"`
+	CompositeScore        float64 `json:"composite_score"`
+	Selected              bool    `json:"selected"`
+	Reason                string  `json:"reason"`
 }
 
 type AnalysisBacktestPageResponse struct {
-	Filters          AnalysisBacktestFilters          `json:"filters"`
-	HorizonSummaries []AnalysisBacktestHorizonSummary `json:"horizon_summaries"`
-	PairedSignals    []AnalysisBacktestPairedSignal   `json:"paired_signals"`
+	Candles           []map[string]any                   `json:"candles"`
+	Signals           []AnalysisSignalResult             `json:"signals"`
+	Summary           AnalysisBacktestSummary            `json:"summary"`
+	HorizonStats      []AnalysisBacktestHorizonStat      `json:"horizon_stats"`
+	ConfidenceBuckets []AnalysisBacktestConfidenceBucket `json:"confidence_buckets,omitempty"`
+	QualityMode       string                             `json:"quality_mode,omitempty"`
+	NoiseStrategy     string                             `json:"noise_strategy,omitempty"`
+	ChartSource       string                             `json:"chart_source,omitempty"`
+	ChartInterval     string                             `json:"chart_interval,omitempty"`
 }
 
 type AnalysisBacktestHistoryResponse struct {
 	Page    int                    `json:"page"`
 	Limit   int                    `json:"limit"`
 	Signals []AnalysisSignalResult `json:"signals"`
+}
+
+type AnalysisBacktest2FAFactorSummary struct {
+	Key          string  `json:"key"`
+	Label        string  `json:"label"`
+	TotalSignals int     `json:"total_signals"`
+	CorrectCount int     `json:"correct_count"`
+	WrongCount   int     `json:"wrong_count"`
+	PendingCount int     `json:"pending_count"`
+	NoDataCount  int     `json:"no_data_count"`
+	CorrectRate  float64 `json:"correct_rate"`
+}
+
+type AnalysisBacktest2FAResponse struct {
+	Candles                 []map[string]any                         `json:"candles"`
+	Signals                 []AnalysisSignalResult                   `json:"signals"`
+	Summary                 AnalysisBacktestSummary                  `json:"summary"`
+	HorizonStats            []AnalysisBacktestHorizonStat            `json:"horizon_stats"`
+	ConfidenceBuckets       []AnalysisBacktestConfidenceBucket       `json:"confidence_buckets,omitempty"`
+	ConfidenceFactorBuckets []AnalysisBacktestConfidenceFactorBucket `json:"confidence_factor_buckets,omitempty"`
+	StrategyMode            string                                   `json:"strategy_mode"`
+	StrategyActive          bool                                     `json:"strategy_active"`
+	StrategyGroups          []AnalysisBacktestStrategyGroup          `json:"strategy_groups,omitempty"`
+	SelectedFactor          string                                   `json:"selected_factor"`
+	FactorOptions           []AnalysisBacktest2FAFactorSummary       `json:"factor_options"`
+	ChartSource             string                                   `json:"chart_source,omitempty"`
+	ChartInterval           string                                   `json:"chart_interval,omitempty"`
 }

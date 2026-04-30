@@ -146,6 +146,9 @@ go run .
 | `OKX_REST_BASE` | `https://www.okx.com` | OKX REST base URL |
 | `OKX_WS_PUBLIC` | `wss://ws.okx.com:8443/ws/v5/public` | OKX public WebSocket URL |
 | `OKX_INST_ID` | `ETH-USDT-SWAP` | OKX instrument ID used for swap data |
+| `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | Optional reachable Telegram Bot API base URL or private reverse proxy |
+| `TELEGRAM_TEXT_TIMEOUT_SEC` | `20` | Optional Telegram text request timeout, in seconds |
+| `TELEGRAM_PHOTO_TIMEOUT_SEC` | `45` | Optional Telegram photo upload timeout, in seconds |
 
 ---
 
@@ -190,6 +193,9 @@ Check:
 #### 4. SQLite file grows over time
 This script only cleans old rows from `liquidation_events`.  
 If needed, you can manually clean or archive old rows from `band_reports` and `longest_bar_reports`.
+
+#### 5. Telegram request times out
+If sending fails with `context deadline exceeded`, the host may not be able to reach `api.telegram.org` reliably. Set `TELEGRAM_API_BASE_URL` or the dashboard field `telegram_api_base` to a reachable private Bot API / reverse proxy. For slow photo uploads, increase `TELEGRAM_PHOTO_TIMEOUT_SEC`, for example `120`.
 
 ---
 
@@ -339,6 +345,9 @@ python .\liqmap_single_okx_fixed.py
 | `OKX_REST_BASE` | `https://www.okx.com` | OKX REST 地址 |
 | `OKX_WS_PUBLIC` | `wss://ws.okx.com:8443/ws/v5/public` | OKX 公共 WebSocket 地址 |
 | `OKX_INST_ID` | `ETH-USDT-SWAP` | OKX 永续合约 ID |
+| `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | 可选 Telegram Bot API 地址或自建反向代理地址 |
+| `TELEGRAM_TEXT_TIMEOUT_SEC` | `20` | 可选 Telegram 文本请求超时，单位秒 |
+| `TELEGRAM_PHOTO_TIMEOUT_SEC` | `45` | 可选 Telegram 图片上传超时，单位秒 |
 
 ---
 
@@ -383,6 +392,9 @@ python .\liqmap_single_okx_fixed.py
 #### 4. SQLite 文件越来越大
 当前脚本只会清理 `liquidation_events` 里的旧数据。  
 如果需要，你可以手动清理或归档 `band_reports` 和 `longest_bar_reports`。
+
+#### 5. Telegram 请求超时
+如果发送失败里出现 `context deadline exceeded`，通常是当前主机访问 `api.telegram.org` 不稳定或不可达。可以设置环境变量 `TELEGRAM_API_BASE_URL`，或在消息通道页面填写 `telegram_api_base` 为可访问的自建 Bot API / 反向代理地址。若只有图片发送较慢，可以把 `TELEGRAM_PHOTO_TIMEOUT_SEC` 调大，例如 `120`。
 
 ---
 

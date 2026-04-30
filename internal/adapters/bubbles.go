@@ -20,3 +20,7 @@ func (s *bubblesModuleAdapter) FetchKlines(interval string, limit int, startTS, 
 func (s *bubblesModuleAdapter) LatestOKXClose() (map[string]any, error) {
 	return s.app.LatestOKXClose()
 }
+
+func (s *bubblesModuleAdapter) TradeSignals(opts liqmap.TradeSignalOptions) []liqmap.TradeSignal {
+	return s.app.TradeSignals(opts)
+}

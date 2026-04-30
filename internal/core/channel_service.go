@@ -81,7 +81,7 @@ func (a *App) loadSettings() ChannelSettings {
 	return ChannelSettings{
 		TelegramBotToken:      normalizeQuotedInput(a.getSetting("telegram_bot_token")),
 		TelegramChannel:       normalizeQuotedInput(a.getSetting("telegram_channel")),
-		TelegramAPIBase:       a.telegramAPIBaseURL(),
+		TelegramAPIBase:       normalizeTelegramAPIBaseSetting(a.getSetting("telegram_api_base")),
 		NotifyIntervalMin:     workInterval,
 		NotifyWorkIntervalMin: workInterval,
 		NotifyOffIntervalMin:  offInterval,
@@ -107,7 +107,7 @@ func (a *App) saveSettings(req ChannelSettings) error {
 	if err := a.setSetting("telegram_channel", channel); err != nil {
 		return err
 	}
-	apiBase := normalizeQuotedInput(req.TelegramAPIBase)
+	apiBase := normalizeTelegramAPIBaseSetting(req.TelegramAPIBase)
 	if err := a.setSetting("telegram_api_base", apiBase); err != nil {
 		return err
 	}
@@ -235,7 +235,7 @@ func (a *App) sendTelegramText(text string) error {
 	if err != nil {
 		return err
 	}
-	return a.doTelegramRequest(fmt.Sprintf("/bot%s/sendMessage", token), "application/json", body, telegramTextTimeout)
+	return a.doTelegramRequest(fmt.Sprintf("/bot%s/sendMessage", token), "application/json", body, telegramTimeoutFromEnv("TELEGRAM_TEXT_TIMEOUT_SEC", telegramTextTimeout))
 }
 
 func (a *App) sendTelegramPhoto(caption string, image []byte) error {
@@ -266,17 +266,41 @@ func (a *App) sendTelegramPhoto(caption string, image []byte) error {
 		return err
 	}
 
-	return a.doTelegramRequest(fmt.Sprintf("/bot%s/sendPhoto", token), mw.FormDataContentType(), body.Bytes(), telegramPhotoTimeout)
+	return a.doTelegramRequest(fmt.Sprintf("/bot%s/sendPhoto", token), mw.FormDataContentType(), body.Bytes(), telegramTimeoutFromEnv("TELEGRAM_PHOTO_TIMEOUT_SEC", telegramPhotoTimeout))
 }
 
 func (a *App) telegramAPIBaseURL() string {
-	if v := normalizeQuotedInput(a.getSetting("telegram_api_base")); v != "" {
-		return strings.TrimRight(v, "/")
+	if v := normalizeTelegramAPIBaseSetting(a.getSetting("telegram_api_base")); v != "" {
+		return v
 	}
-	if v := normalizeQuotedInput(os.Getenv("TELEGRAM_API_BASE_URL")); v != "" {
-		return strings.TrimRight(v, "/")
+	if v := normalizeTelegramAPIBaseInput(os.Getenv("TELEGRAM_API_BASE_URL")); v != "" {
+		return v
 	}
 	return defaultTelegramAPIBaseURL
+}
+
+func normalizeTelegramAPIBaseInput(raw string) string {
+	return strings.TrimRight(normalizeQuotedInput(raw), "/")
+}
+
+func normalizeTelegramAPIBaseSetting(raw string) string {
+	v := normalizeTelegramAPIBaseInput(raw)
+	if v == defaultTelegramAPIBaseURL {
+		return ""
+	}
+	return v
+}
+
+func telegramTimeoutFromEnv(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds <= 0 {
+		return fallback
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func (a *App) doTelegramRequest(path, contentType string, payload []byte, timeout time.Duration) error {
@@ -360,6 +384,7 @@ func isTelegramRetryableError(err error) bool {
 		"dial tcp",
 		"connectex",
 		"timeout",
+		"deadline exceeded",
 		"connection reset",
 		"forcibly closed",
 		"connection aborted",
@@ -373,14 +398,42 @@ func isTelegramRetryableError(err error) bool {
 }
 
 func wrapTelegramNetworkError(baseURL string, err error) error {
-	msg := fmt.Sprintf("telegram request failed via %s: %v", baseURL, err)
+	msg := fmt.Sprintf("telegram request failed via %s: %s", redactTelegramBotToken(baseURL), redactTelegramBotToken(err.Error()))
 	if baseURL == defaultTelegramAPIBaseURL {
 		lower := strings.ToLower(err.Error())
-		if strings.Contains(lower, "no such host") || strings.Contains(lower, "connectex") || strings.Contains(lower, "connection aborted") || strings.Contains(lower, "timeout") {
+		if strings.Contains(lower, "no such host") || strings.Contains(lower, "connectex") || strings.Contains(lower, "connection aborted") || strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded") {
 			msg += " (this host may not reach Telegram directly; set TELEGRAM_API_BASE_URL or setting telegram_api_base to a reachable Bot API / reverse proxy)"
 		}
 	}
 	return errors.New(msg)
+}
+
+func redactTelegramBotToken(s string) string {
+	const marker = "/bot"
+	var out strings.Builder
+	for {
+		start := strings.Index(s, marker)
+		if start < 0 {
+			out.WriteString(s)
+			return out.String()
+		}
+		tokenStart := start + len(marker)
+		tokenEndRel := strings.Index(s[tokenStart:], "/")
+		if tokenEndRel < 0 {
+			out.WriteString(s[:tokenStart])
+			out.WriteString("<redacted>")
+			return out.String()
+		}
+		tokenEnd := tokenStart + tokenEndRel
+		if tokenEnd == tokenStart {
+			out.WriteString(s[:tokenStart])
+			s = s[tokenStart:]
+			continue
+		}
+		out.WriteString(s[:tokenStart])
+		out.WriteString("<redacted>")
+		s = s[tokenEnd:]
+	}
 }
 
 func (a *App) recordTelegramSendHistory(sendMode string, groupIndex int, groupName, status, errorText string) {
@@ -399,7 +452,7 @@ func (a *App) recordTelegramSendHistory(sendMode string, groupIndex int, groupNa
 		groupIndex,
 		strings.TrimSpace(groupName),
 		status,
-		strings.TrimSpace(errorText),
+		redactTelegramBotToken(strings.TrimSpace(errorText)),
 	)
 	if err != nil && a.debug {
 		log.Printf("record telegram send history failed: %v", err)
@@ -417,7 +470,7 @@ func normalizeLegacyTelegramHistoryErrorText(v string) string {
 		"缂?缂傚倸鍊风粈浣衡偓姘煎墲閵囨劙宕掗悙瀵稿姷婵炶揪绲鹃幃鑸电婵傚憡鍋?", "\u53d1\u9001\u5931\u8d25:",
 	)
 	v = replacer.Replace(v)
-	return strings.TrimSpace(v)
+	return strings.TrimSpace(redactTelegramBotToken(v))
 }
 
 func (a *App) listTelegramSendHistory(limit int) ([]TelegramSendHistoryRow, error) {
