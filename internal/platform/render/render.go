@@ -6,13 +6,49 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	texttemplate "text/template"
 
 	sharedtypes "multipleexchangeliquidationmap/internal/shared/types"
 )
 
-const sharedTopNavSnippet = `<style id="shared-top-nav-style">
+type navItem struct {
+	Href  string
+	Label string
+}
+
+var sharedNavItems = []navItem{
+	{Href: "/", Label: "清算热区"},
+	{Href: "/config", Label: "模型配置"},
+	{Href: "/monitor", Label: "雷区监控"},
+	{Href: "/map", Label: "盘口汇总"},
+	{Href: "/liquidations", Label: "强平清算"},
+	{Href: "/bubbles", Label: "气泡图"},
+	{Href: "/webdatasource", Label: "页面数据源"},
+	{Href: "/channel", Label: "消息通道"},
+	{Href: "/analysis", Label: "日内分析"},
+	{Href: "/analysis-backtest", Label: "单因子回测"},
+	{Href: "/analysis-backtest-2fa", Label: "双因子回测"},
+	{Href: "/analysis-backtest-liquidation", Label: "多多空空"},
+}
+
+var templateActivePath = map[string]string{
+	"index":                         "/",
+	"model_config_page":             "/config",
+	"monitor":                       "/monitor",
+	"map":                           "/map",
+	"liquidations":                  "/liquidations",
+	"bubbles":                       "/bubbles",
+	"webdatasource":                 "/webdatasource",
+	"channel":                       "/channel",
+	"analysis":                      "/analysis",
+	"analysis_backtest":             "/analysis-backtest",
+	"analysis_backtest_2fa":         "/analysis-backtest-2fa",
+	"analysis_backtest_liquidation": "/analysis-backtest-liquidation",
+}
+
+const sharedTopNavStyle = `<style id="shared-top-nav-style">
 #shared-top-nav.nav{height:58px;background:var(--nav, #101827);border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:200}
 #shared-top-nav .nav-left,#shared-top-nav .nav-right{display:flex;align-items:center;gap:20px}
 #shared-top-nav .brand{font-size:18px;font-weight:700;color:var(--navInk, #f6f7fb)}
@@ -24,68 +60,17 @@ const sharedTopNavSnippet = `<style id="shared-top-nav-style">
 #shared-top-nav .theme-toggle button.label{cursor:default;opacity:.92}
 #shared-top-nav .theme-toggle button.active{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.18);color:#fff}
 @media (max-width:980px){#shared-top-nav .menu{display:none}}
-</style>
-<script id="shared-top-nav-script">
-(function(){
-  if(typeof document==='undefined') return;
-  const existing=document.querySelector('.nav');
-  if(!existing) return;
-  const path=(window.location&&window.location.pathname)||'/';
-  const items=[
-    ['/', '清算热区'],
-    ['/config', '模型配置'],
-    ['/monitor', '雷区监控'],
-    ['/map', '盘口汇总'],
-    ['/liquidations', '强平清算'],
-    ['/bubbles', '气泡图'],
-    ['/webdatasource', '页面数据源'],
-    ['/channel', '消息通道'],
-    ['/analysis', '日内分析'],
-    ['/analysis-backtest', '单因子回测'],
-    ['/analysis-backtest-2fa', '双因子回测'],
-    ['/analysis-backtest-liquidation', '多多空空']
-  ];
-  const menuHTML=items.map(function(item){
-    const href=item[0];
-    const text=item[1];
-    const active=path===href?' class="active"':'';
-    return '<a href="'+href+'"'+active+'>'+text+'</a>';
-  }).join('');
-  existing.id='shared-top-nav';
-  existing.innerHTML=
-    '<div class="nav-left">'+
-      '<div class="brand">ETH Liquidation Map</div>'+
-      '<div class="menu">'+menuHTML+'</div>'+
-    '</div>'+
-    '<div class="nav-right">'+
-      '<div class="theme-toggle">'+
-        '<button class="label" type="button">主题</button>'+
-        '<button id="themeDark" type="button">深色</button>'+
-        '<button id="themeLight" type="button">浅色</button>'+
-      '</div>'+
-      '<a href="/config">升级</a>'+
-    '</div>';
-  const darkBtn=document.getElementById('themeDark');
-  const lightBtn=document.getElementById('themeLight');
-  if(darkBtn) darkBtn.onclick=function(){ if(typeof window.setTheme==='function') window.setTheme('dark'); };
-  if(lightBtn) lightBtn.onclick=function(){ if(typeof window.setTheme==='function') window.setTheme('light'); };
-})();
-</script>`
+</style>`
 
 const sharedFooterSnippet = `<style id="shared-global-footer-style">
 #shared-global-footer.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:var(--muted, #64748b);text-align:center}
 </style>
+<div id="shared-global-footer" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
 <script id="shared-global-footer-script">
 (async function(){
   if(typeof document==='undefined') return;
-  let footer=document.querySelector('#globalFooter');
-  if(!footer) footer=document.querySelector('.footer');
-  if(!footer){
-    footer=document.createElement('div');
-    footer.className='footer';
-    document.body.appendChild(footer);
-  }
-  footer.id='shared-global-footer';
+  const footer=document.getElementById('shared-global-footer');
+  if(!footer) return;
   try{
     const r=await fetch('/api/version');
     const v=await r.json();
@@ -96,29 +81,155 @@ const sharedFooterSnippet = `<style id="shared-global-footer-style">
 })();
 </script>`
 
-func withSharedTopNav(body string) string {
-	if body == "" || !strings.Contains(body, "</body>") {
+func sharedTopNav(templateName string) string {
+	activePath := templateActivePath[templateName]
+	var menu strings.Builder
+	for _, item := range sharedNavItems {
+		active := ""
+		if item.Href == activePath {
+			active = ` class="active"`
+		}
+		menu.WriteString(`<a href="`)
+		menu.WriteString(template.HTMLEscapeString(item.Href))
+		menu.WriteString(`"`)
+		menu.WriteString(active)
+		menu.WriteString(`>`)
+		menu.WriteString(template.HTMLEscapeString(item.Label))
+		menu.WriteString(`</a>`)
+	}
+	return sharedTopNavStyle + `<div id="shared-top-nav" class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu">` +
+		menu.String() +
+		`</div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" type="button" onclick="if(window.setTheme)window.setTheme('dark')">深色</button><button id="themeLight" type="button" onclick="if(window.setTheme)window.setTheme('light')">浅色</button></div><a href="/config" class="upgrade">升级</a></div></div>`
+}
+
+func withSharedTopNav(name, body string) string {
+	if body == "" || !hasBody(body) {
 		return body
 	}
-	if strings.Contains(body, `id="shared-top-nav-script"`) {
+	if strings.Contains(body, `id="shared-top-nav"`) {
 		return body
 	}
-	return strings.Replace(body, "</body>", sharedTopNavSnippet+"</body>", 1)
+	body = removeFirstElement(body, func(tag string) bool {
+		return attrHasToken(tag, "class", "nav")
+	})
+	return insertAfterBodyStart(body, sharedTopNav(name))
 }
 
 func withSharedFooter(body string) string {
-	if body == "" || !strings.Contains(body, "</body>") {
+	if body == "" || !hasBody(body) {
 		return body
 	}
 	if strings.Contains(body, `id="shared-global-footer-script"`) {
 		return body
 	}
+	body = removeFirstElement(body, func(tag string) bool {
+		return strings.EqualFold(attrValue(tag, "id"), "globalFooter") || attrHasToken(tag, "class", "footer")
+	})
 	return strings.Replace(body, "</body>", sharedFooterSnippet+"</body>", 1)
+}
+
+func hasBody(body string) bool {
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "<body") && strings.Contains(lower, "</body>")
+}
+
+func insertAfterBodyStart(body, fragment string) string {
+	lower := strings.ToLower(body)
+	idx := strings.Index(lower, "<body")
+	if idx < 0 {
+		return body
+	}
+	closeRel := strings.Index(body[idx:], ">")
+	if closeRel < 0 {
+		return body
+	}
+	insertAt := idx + closeRel + 1
+	return body[:insertAt] + fragment + body[insertAt:]
+}
+
+func removeFirstElement(body string, match func(string) bool) string {
+	lower := strings.ToLower(body)
+	for searchFrom := 0; ; {
+		idx := strings.Index(lower[searchFrom:], "<div")
+		if idx < 0 {
+			return body
+		}
+		start := searchFrom + idx
+		tagEndRel := strings.Index(body[start:], ">")
+		if tagEndRel < 0 {
+			return body
+		}
+		tagEnd := start + tagEndRel + 1
+		tag := body[start:tagEnd]
+		if !match(tag) {
+			searchFrom = tagEnd
+			continue
+		}
+		end := findDivElementEnd(body, tagEnd)
+		if end < 0 {
+			return body
+		}
+		return body[:start] + body[end:]
+	}
+}
+
+func findDivElementEnd(body string, afterStartTag int) int {
+	lower := strings.ToLower(body)
+	depth := 1
+	pos := afterStartTag
+	for depth > 0 {
+		nextOpenRel := strings.Index(lower[pos:], "<div")
+		nextCloseRel := strings.Index(lower[pos:], "</div>")
+		if nextCloseRel < 0 {
+			return -1
+		}
+		if nextOpenRel >= 0 && nextOpenRel < nextCloseRel {
+			depth++
+			openEndRel := strings.Index(body[pos+nextOpenRel:], ">")
+			if openEndRel < 0 {
+				return -1
+			}
+			pos += nextOpenRel + openEndRel + 1
+			continue
+		}
+		depth--
+		pos += nextCloseRel + len("</div>")
+	}
+	return pos
+}
+
+var attrPatternCache = map[string][2]*regexp.Regexp{}
+
+func attrValue(tag, name string) string {
+	pair, ok := attrPatternCache[name]
+	if !ok {
+		pair = [2]*regexp.Regexp{
+			regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(name) + `\s*=\s*"([^"]*)"`),
+			regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(name) + `\s*=\s*'([^']*)'`),
+		}
+		attrPatternCache[name] = pair
+	}
+	for _, re := range pair {
+		m := re.FindStringSubmatch(tag)
+		if len(m) >= 2 {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+func attrHasToken(tag, name, token string) bool {
+	for _, item := range strings.Fields(attrValue(tag, name)) {
+		if strings.EqualFold(item, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func HTMLPage(w http.ResponseWriter, name, body string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	body = withSharedTopNav(body)
+	body = withSharedTopNav(name, body)
 	body = withSharedFooter(body)
 
 	if tpl, parseErr := template.New(name).Parse(body); parseErr == nil {
