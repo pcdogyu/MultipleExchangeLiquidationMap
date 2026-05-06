@@ -6,6 +6,8 @@ type Services interface {
 	AnalysisSnapshot() (liqmap.AnalysisSnapshot, error)
 	AnalysisBacktest(hours int, interval string, minConfidence float64, qualityMode string, noiseStrategy string) (liqmap.AnalysisBacktestPageResponse, error)
 	AnalysisBacktestLiquidation(hours int, interval string, minConfidence float64) (liqmap.AnalysisBacktestPageResponse, error)
+	AnalysisBacktestLiquidationSignalBackfill(hours int) (liqmap.AnalysisBacktestLiquidationSignalMutationResponse, error)
+	AnalysisBacktestLiquidationSignalReset(hours int) (liqmap.AnalysisBacktestLiquidationSignalMutationResponse, error)
 	AnalysisBacktest2FA(hours int, interval string, factor string, minConfidence float64, strategy string) (liqmap.AnalysisBacktest2FAResponse, error)
 	AnalysisBacktestHistory(limit, page int) (liqmap.AnalysisBacktestHistoryResponse, error)
 }

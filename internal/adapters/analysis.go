@@ -25,6 +25,14 @@ func (s *analysisModuleAdapter) AnalysisBacktestLiquidation(hours int, interval 
 	return s.app.AnalysisBacktestLiquidation(hours, interval, minConfidence)
 }
 
+func (s *analysisModuleAdapter) AnalysisBacktestLiquidationSignalBackfill(hours int) (liqmap.AnalysisBacktestLiquidationSignalMutationResponse, error) {
+	return s.app.AnalysisBacktestLiquidationSignalBackfill(hours)
+}
+
+func (s *analysisModuleAdapter) AnalysisBacktestLiquidationSignalReset(hours int) (liqmap.AnalysisBacktestLiquidationSignalMutationResponse, error) {
+	return s.app.AnalysisBacktestLiquidationSignalReset(hours)
+}
+
 func (s *analysisModuleAdapter) AnalysisBacktest2FA(hours int, interval string, factor string, minConfidence float64, strategy string) (liqmap.AnalysisBacktest2FAResponse, error) {
 	return s.app.AnalysisBacktest2FA(hours, interval, factor, minConfidence, strategy)
 }

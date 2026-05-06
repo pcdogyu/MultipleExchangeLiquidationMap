@@ -1,6 +1,7 @@
 package liqmap
 
 import (
+	"database/sql"
 	"fmt"
 	"math"
 	"regexp"
@@ -14,6 +15,7 @@ const analysisSignalVerifyHorizonMin = 5
 
 var analysisBacktestHorizons = []int{5, 15, 30, 60}
 
+const analysisBacktestKlinePageLimit = 1000
 const analysisLiquidationBacktestSampleInterval = "5m"
 const analysisLiquidationBacktestSourceGroup = 8
 const analysisLiquidationBandSyncMaxAgeMS = int64(30 * 60 * 1000)
@@ -721,10 +723,22 @@ func buildAnalysisBacktestSummary(results []AnalysisSignalResult, hours int) Ana
 		case "no_data":
 			out.NoDataCount++
 		}
+		for _, horizon := range item.Horizons {
+			switch horizon.Result {
+			case "correct":
+				out.VerifiedHorizonCount++
+				out.CorrectHorizonCount++
+			case "wrong":
+				out.VerifiedHorizonCount++
+			}
+		}
 	}
 	verified := out.CorrectCount + out.WrongCount
 	if verified > 0 {
 		out.CorrectRate = math.Round((float64(out.CorrectCount)/float64(verified))*1000) / 10
+	}
+	if out.VerifiedHorizonCount > 0 {
+		out.HorizonCorrectRate = math.Round((float64(out.CorrectHorizonCount)/float64(out.VerifiedHorizonCount))*1000) / 10
 	}
 	return out
 }
@@ -1445,6 +1459,167 @@ func buildLiquidationBacktestSignalRecords(signals []TradeSignal, sinceTS int64,
 	})
 	return out
 }
+
+func (a *App) generateLiquidationBacktestRecords(hours int) ([]AnalysisSignalRecord, int64, int64) {
+	if hours <= 0 {
+		hours = 24
+	}
+	now := time.Now()
+	nowTS := now.UnixMilli()
+	sinceTS := now.Add(-time.Duration(hours) * time.Hour).UnixMilli()
+	const baseStep = int64(5 * time.Minute / time.Millisecond)
+	sampleStartTS := floorToFiveMinute(sinceTS - baseStep)
+	sampleEndTS := floorToFiveMinute(nowTS)
+	tradeSignals := a.TradeSignals(TradeSignalOptions{
+		StartTS:  sampleStartTS,
+		EndTS:    sampleEndTS,
+		Symbol:   defaultSymbol,
+		Interval: analysisLiquidationBacktestSampleInterval,
+	})
+	records := buildLiquidationBacktestSignalRecords(tradeSignals, sinceTS, 0)
+	records = a.filterLiquidationBacktestRecordsByBandSync(records, sinceTS, sampleEndTS)
+	return records, sinceTS, floorToFiveMinute(nowTS) + baseStep
+}
+
+func (a *App) listLiquidationBacktestCachedRecords(sinceTS int64) ([]AnalysisSignalRecord, error) {
+	rows, err := a.db.Query(`SELECT id, signal_ts, symbol, source_group, direction, confidence, signal_price,
+			analysis_generated_at, headline, summary, verify_horizon_min, second_factor_key, second_factor_label
+		FROM analysis_liquidation_backtest_signals
+		WHERE symbol=? AND signal_ts>=?
+		ORDER BY signal_ts ASC, id ASC`, defaultSymbol, sinceTS)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AnalysisSignalRecord{}
+	for rows.Next() {
+		var item AnalysisSignalRecord
+		if err := rows.Scan(
+			&item.ID,
+			&item.SignalTS,
+			&item.Symbol,
+			&item.SourceGroup,
+			&item.Direction,
+			&item.Confidence,
+			&item.SignalPrice,
+			&item.AnalysisGenerated,
+			&item.Headline,
+			&item.Summary,
+			&item.VerifyHorizonMin,
+			&item.SecondFactorKey,
+			&item.SecondFactorLabel,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (a *App) upsertLiquidationBacktestCachedRecords(records []AnalysisSignalRecord) (int, int, error) {
+	if len(records) == 0 {
+		return 0, 0, nil
+	}
+	tx, err := a.db.Begin()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+	existsStmt, err := tx.Prepare(`SELECT id FROM analysis_liquidation_backtest_signals
+		WHERE symbol=? AND signal_ts=? AND direction=? LIMIT 1`)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer existsStmt.Close()
+	upsertStmt, err := tx.Prepare(`INSERT INTO analysis_liquidation_backtest_signals(
+			signal_ts, symbol, source_group, direction, confidence, signal_price,
+			analysis_generated_at, headline, summary, verify_horizon_min,
+			second_factor_key, second_factor_label, generated_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(symbol, signal_ts, direction) DO UPDATE SET
+			source_group=excluded.source_group,
+			confidence=excluded.confidence,
+			signal_price=excluded.signal_price,
+			analysis_generated_at=excluded.analysis_generated_at,
+			headline=excluded.headline,
+			summary=excluded.summary,
+			verify_horizon_min=excluded.verify_horizon_min,
+			second_factor_key=excluded.second_factor_key,
+			second_factor_label=excluded.second_factor_label,
+			generated_at=excluded.generated_at`)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer upsertStmt.Close()
+	generatedAt := time.Now().UnixMilli()
+	inserted := 0
+	updated := 0
+	for _, record := range records {
+		var existingID int64
+		err := existsStmt.QueryRow(record.Symbol, record.SignalTS, record.Direction).Scan(&existingID)
+		if err == nil {
+			updated++
+		} else if err == sql.ErrNoRows {
+			inserted++
+		} else {
+			return 0, 0, err
+		}
+		if _, err := upsertStmt.Exec(
+			record.SignalTS,
+			record.Symbol,
+			record.SourceGroup,
+			record.Direction,
+			record.Confidence,
+			record.SignalPrice,
+			record.AnalysisGenerated,
+			record.Headline,
+			record.Summary,
+			normalizedAnalysisVerifyHorizonMin(record.VerifyHorizonMin),
+			record.SecondFactorKey,
+			record.SecondFactorLabel,
+			generatedAt,
+		); err != nil {
+			return 0, 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return inserted, updated, nil
+}
+
+func filterAnalysisSignalRecordsByConfidence(records []AnalysisSignalRecord, minConfidence float64) []AnalysisSignalRecord {
+	if minConfidence <= 0 {
+		return append([]AnalysisSignalRecord(nil), records...)
+	}
+	out := make([]AnalysisSignalRecord, 0, len(records))
+	for _, record := range records {
+		if record.Confidence > minConfidence {
+			out = append(out, record)
+		}
+	}
+	return out
+}
+
+func (a *App) buildLiquidationBacktestResultsFromRecords(records []AnalysisSignalRecord, sinceTS, chartEndTS int64, minConfidence float64) ([]AnalysisSignalResult, error) {
+	records = filterAnalysisSignalRecordsByConfidence(records, minConfidence)
+	if len(records) == 0 {
+		return nil, nil
+	}
+	const baseStep = int64(5 * time.Minute / time.Millisecond)
+	startTS := floorToFiveMinute(sinceTS - int64(30*time.Minute/time.Millisecond))
+	endTS := chartEndTS + int64(time.Hour/time.Millisecond)
+	candles, _, err := a.fetchAnalysisBacktestCandleRange("5m", baseStep, startTS, endTS)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]AnalysisSignalResult, 0, len(records))
+	for i, record := range records {
+		results = append(results, buildAnalysisSignalResult(record, candles, time.Now().UnixMilli(), analysisBacktestHorizonsForSignal(records, i)))
+	}
+	return results, nil
+}
+
 func candleToMap(c analysisBacktestCandle) map[string]any {
 	return map[string]any{
 		"ts": c.TS,
@@ -1455,25 +1630,63 @@ func candleToMap(c analysisBacktestCandle) map[string]any {
 	}
 }
 
+func klineSourceFromResponse(raw map[string]any, fallback string) string {
+	if source, ok := raw["source"].(string); ok && strings.TrimSpace(source) != "" {
+		return source
+	}
+	return fallback
+}
+
+func (a *App) fetchAnalysisBacktestCandleRange(interval string, bucketMS int64, startTS, endTS int64) ([]analysisBacktestCandle, string, error) {
+	if bucketMS <= 0 || startTS <= 0 || endTS <= 0 || endTS < startTS {
+		return nil, "", nil
+	}
+	pageLimit := analysisBacktestKlinePageLimit
+	if pageLimit <= 0 {
+		pageLimit = 1000
+	}
+	source := ""
+	seen := map[int64]bool{}
+	out := make([]analysisBacktestCandle, 0, int(math.Ceil(float64(endTS-startTS)/float64(bucketMS)))+1)
+	for cursor := startTS; cursor <= endTS; {
+		chunkEnd := cursor + int64(pageLimit-1)*bucketMS
+		if chunkEnd > endTS {
+			chunkEnd = endTS
+		}
+		raw, err := a.FetchKlines(interval, pageLimit, cursor, chunkEnd)
+		if err != nil {
+			return nil, "", err
+		}
+		if source == "" {
+			source = klineSourceFromResponse(raw, interval)
+		}
+		for _, candle := range parseAnalysisBacktestCandles(raw["rows"]) {
+			if candle.TS < cursor || candle.TS > chunkEnd || seen[candle.TS] {
+				continue
+			}
+			seen[candle.TS] = true
+			out = append(out, candle)
+		}
+		next := chunkEnd + bucketMS
+		if next <= cursor {
+			break
+		}
+		cursor = next
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TS < out[j].TS })
+	return out, source, nil
+}
+
 func (a *App) fetchAnalysisBacktestChartCandles(hours int, interval string, sinceTS, endTS int64) ([]map[string]any, string, string, error) {
 	cfg := normalizeAnalysisBacktestInterval(interval)
-	durationMS := endTS - sinceTS
-	if durationMS <= 0 {
-		durationMS = int64(hours) * int64(time.Hour/time.Millisecond)
-	}
 	startTS := sinceTS
 	if cfg.Direct && cfg.Label == "1m" {
 		startTS = sinceTS - int64(30*time.Minute/time.Millisecond)
 	}
-	limit := int(math.Ceil(float64(durationMS)/float64(cfg.BucketMS))) + 24
-	if limit < 320 {
-		limit = 320
-	}
-	raw, err := a.FetchKlines(cfg.Source, limit, startTS, endTS)
+	base, source, err := a.fetchAnalysisBacktestCandleRange(cfg.Source, cfg.BucketMS, startTS, endTS)
 	if err != nil {
 		return nil, "", "", err
 	}
-	base := parseAnalysisBacktestCandles(raw["rows"])
 	chartCandles := base
 	if !cfg.Direct {
 		chartCandles = aggregateAnalysisBacktestCandles(base, cfg.BucketMS)
@@ -1485,7 +1698,7 @@ func (a *App) fetchAnalysisBacktestChartCandles(hours int, interval string, sinc
 		}
 		out = append(out, candleToMap(candle))
 	}
-	return out, cfg.Source, cfg.Label, nil
+	return out, source, cfg.Label, nil
 }
 
 func (a *App) buildAnalysisBacktestResults(hours int, minConfidence float64, qualityMode string, noiseStrategy string) ([]AnalysisSignalResult, int64, int64, error) {
@@ -1502,15 +1715,10 @@ func (a *App) buildAnalysisBacktestResults(hours int, minConfidence float64, qua
 	const baseStep = int64(5 * time.Minute / time.Millisecond)
 	startTS := floorToFiveMinute(sinceTS - int64(30*time.Minute/time.Millisecond))
 	endTS := floorToFiveMinute(nowTS) + int64(time.Hour/time.Millisecond) + baseStep
-	limit := int(math.Ceil(float64(endTS-startTS)/float64(baseStep))) + 24
-	if limit < 320 {
-		limit = 320
-	}
-	raw, err := a.FetchKlines("5m", limit, startTS, endTS)
+	candles, _, err := a.fetchAnalysisBacktestCandleRange("5m", baseStep, startTS, endTS)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	candles := parseAnalysisBacktestCandles(raw["rows"])
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].SignalTS == records[j].SignalTS {
 			return records[i].ID < records[j].ID
@@ -1536,37 +1744,60 @@ func (a *App) buildLiquidationBacktestResults(hours int, minConfidence float64) 
 	now := time.Now()
 	nowTS := now.UnixMilli()
 	sinceTS := now.Add(-time.Duration(hours) * time.Hour).UnixMilli()
-
 	const baseStep = int64(5 * time.Minute / time.Millisecond)
-	sampleStartTS := floorToFiveMinute(sinceTS - baseStep)
-	sampleEndTS := floorToFiveMinute(nowTS)
-	tradeSignals := a.TradeSignals(TradeSignalOptions{
-		StartTS:  sampleStartTS,
-		EndTS:    sampleEndTS,
-		Symbol:   defaultSymbol,
-		Interval: analysisLiquidationBacktestSampleInterval,
-	})
-	records := buildLiquidationBacktestSignalRecords(tradeSignals, sinceTS, minConfidence)
-	records = a.filterLiquidationBacktestRecordsByBandSync(records, sinceTS, sampleEndTS)
+	chartEndTS := floorToFiveMinute(nowTS) + baseStep
 
-	startTS := floorToFiveMinute(sinceTS - int64(30*time.Minute/time.Millisecond))
-	endTS := floorToFiveMinute(nowTS) + int64(time.Hour/time.Millisecond) + baseStep
-	limit := int(math.Ceil(float64(endTS-startTS)/float64(baseStep))) + 24
-	if limit < 320 {
-		limit = 320
-	}
-	raw, err := a.FetchKlines("5m", limit, startTS, endTS)
+	cachedRecords, err := a.listLiquidationBacktestCachedRecords(sinceTS)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	candles := parseAnalysisBacktestCandles(raw["rows"])
-
-	results := make([]AnalysisSignalResult, 0, len(records))
-	for i, record := range records {
-		results = append(results, buildAnalysisSignalResult(record, candles, nowTS, analysisBacktestHorizonsForSignal(records, i)))
+	if len(cachedRecords) > 0 {
+		results, err := a.buildLiquidationBacktestResultsFromRecords(cachedRecords, sinceTS, chartEndTS, minConfidence)
+		return results, sinceTS, chartEndTS, err
 	}
-	return results, sinceTS, floorToFiveMinute(nowTS) + baseStep, nil
+
+	records, _, _ := a.generateLiquidationBacktestRecords(hours)
+	results, err := a.buildLiquidationBacktestResultsFromRecords(records, sinceTS, chartEndTS, minConfidence)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	return results, sinceTS, chartEndTS, nil
 }
+
+func (a *App) AnalysisBacktestLiquidationSignalBackfill(hours int) (AnalysisBacktestLiquidationSignalMutationResponse, error) {
+	if hours <= 0 {
+		hours = 24
+	}
+	records, _, _ := a.generateLiquidationBacktestRecords(hours)
+	inserted, updated, err := a.upsertLiquidationBacktestCachedRecords(records)
+	if err != nil {
+		return AnalysisBacktestLiquidationSignalMutationResponse{}, err
+	}
+	return AnalysisBacktestLiquidationSignalMutationResponse{
+		Inserted: inserted,
+		Updated:  updated,
+		Total:    len(records),
+	}, nil
+}
+
+func (a *App) AnalysisBacktestLiquidationSignalReset(hours int) (AnalysisBacktestLiquidationSignalMutationResponse, error) {
+	if hours <= 0 {
+		hours = 24
+	}
+	sinceTS := time.Now().Add(-time.Duration(hours) * time.Hour).UnixMilli()
+	res, err := a.db.Exec(`DELETE FROM analysis_liquidation_backtest_signals WHERE symbol=? AND signal_ts>=?`, defaultSymbol, sinceTS)
+	if err != nil {
+		return AnalysisBacktestLiquidationSignalMutationResponse{}, err
+	}
+	deleted64, _ := res.RowsAffected()
+	backfill, err := a.AnalysisBacktestLiquidationSignalBackfill(hours)
+	if err != nil {
+		return AnalysisBacktestLiquidationSignalMutationResponse{}, err
+	}
+	backfill.Deleted = int(deleted64)
+	return backfill, nil
+}
+
 func (a *App) AnalysisBacktest(hours int, interval string, minConfidence float64, qualityMode string, noiseStrategy string) (AnalysisBacktestPageResponse, error) {
 	selectedQuality := normalizeAnalysisBacktestQualityMode(qualityMode)
 	selectedNoiseStrategy := normalizeAnalysisBacktestNoiseStrategy(noiseStrategy)
@@ -1610,6 +1841,7 @@ func (a *App) AnalysisBacktestLiquidation(hours int, interval string, minConfide
 		ChartInterval:     chartInterval,
 	}, nil
 }
+
 func (a *App) AnalysisBacktest2FA(hours int, interval string, factor string, minConfidence float64, strategy string) (AnalysisBacktest2FAResponse, error) {
 	baseResults, sinceTS, chartEndTS, err := a.buildAnalysisBacktestResults(hours, 0, analysisBacktestQualityAll, analysisBacktestNoiseNone)
 	if err != nil {
@@ -1627,7 +1859,6 @@ func (a *App) AnalysisBacktest2FA(hours int, interval string, factor string, min
 	strategyGroups := buildAnalysisBacktestStrategyGroups(candidates)
 	strategyFiltered, strategyActive := filterAnalysisSignalsByStrategyGroups(candidates, strategyGroups, strategyMode)
 	selectedFactor := defaultAnalysisSecondFactorSelection(factor)
-	factorFilteredAll := filterAnalysisSignalsBySecondFactor(strategyFiltered, selectedFactor)
 	confFiltered := filterAnalysisSignalsByConfidence(strategyFiltered, minConfidence)
 	filtered := filterAnalysisSignalsBySecondFactor(confFiltered, selectedFactor)
 	candles, source, chartInterval, err := a.fetchAnalysisBacktestChartCandles(hours, interval, sinceTS, chartEndTS)
@@ -1639,8 +1870,8 @@ func (a *App) AnalysisBacktest2FA(hours int, interval string, factor string, min
 		Signals:                 filtered,
 		Summary:                 buildAnalysisBacktestSummary(filtered, hours),
 		HorizonStats:            buildAnalysisBacktestHorizonStats(filtered),
-		ConfidenceBuckets:       buildAnalysisBacktestConfidenceBuckets(factorFilteredAll),
-		ConfidenceFactorBuckets: buildAnalysisBacktestConfidenceFactorBuckets(candidates),
+		ConfidenceBuckets:       buildAnalysisBacktestConfidenceBuckets(strategyFiltered),
+		ConfidenceFactorBuckets: buildAnalysisBacktestConfidenceFactorBuckets(strategyFiltered),
 		StrategyMode:            strategyMode,
 		StrategyActive:          strategyActive,
 		StrategyGroups:          strategyGroups,

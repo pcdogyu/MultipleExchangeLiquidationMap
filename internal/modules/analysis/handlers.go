@@ -10,6 +10,18 @@ import (
 	"multipleexchangeliquidationmap/internal/shared/pages"
 )
 
+const analysisBacktestWindowHours = 24 * 14
+
+func parseAnalysisBacktestHours(r *http.Request) int {
+	hours := analysisBacktestWindowHours
+	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= analysisBacktestWindowHours {
+			hours = n
+		}
+	}
+	return hours
+}
+
 func (s *service) handlePage(w http.ResponseWriter, r *http.Request) {
 	pageview.Serve(w, r, pages.Analysis(), nil, pageview.Options{
 		NoStore: true,
@@ -53,12 +65,7 @@ func (s *service) handleBacktest(w http.ResponseWriter, r *http.Request) {
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	hours := 720
-	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 24*90 {
-			hours = n
-		}
-	}
+	hours := parseAnalysisBacktestHours(r)
 	interval := strings.TrimSpace(r.URL.Query().Get("interval"))
 	minConfidence := 0.0
 	if raw := strings.TrimSpace(r.URL.Query().Get("conf_min")); raw != "" {
@@ -81,12 +88,7 @@ func (s *service) handleBacktestLiquidation(w http.ResponseWriter, r *http.Reque
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	hours := 24
-	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 168 {
-			hours = n
-		}
-	}
+	hours := parseAnalysisBacktestHours(r)
 	interval := strings.TrimSpace(r.URL.Query().Get("interval"))
 	minConfidence := 0.0
 	if raw := strings.TrimSpace(r.URL.Query().Get("conf_min")); raw != "" {
@@ -102,14 +104,40 @@ func (s *service) handleBacktestLiquidation(w http.ResponseWriter, r *http.Reque
 	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
+func (s *service) handleBacktestLiquidationSignalBackfill(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpx.MethodNotAllowed(w)
+		return
+	}
+	resp, err := s.core.AnalysisBacktestLiquidationSignalBackfill(parseAnalysisBacktestHours(r))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (s *service) handleBacktestLiquidationSignalReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpx.MethodNotAllowed(w)
+		return
+	}
+	resp, err := s.core.AnalysisBacktestLiquidationSignalReset(parseAnalysisBacktestHours(r))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
 func (s *service) handleBacktest2FA(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	hours := 24
+	hours := analysisBacktestWindowHours
 	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 168 {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= analysisBacktestWindowHours {
 			hours = n
 		}
 	}

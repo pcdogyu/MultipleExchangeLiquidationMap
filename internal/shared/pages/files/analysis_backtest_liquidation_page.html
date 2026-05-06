@@ -87,6 +87,7 @@ th{color:var(--muted);font-weight:600}
 [data-theme="dark"] .horizon-pill.pending-pill{background:rgba(217,119,6,.14);border-color:rgba(251,191,36,.24)}
 [data-theme="dark"] .horizon-pill.nodata-pill{background:rgba(51,65,85,.45);border-color:#334155}
 [data-theme="dark"] .toolbar select,[data-theme="dark"] .toolbar button{background:#000;color:#f8fafc;border-color:#475569}
+.toolbar button:disabled{opacity:.65;cursor:wait}
 @media (max-width:1100px){.hero,.stats{grid-template-columns:1fr}.horizon-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:1100px){.principle-card,.principle-points{grid-template-columns:1fr}}
 @media (max-width:980px){.menu{display:none}.wrap{padding:18px 12px 32px}.toolbar{flex-direction:column;align-items:stretch}}
@@ -178,6 +179,8 @@ th{color:var(--muted);font-weight:600}
             <option value="90">&gt;90</option>
           </select>
           <button class="primary" type="button" id="reloadBtn">&#21047;&#26032;&#22270;&#34920;</button>
+          <button class="secondary" type="button" id="backfillSignalsBtn">信号回填</button>
+          <button class="secondary" type="button" id="resetSignalsBtn">信号重置</button>
         </div>
         <div class="toolbar-group">
           <button class="secondary" type="button" id="widthDownBtn">&#23485;&#24230; -</button>
@@ -236,6 +239,8 @@ th{color:var(--muted);font-weight:600}
 
 <script>
 const DAY_MS=24*60*60*1000;
+const BACKTEST_HOURS=336;
+const BACKTEST_RANGE_LABEL='近2周';
 const INTERVAL_CONFIG={
   '1m':{label:'1m',source:'1m',bucketMs:60*1000,direct:true},
   '5m':{label:'5m',source:'5m',bucketMs:5*60*1000,direct:true},
@@ -283,13 +288,29 @@ function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light';
 function esc(s){return String(s==null?'':s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
 function fmtPrice(v){const n=Number(v||0);return isFinite(n)?n.toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1}):'-';}
 function fmtConfidence(v){const n=Number(v||0);return isFinite(n)?n.toFixed(1)+'%':'-';}
-function confidenceFilterLabel(v){const n=Number(v||0);return n>0?('>'+n):'All';}
+function confidenceFilterLabel(v){const n=Number(v||0);return n>0?('>'+n):'全部';}
 function fmtPct(v){const n=Number(v||0);return isFinite(n)?(n>=0?'+':'')+n.toFixed(2)+'%':'-';}
 function fmtDelta(v){const n=Number(v||0);return isFinite(n)?(n>=0?'+':'')+n.toFixed(1):'-';}
 function fmtTime(ts){const n=Number(ts||0);if(!n)return '-';return new Date(n).toLocaleString('zh-CN',{hour12:false});}
 function resultLabel(v){if(v==='correct')return ['正确','ok'];if(v==='wrong')return ['错误','bad'];if(v==='pending')return ['待验证','pending'];if(v==='no_data')return ['无数据','pending'];return [String(v||'-'),''];}
 function directionLabel(v){return v==='up'?'开多':'开空';}
 function secondFactorLabel(sig){return String((sig&&sig.second_factor_label)||'-');}
+function footerEl(){return document.getElementById('footer')||document.getElementById('shared-global-footer')||document.getElementById('globalFooter')||document.querySelector('.footer');}
+function setFooter(text){const el=footerEl();if(el)el.textContent=text;}
+function setActionBusy(busy,active){
+  const defs=[
+    ['reloadBtn','刷新图表','刷新中...'],
+    ['backfillSignalsBtn','信号回填','回填中...'],
+    ['resetSignalsBtn','信号重置','重置中...']
+  ];
+  for(const def of defs){
+    const btn=document.getElementById(def[0]);
+    if(!btn)continue;
+    btn.disabled=!!busy;
+    btn.textContent=(busy&&active===def[0])?def[2]:def[1];
+  }
+}
+function setReloadBusy(busy){setActionBusy(busy,'reloadBtn');}
 function horizonByMin(sig,min){for(const h of (sig&&sig.horizons||[])){if(Number(h&&h.horizon_min||0)===min)return h;}return null;}
 function renderHorizonCell(sig,min){const h=horizonByMin(sig,min);if(!h)return '<div class="horizon-pill nodata-pill"><span class="pending">已截断</span><span class="meta">反向信号</span></div>';const res=resultLabel(h.result);if(h.result==='pending')return '<div class="horizon-pill pending-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';if(h.result==='no_data')return '<div class="horizon-pill nodata-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';const isCorrect=h.result==='correct';const cls=isCorrect?'ok':'bad';const pillCls=isCorrect?'up-pill':'down-pill';return '<div class="horizon-pill '+pillCls+'"><span class="price">'+fmtPrice(h.verify_close_price)+'</span><span class="meta '+cls+'">'+fmtDelta(h.delta_price)+' / '+fmtPct(h.delta_pct)+'</span></div>';}
 function clamp(v,min,max){return Math.max(min,Math.min(max,v));}
@@ -366,7 +387,8 @@ async function loadChartCandles(){
   draw();
   const cfg=INTERVAL_CONFIG[state.interval]||INTERVAL_CONFIG['5m'];
   const endTS=Date.now();
-  const startTS=endTS-DAY_MS;
+  const rangeHours=Math.max(24,Number(BACKTEST_HOURS||24));
+  const startTS=endTS-rangeHours*60*60*1000;
   const targetCount=Math.ceil((endTS-startTS)/cfg.bucketMs)+8;
   const base=await fetchRangeRows(cfg.source,startTS,endTS,targetCount);
   let chartRows=base.rows;
@@ -389,7 +411,7 @@ function updateChartMeta(){
   const meta=document.getElementById('chartMeta');
   const count=state.candles.length;
   const visible=count?Math.min(state.viewCount,count):0;
-  meta.textContent='最近 24h 开仓信号图 | 周期 '+cfg.label+' | 来源 '+state.chartSource+' | K线 '+count+' | 可见 '+visible;
+  meta.textContent=BACKTEST_RANGE_LABEL+'开仓信号图 | 周期 '+cfg.label+' | 来源 '+state.chartSource+' | K线 '+count+' | 可见 '+visible;
 }
 function syncChartWidthToViewport(force){
   const viewport=document.getElementById('chartViewport');
@@ -536,7 +558,7 @@ function draw(){
 function renderHistory(){
   const body=document.getElementById('historyBody');
   if(!state.signals.length){
-    body.innerHTML='<tr><td colspan="10" class="empty">当前强度过滤下最近 24h 没有 1h/4h + 20/50 同步确认信号</td></tr>';
+    body.innerHTML='<tr><td colspan="10" class="empty">当前强度过滤下'+BACKTEST_RANGE_LABEL+'没有 1h/4h + 20/50 同步确认信号</td></tr>';
     return;
   }
   body.innerHTML=state.signals.slice().sort((a,b)=>Number(b.signal_ts||0)-Number(a.signal_ts||0)).map(sig=>{
@@ -641,13 +663,44 @@ function applyBacktestData(d){
 async function loadSignals(){
   state.chartLoading=true;
   draw();
-  const params=new URLSearchParams({hours:'24',interval:String(state.interval||'5m'),conf_min:String(state.confMin||'0')});
+  const params=new URLSearchParams({hours:String(BACKTEST_HOURS),interval:String(state.interval||'5m'),conf_min:String(state.confMin||'0')});
   const r=await fetch('/api/analysis-backtest-liquidation?'+params.toString()).catch(()=>null);
   if(!r)throw new Error('Cannot request /api/analysis-backtest-liquidation');
   if(!r.ok)throw new Error(await r.text().catch(()=>('HTTP '+r.status)));
   const d=await r.json().catch(()=>null);
   if(!d)throw new Error('API response is not valid JSON');
   applyBacktestData(d);
+  if(!state.candles.length){
+    await loadChartCandles();
+  }
+}
+async function mutateSignals(kind){
+  const isReset=kind==='reset';
+  const btnID=isReset?'resetSignalsBtn':'backfillSignalsBtn';
+  const path=isReset?'/api/analysis-backtest-liquidation/signals/reset':'/api/analysis-backtest-liquidation/signals/backfill';
+  setActionBusy(true,btnID);
+  try{
+    setFooter(isReset?'信号重置中...':'信号回填中...');
+    const params=new URLSearchParams({hours:String(BACKTEST_HOURS)});
+    const r=await fetch(path+'?'+params.toString(),{method:'POST'}).catch(()=>null);
+    if(!r)throw new Error('Cannot request '+path);
+    if(!r.ok)throw new Error(await r.text().catch(()=>('HTTP '+r.status)));
+    const d=await r.json().catch(()=>({}));
+    await loadSignals();
+    const total=Number(d.total||0);
+    const inserted=Number(d.inserted||0);
+    const updated=Number(d.updated||0);
+    const deleted=Number(d.deleted||0);
+    const prefix=isReset?'信号重置完成':'信号回填完成';
+    const extra=isReset?('，删除 '+deleted+' 条'):'';
+    setFooter(prefix+'：共 '+total+' 条，新增 '+inserted+' 条，更新 '+updated+' 条'+extra+' | K线 '+state.candles.length);
+  }catch(err){
+    state.chartLoading=false;
+    draw();
+    setFooter((isReset?'信号重置失败: ':'信号回填失败: ')+String(err&&err.message||err||'unknown error'));
+  }finally{
+    setActionBusy(false);
+  }
 }
 function resetViewState(){
   state.viewStart=0;
@@ -674,6 +727,8 @@ function bindControls(){
     await reloadAll();
   });
   document.getElementById('reloadBtn').addEventListener('click',reloadAll);
+  document.getElementById('backfillSignalsBtn').addEventListener('click',()=>mutateSignals('backfill'));
+  document.getElementById('resetSignalsBtn').addEventListener('click',()=>mutateSignals('reset'));
   document.getElementById('widthDownBtn').addEventListener('click',()=>adjustChartSize('width',-180));
   document.getElementById('widthUpBtn').addEventListener('click',()=>adjustChartSize('width',180));
   document.getElementById('heightDownBtn').addEventListener('click',()=>adjustChartSize('height',-80));
@@ -685,26 +740,47 @@ function bindControls(){
   });
 }
 async function reloadChartOnly(){
+  setReloadBusy(true);
   try{
     await loadSignals();
-    document.getElementById('footer').textContent='Confidence '+confidenceFilterLabel(state.confMin)+' | Interval '+state.interval+' | Signals '+state.signals.length+' | K '+state.candles.length;
+    setFooter('强度 '+confidenceFilterLabel(state.confMin)+' | 周期 '+state.interval+' | 信号 '+state.signals.length+' | K线 '+state.candles.length);
   }catch(err){
     state.chartLoading=false;
-    state.candles=[];
-    draw();
-    document.getElementById('chartMeta').textContent='Chart load failed: '+String(err&&err.message||err||'unknown error');
-    document.getElementById('footer').textContent='Chart load failed';
+    try{
+      await loadChartCandles();
+      document.getElementById('chartMeta').textContent='信号加载失败，已先显示行情 | 周期 '+state.interval+' | K线 '+state.candles.length;
+      setFooter('信号加载失败，已先显示行情: '+String(err&&err.message||err||'unknown error'));
+    }catch(chartErr){
+      state.candles=[];
+      draw();
+      document.getElementById('chartMeta').textContent='Chart load failed: '+String(chartErr&&chartErr.message||chartErr||err||'unknown error');
+      setFooter('Chart load failed');
+    }
+  }finally{
+    setReloadBusy(false);
   }
 }
 async function reloadAll(){
+  setReloadBusy(true);
   try{
-    document.getElementById('footer').textContent='Loading...';
+    setFooter('Loading...');
     await loadSignals();
-    document.getElementById('footer').textContent='Confidence '+confidenceFilterLabel(state.confMin)+' | Last 24h signals '+state.signals.length+' | Interval '+state.interval+' | K '+state.candles.length;
+    setFooter('强度 '+confidenceFilterLabel(state.confMin)+' | '+BACKTEST_RANGE_LABEL+'信号 '+state.signals.length+' | 周期 '+state.interval+' | K线 '+state.candles.length);
   }catch(err){
     state.chartLoading=false;
-    document.getElementById('footer').textContent=String(err&&err.message||err||'Load failed');
-    draw();
+    try{
+      await loadChartCandles();
+      state.signals=[];
+      renderSummary(buildSummaryFromSignals(state.signals));
+      renderHorizonStats(buildHorizonStatsFromSignals(state.signals));
+      renderHistory();
+      setFooter('信号加载失败，已先显示行情: '+String(err&&err.message||err||'Load failed'));
+    }catch(chartErr){
+      setFooter(String(chartErr&&chartErr.message||chartErr||err||'Load failed'));
+      draw();
+    }
+  }finally{
+    setReloadBusy(false);
   }
 }
 function bindChartInteractions(){

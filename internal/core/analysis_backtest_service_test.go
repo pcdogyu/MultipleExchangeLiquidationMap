@@ -3,8 +3,11 @@ package liqmap
 import (
 	"database/sql"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +16,12 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestAnalysisBacktestHorizonsForSignalTrimmedByOppositeSignal(t *testing.T) {
 	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
@@ -127,6 +136,9 @@ func TestAnalysisBacktestStatsUseConfidenceFilteredSignals(t *testing.T) {
 	summary := buildAnalysisBacktestSummary(filtered, 24)
 	if summary.TotalSignals != 2 || summary.CorrectCount != 1 || summary.WrongCount != 1 || summary.CorrectRate != 50 {
 		t.Fatalf("filtered summary = %+v, want total=2 correct=1 wrong=1 rate=50", summary)
+	}
+	if summary.VerifiedHorizonCount != 6 || summary.CorrectHorizonCount != 4 || summary.HorizonCorrectRate != 66.7 {
+		t.Fatalf("filtered horizon summary = %+v, want verified=6 correct=4 rate=66.7", summary)
 	}
 
 	stats := buildAnalysisBacktestHorizonStats(filtered)
@@ -264,6 +276,69 @@ func TestParseAnalysisBacktestCandlesKeepsQuoteVolume(t *testing.T) {
 	}
 	if candles[1].QuoteVolume != 6789.1 {
 		t.Fatalf("okx fallback quote volume = %v, want 6789.1", candles[1].QuoteVolume)
+	}
+}
+
+func TestFetchAnalysisBacktestCandleRangePaginatesPastExchangeLimit(t *testing.T) {
+	const step = int64(5 * time.Minute / time.Millisecond)
+	startTS := time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC).UnixMilli()
+	endTS := startTS + 2099*step
+	requests := 0
+	app := &App{
+		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			requests++
+			q := req.URL.Query()
+			limit, err := strconv.Atoi(q.Get("limit"))
+			if err != nil {
+				return nil, err
+			}
+			if limit > analysisBacktestKlinePageLimit {
+				return nil, fmt.Errorf("limit %d exceeds page limit", limit)
+			}
+			chunkStart, err := strconv.ParseInt(q.Get("startTime"), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			chunkEnd, err := strconv.ParseInt(q.Get("endTime"), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			var body strings.Builder
+			body.WriteByte('[')
+			count := 0
+			for ts := chunkStart; ts <= chunkEnd && count < limit; ts += step {
+				if count > 0 {
+					body.WriteByte(',')
+				}
+				fmt.Fprintf(&body, `[%d,"1","2","0.5","1.5","10"]`, ts)
+				count++
+			}
+			body.WriteByte(']')
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(body.String())),
+				Request:    req,
+			}, nil
+		})},
+	}
+
+	candles, source, err := app.fetchAnalysisBacktestCandleRange("5m", step, startTS, endTS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != "binance:5m" {
+		t.Fatalf("source = %q, want binance:5m", source)
+	}
+	if requests != 3 {
+		t.Fatalf("requests = %d, want 3", requests)
+	}
+	if len(candles) != 2100 {
+		t.Fatalf("candle count = %d, want 2100", len(candles))
+	}
+	if candles[0].TS != startTS || candles[len(candles)-1].TS != endTS {
+		t.Fatalf("range = %d..%d, want %d..%d", candles[0].TS, candles[len(candles)-1].TS, startTS, endTS)
 	}
 }
 
@@ -455,6 +530,159 @@ func TestFilterLiquidationBacktestRecordsByBandSyncLoadsHistoricalSnapshots(t *t
 	}
 }
 
+func TestLiquidationBacktestSignalCacheUpsertIsIdempotent(t *testing.T) {
+	db := newAnalysisBacktestMemoryDB(t)
+	app := &App{db: db}
+	baseTS := time.Now().Add(-time.Hour).UnixMilli()
+	records := []AnalysisSignalRecord{{
+		SignalTS:          baseTS,
+		Symbol:            defaultSymbol,
+		SourceGroup:       analysisLiquidationBacktestSourceGroup,
+		Direction:         "up",
+		Confidence:        72.5,
+		SignalPrice:       2300,
+		AnalysisGenerated: baseTS,
+		Headline:          "开多",
+		Summary:           "test",
+		VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+		SecondFactorKey:   analysisSecondFactorBand2050Up,
+		SecondFactorLabel: "20/50 同步上推",
+	}}
+
+	inserted, updated, err := app.upsertLiquidationBacktestCachedRecords(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted != 1 || updated != 0 {
+		t.Fatalf("first upsert inserted=%d updated=%d, want 1/0", inserted, updated)
+	}
+	inserted, updated, err = app.upsertLiquidationBacktestCachedRecords(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted != 0 || updated != 1 {
+		t.Fatalf("second upsert inserted=%d updated=%d, want 0/1", inserted, updated)
+	}
+	got, err := app.listLiquidationBacktestCachedRecords(baseTS - 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SecondFactorKey != analysisSecondFactorBand2050Up {
+		t.Fatalf("cached records = %+v, want one band sync up record", got)
+	}
+}
+
+func TestAnalysisBacktestLiquidationUsesCachedRecords(t *testing.T) {
+	const step = int64(5 * time.Minute / time.Millisecond)
+	db := newAnalysisBacktestMemoryDB(t)
+	baseTS := floorToFiveMinute(time.Now().Add(-time.Hour).UnixMilli())
+	app := &App{
+		db: db,
+		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			q := req.URL.Query()
+			startTS, err := strconv.ParseInt(q.Get("startTime"), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			endTS, err := strconv.ParseInt(q.Get("endTime"), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			limit, err := strconv.Atoi(q.Get("limit"))
+			if err != nil {
+				return nil, err
+			}
+			var body strings.Builder
+			body.WriteByte('[')
+			count := 0
+			for ts := startTS; ts <= endTS && count < limit; ts += step {
+				if count > 0 {
+					body.WriteByte(',')
+				}
+				fmt.Fprintf(&body, `[%d,"2300","2310","2290","2305","10"]`, ts)
+				count++
+			}
+			body.WriteByte(']')
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(body.String())),
+				Request:    req,
+			}, nil
+		})},
+	}
+	_, _, err := app.upsertLiquidationBacktestCachedRecords([]AnalysisSignalRecord{{
+		SignalTS:          baseTS,
+		Symbol:            defaultSymbol,
+		SourceGroup:       analysisLiquidationBacktestSourceGroup,
+		Direction:         "up",
+		Confidence:        71,
+		SignalPrice:       2300,
+		AnalysisGenerated: baseTS,
+		Headline:          "开多",
+		Summary:           "cached",
+		VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+		SecondFactorKey:   analysisSecondFactorBand2050Up,
+		SecondFactorLabel: "20/50 同步上推",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := app.AnalysisBacktestLiquidation(2, "5m", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Signals) != 1 {
+		t.Fatalf("signals = %d, want cached signal", len(resp.Signals))
+	}
+	if resp.Signals[0].SecondFactorKey != analysisSecondFactorBand2050Up || resp.Signals[0].Summary != "cached" {
+		t.Fatalf("signal = %+v, want cached band sync signal", resp.Signals[0])
+	}
+	if len(resp.Candles) == 0 {
+		t.Fatalf("expected chart candles")
+	}
+}
+
+func TestAnalysisBacktestLiquidationSignalResetDeletesCachedRecords(t *testing.T) {
+	db := newAnalysisBacktestMemoryDB(t)
+	app := &App{db: db}
+	baseTS := time.Now().Add(-time.Hour).UnixMilli()
+	_, _, err := app.upsertLiquidationBacktestCachedRecords([]AnalysisSignalRecord{{
+		SignalTS:          baseTS,
+		Symbol:            defaultSymbol,
+		SourceGroup:       analysisLiquidationBacktestSourceGroup,
+		Direction:         "down",
+		Confidence:        68,
+		SignalPrice:       2300,
+		AnalysisGenerated: baseTS,
+		Headline:          "开空",
+		Summary:           "cached",
+		VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+		SecondFactorKey:   analysisSecondFactorBand2050Down,
+		SecondFactorLabel: "20/50 同步下压",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := app.AnalysisBacktestLiquidationSignalReset(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Deleted != 1 || resp.Total != 0 {
+		t.Fatalf("reset response = %+v, want deleted=1 total=0", resp)
+	}
+	got, err := app.listLiquidationBacktestCachedRecords(baseTS - 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("cached records after reset = %+v, want none", got)
+	}
+}
+
 func TestAnalysisPersistenceScorePassesAlignedVolumeSpikeTrend(t *testing.T) {
 	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
 	item := AnalysisSignalResult{
@@ -548,6 +776,7 @@ func TestBuildLiquidationBacktestSignalRecordsOnlyUsesOpenStateUpdates(t *testin
 		t.Fatalf("unexpected record: %+v", got)
 	}
 }
+
 func TestAnalysisPersistenceNoiseStrategyFiltersLowScores(t *testing.T) {
 	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
 	step := int64(5 * time.Minute / time.Millisecond)

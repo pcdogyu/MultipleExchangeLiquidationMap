@@ -183,6 +183,26 @@ func Init(db *sql.DB) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_analysis_direction_signals_ts ON analysis_direction_signals(signal_ts DESC);`,
 		`CREATE INDEX IF NOT EXISTS idx_analysis_direction_signals_symbol_ts ON analysis_direction_signals(symbol, signal_ts DESC);`,
+		`CREATE TABLE IF NOT EXISTS analysis_liquidation_backtest_signals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			signal_ts INTEGER NOT NULL,
+			symbol TEXT NOT NULL,
+			source_group INTEGER NOT NULL,
+			direction TEXT NOT NULL,
+			confidence REAL NOT NULL DEFAULT 0,
+			signal_price REAL NOT NULL,
+			analysis_generated_at INTEGER NOT NULL,
+			headline TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			verify_horizon_min INTEGER NOT NULL DEFAULT 5,
+			second_factor_key TEXT NOT NULL DEFAULT '',
+			second_factor_label TEXT NOT NULL DEFAULT '',
+			generated_at INTEGER NOT NULL
+		);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_liq_backtest_signals_uniq
+			ON analysis_liquidation_backtest_signals(symbol, signal_ts, direction);`,
+		`CREATE INDEX IF NOT EXISTS idx_analysis_liq_backtest_signals_symbol_ts
+			ON analysis_liquidation_backtest_signals(symbol, signal_ts DESC);`,
 	}
 	for _, stmt := range stmts {
 		if err := execWithBusyRetry(db, stmt); err != nil {

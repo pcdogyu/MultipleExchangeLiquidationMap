@@ -149,13 +149,16 @@ type AnalysisSignalHorizonResult struct {
 }
 
 type AnalysisBacktestSummary struct {
-	WindowHours  int     `json:"window_hours"`
-	TotalSignals int     `json:"total_signals"`
-	CorrectCount int     `json:"correct_count"`
-	WrongCount   int     `json:"wrong_count"`
-	PendingCount int     `json:"pending_count"`
-	NoDataCount  int     `json:"no_data_count"`
-	CorrectRate  float64 `json:"correct_rate"`
+	WindowHours          int     `json:"window_hours"`
+	TotalSignals         int     `json:"total_signals"`
+	CorrectCount         int     `json:"correct_count"`
+	WrongCount           int     `json:"wrong_count"`
+	PendingCount         int     `json:"pending_count"`
+	NoDataCount          int     `json:"no_data_count"`
+	CorrectRate          float64 `json:"correct_rate"`
+	VerifiedHorizonCount int     `json:"verified_horizon_count"`
+	CorrectHorizonCount  int     `json:"correct_horizon_count"`
+	HorizonCorrectRate   float64 `json:"horizon_correct_rate"`
 }
 
 type AnalysisBacktestHorizonStat struct {
@@ -219,6 +222,13 @@ type AnalysisBacktestPageResponse struct {
 	NoiseStrategy     string                             `json:"noise_strategy,omitempty"`
 	ChartSource       string                             `json:"chart_source,omitempty"`
 	ChartInterval     string                             `json:"chart_interval,omitempty"`
+}
+
+type AnalysisBacktestLiquidationSignalMutationResponse struct {
+	Deleted  int `json:"deleted,omitempty"`
+	Inserted int `json:"inserted"`
+	Updated  int `json:"updated"`
+	Total    int `json:"total"`
 }
 
 type AnalysisBacktestHistoryResponse struct {
