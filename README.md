@@ -149,6 +149,8 @@ go run .
 | `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | Optional reachable Telegram Bot API base URL or private reverse proxy |
 | `TELEGRAM_TEXT_TIMEOUT_SEC` | `20` | Optional Telegram text request timeout, in seconds |
 | `TELEGRAM_PHOTO_TIMEOUT_SEC` | `45` | Optional Telegram photo upload timeout, in seconds |
+| `TELEGRAM_REQUEST_ATTEMPTS` | `5` | Optional Telegram request attempts for transient network failures, capped at `10` |
+| `TELEGRAM_RETRY_DELAY_SEC` | `1.5` | Optional base retry delay. Backoff is `delay * attempt`; `TELEGRAM_RETRY_DELAY_MS` is also supported |
 
 ---
 
@@ -195,7 +197,7 @@ This script only cleans old rows from `liquidation_events`.
 If needed, you can manually clean or archive old rows from `band_reports` and `longest_bar_reports`.
 
 #### 5. Telegram request times out
-If sending fails with `context deadline exceeded`, the host may not be able to reach `api.telegram.org` reliably. Set `TELEGRAM_API_BASE_URL` or the dashboard field `telegram_api_base` to a reachable private Bot API / reverse proxy. For slow photo uploads, increase `TELEGRAM_PHOTO_TIMEOUT_SEC`, for example `120`.
+Telegram sends are retried automatically for transient network failures such as DNS lookup failures, timeouts, HTTP 429, and 5xx responses. If sending still fails with `context deadline exceeded` or `no such host`, the host may not be able to reach `api.telegram.org` reliably. Set `TELEGRAM_API_BASE_URL` or the dashboard field `telegram_api_base` to a reachable private Bot API / reverse proxy. For slow photo uploads, increase `TELEGRAM_PHOTO_TIMEOUT_SEC`, for example `120`. To tune retries, set `TELEGRAM_REQUEST_ATTEMPTS` and `TELEGRAM_RETRY_DELAY_SEC`.
 
 ---
 
@@ -348,6 +350,8 @@ python .\liqmap_single_okx_fixed.py
 | `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | 可选 Telegram Bot API 地址或自建反向代理地址 |
 | `TELEGRAM_TEXT_TIMEOUT_SEC` | `20` | 可选 Telegram 文本请求超时，单位秒 |
 | `TELEGRAM_PHOTO_TIMEOUT_SEC` | `45` | 可选 Telegram 图片上传超时，单位秒 |
+| `TELEGRAM_REQUEST_ATTEMPTS` | `5` | 可选 Telegram 请求重试次数，用于临时网络失败，最高 `10` |
+| `TELEGRAM_RETRY_DELAY_SEC` | `1.5` | 可选基础重试等待时间，退避为 `等待 * 第几次重试`；也支持 `TELEGRAM_RETRY_DELAY_MS` |
 
 ---
 
@@ -394,7 +398,7 @@ python .\liqmap_single_okx_fixed.py
 如果需要，你可以手动清理或归档 `band_reports` 和 `longest_bar_reports`。
 
 #### 5. Telegram 请求超时
-如果发送失败里出现 `context deadline exceeded`，通常是当前主机访问 `api.telegram.org` 不稳定或不可达。可以设置环境变量 `TELEGRAM_API_BASE_URL`，或在消息通道页面填写 `telegram_api_base` 为可访问的自建 Bot API / 反向代理地址。若只有图片发送较慢，可以把 `TELEGRAM_PHOTO_TIMEOUT_SEC` 调大，例如 `120`。
+Telegram 发送会对 DNS 解析失败、超时、HTTP 429 和 5xx 这类临时网络失败自动重试。如果重试后仍出现 `context deadline exceeded` 或 `no such host`，通常是当前主机访问 `api.telegram.org` 不稳定或不可达。可以设置环境变量 `TELEGRAM_API_BASE_URL`，或在消息通道页面填写 `telegram_api_base` 为可访问的自建 Bot API / 反向代理地址。若只有图片发送较慢，可以把 `TELEGRAM_PHOTO_TIMEOUT_SEC` 调大，例如 `120`。需要调整重试强度时，设置 `TELEGRAM_REQUEST_ATTEMPTS` 和 `TELEGRAM_RETRY_DELAY_SEC`。
 
 ---
 

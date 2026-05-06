@@ -23,7 +23,8 @@ const (
 	defaultTelegramAPIBaseURL = "https://api.telegram.org"
 	telegramTextTimeout       = 20 * time.Second
 	telegramPhotoTimeout      = 45 * time.Second
-	telegramRequestAttempts   = 3
+	telegramRequestAttempts   = 5
+	telegramMaxAttempts       = 10
 	telegramRetryDelay        = 1500 * time.Millisecond
 )
 
@@ -303,12 +304,47 @@ func telegramTimeoutFromEnv(key string, fallback time.Duration) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
+func telegramRequestAttemptsFromEnv() int {
+	raw := strings.TrimSpace(os.Getenv("TELEGRAM_REQUEST_ATTEMPTS"))
+	if raw == "" {
+		return telegramRequestAttempts
+	}
+	attempts, err := strconv.Atoi(raw)
+	if err != nil || attempts <= 0 {
+		return telegramRequestAttempts
+	}
+	if attempts > telegramMaxAttempts {
+		return telegramMaxAttempts
+	}
+	return attempts
+}
+
+func telegramRetryDelayFromEnv() time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("TELEGRAM_RETRY_DELAY_MS")); raw != "" {
+		millis, err := strconv.Atoi(raw)
+		if err == nil && millis > 0 {
+			return time.Duration(millis) * time.Millisecond
+		}
+	}
+	raw := strings.TrimSpace(os.Getenv("TELEGRAM_RETRY_DELAY_SEC"))
+	if raw == "" {
+		return telegramRetryDelay
+	}
+	seconds, err := strconv.ParseFloat(raw, 64)
+	if err != nil || seconds <= 0 {
+		return telegramRetryDelay
+	}
+	return time.Duration(seconds * float64(time.Second))
+}
+
 func (a *App) doTelegramRequest(path, contentType string, payload []byte, timeout time.Duration) error {
 	baseURL := a.telegramAPIBaseURL()
 	reqURL := baseURL + path
 	client := a.telegramHTTPClient(timeout)
+	attempts := telegramRequestAttemptsFromEnv()
+	retryDelay := telegramRetryDelayFromEnv()
 	var lastErr error
-	for attempt := 1; attempt <= telegramRequestAttempts; attempt++ {
+	for attempt := 1; attempt <= attempts; attempt++ {
 		req, err := http.NewRequest(http.MethodPost, reqURL, bytes.NewReader(payload))
 		if err != nil {
 			return err
@@ -317,33 +353,48 @@ func (a *App) doTelegramRequest(path, contentType string, payload []byte, timeou
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = wrapTelegramNetworkError(baseURL, err)
-			if attempt < telegramRequestAttempts && isTelegramRetryableError(err) {
-				time.Sleep(time.Duration(attempt) * telegramRetryDelay)
+			if attempt < attempts && isTelegramRetryableError(err) {
+				a.sleepBeforeTelegramRetry(path, attempt, attempts, retryDelay, lastErr)
 				continue
 			}
-			return lastErr
+			return telegramErrWithAttempts(lastErr, attempt)
 		}
 		data, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
 			lastErr = readErr
-			if attempt < telegramRequestAttempts {
-				time.Sleep(time.Duration(attempt) * telegramRetryDelay)
+			if attempt < attempts {
+				a.sleepBeforeTelegramRetry(path, attempt, attempts, retryDelay, lastErr)
 				continue
 			}
-			return readErr
+			return telegramErrWithAttempts(readErr, attempt)
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return nil
 		}
 		lastErr = buildTelegramStatusError(resp.Status, data)
-		if attempt < telegramRequestAttempts && isTelegramRetryableStatus(resp.StatusCode) {
-			time.Sleep(time.Duration(attempt) * telegramRetryDelay)
+		if attempt < attempts && isTelegramRetryableStatus(resp.StatusCode) {
+			a.sleepBeforeTelegramRetry(path, attempt, attempts, retryDelay, lastErr)
 			continue
 		}
-		return lastErr
+		return telegramErrWithAttempts(lastErr, attempt)
 	}
-	return lastErr
+	return telegramErrWithAttempts(lastErr, attempts)
+}
+
+func (a *App) sleepBeforeTelegramRetry(path string, attempt, attempts int, baseDelay time.Duration, err error) {
+	delay := time.Duration(attempt) * baseDelay
+	if a.debug {
+		log.Printf("telegram request retry %d/%d for %s after %s: %v", attempt+1, attempts, redactTelegramBotToken(path), delay, err)
+	}
+	time.Sleep(delay)
+}
+
+func telegramErrWithAttempts(err error, attempts int) error {
+	if err == nil || attempts <= 1 {
+		return err
+	}
+	return fmt.Errorf("%w (after %d attempts)", err, attempts)
 }
 
 func (a *App) telegramHTTPClient(timeout time.Duration) *http.Client {
