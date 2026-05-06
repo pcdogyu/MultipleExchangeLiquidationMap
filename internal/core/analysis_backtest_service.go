@@ -1790,12 +1790,10 @@ func (a *App) AnalysisBacktestLiquidationSignalReset(hours int) (AnalysisBacktes
 		return AnalysisBacktestLiquidationSignalMutationResponse{}, err
 	}
 	deleted64, _ := res.RowsAffected()
-	backfill, err := a.AnalysisBacktestLiquidationSignalBackfill(hours)
-	if err != nil {
-		return AnalysisBacktestLiquidationSignalMutationResponse{}, err
-	}
-	backfill.Deleted = int(deleted64)
-	return backfill, nil
+	return AnalysisBacktestLiquidationSignalMutationResponse{
+		Deleted: int(deleted64),
+		Total:   0,
+	}, nil
 }
 
 func (a *App) AnalysisBacktest(hours int, interval string, minConfidence float64, qualityMode string, noiseStrategy string) (AnalysisBacktestPageResponse, error) {

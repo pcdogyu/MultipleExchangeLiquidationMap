@@ -691,9 +691,11 @@ async function mutateSignals(kind){
     const inserted=Number(d.inserted||0);
     const updated=Number(d.updated||0);
     const deleted=Number(d.deleted||0);
-    const prefix=isReset?'信号重置完成':'信号回填完成';
-    const extra=isReset?('，删除 '+deleted+' 条'):'';
-    setFooter(prefix+'：共 '+total+' 条，新增 '+inserted+' 条，更新 '+updated+' 条'+extra+' | K线 '+state.candles.length);
+    if(isReset){
+      setFooter('信号重置完成：删除 '+deleted+' 条，当前缓存信号 0 条 | K线 '+state.candles.length);
+    }else{
+      setFooter('信号回填完成：共 '+total+' 条，新增 '+inserted+' 条，更新 '+updated+' 条 | K线 '+state.candles.length);
+    }
   }catch(err){
     state.chartLoading=false;
     draw();

@@ -70,7 +70,7 @@ func (s *captureServices) AnalysisBacktestLiquidationSignalBackfill(hours int) (
 
 func (s *captureServices) AnalysisBacktestLiquidationSignalReset(hours int) (liqmap.AnalysisBacktestLiquidationSignalMutationResponse, error) {
 	s.resetHours = hours
-	return liqmap.AnalysisBacktestLiquidationSignalMutationResponse{Deleted: 4, Inserted: 2, Total: 2}, nil
+	return liqmap.AnalysisBacktestLiquidationSignalMutationResponse{Deleted: 4, Total: 0}, nil
 }
 
 func (s *captureServices) AnalysisBacktest2FA(hours int, interval string, factor string, minConfidence float64, strategy string) (liqmap.AnalysisBacktest2FAResponse, error) {
