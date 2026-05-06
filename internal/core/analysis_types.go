@@ -110,6 +110,8 @@ type AnalysisSignalRecord struct {
 	Headline          string  `json:"headline"`
 	Summary           string  `json:"summary"`
 	VerifyHorizonMin  int     `json:"verify_horizon_min"`
+	SecondFactorKey   string  `json:"-"`
+	SecondFactorLabel string  `json:"-"`
 }
 
 type AnalysisSignalResult struct {

@@ -53,11 +53,22 @@ func (a *App) loadAnalysisBandHistory(symbol string, hours int) []analysisBandHi
 		hours = 24
 	}
 	startTS := time.Now().Add(-time.Duration(hours) * time.Hour).UnixMilli()
-	rows, err := a.db.Query(`SELECT id, captured_at, range_low, range_high, payload_json
+	return a.loadAnalysisBandHistoryRange(symbol, startTS, 0)
+}
+
+func (a *App) loadAnalysisBandHistoryRange(symbol string, startTS, endTS int64) []analysisBandHistorySnapshot {
+	query := `SELECT id, captured_at, range_low, range_high, payload_json
 		FROM webdatasource_snapshots
-		WHERE symbol IN (?, 'ETH') AND window_days=1 AND captured_at>=?
+		WHERE symbol IN (?, 'ETH') AND window_days=1 AND captured_at>=?`
+	args := []any{symbol, startTS}
+	if endTS > 0 {
+		query += ` AND captured_at<=?`
+		args = append(args, endTS)
+	}
+	query += `
 			AND EXISTS (SELECT 1 FROM webdatasource_points WHERE snapshot_id=webdatasource_snapshots.id LIMIT 1)
-		ORDER BY captured_at`, symbol, startTS)
+		ORDER BY captured_at`
+	rows, err := a.db.Query(query, args...)
 	if err != nil {
 		return nil
 	}

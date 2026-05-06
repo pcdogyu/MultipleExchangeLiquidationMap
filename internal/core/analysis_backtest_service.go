@@ -16,6 +16,7 @@ var analysisBacktestHorizons = []int{5, 15, 30, 60}
 
 const analysisLiquidationBacktestSampleInterval = "5m"
 const analysisLiquidationBacktestSourceGroup = 8
+const analysisLiquidationBandSyncMaxAgeMS = int64(30 * 60 * 1000)
 
 const (
 	analysisSecondFactorAll           = "all"
@@ -23,6 +24,8 @@ const (
 	analysisSecondFactorVolumeNormal  = "volume_normal"
 	analysisSecondFactorVolumeLow     = "volume_low"
 	analysisSecondFactorInsufficient  = "insufficient"
+	analysisSecondFactorBand2050Up    = "band20_50_sync_up"
+	analysisSecondFactorBand2050Down  = "band20_50_sync_down"
 	analysisBacktestQualityAll        = "all"
 	analysisBacktestQualityHigh       = "high"
 	analysisBacktestStrategyAll       = "all"
@@ -321,6 +324,103 @@ func analysisSecondFactorLabel(key string) string {
 	}
 }
 
+func analysisBandSyncDirection(score float64) string {
+	switch {
+	case score >= 8:
+		return "up"
+	case score <= -8:
+		return "down"
+	default:
+		return "flat"
+	}
+}
+
+func liquidationBandSyncFactorLabel(direction string) string {
+	switch normalizeAnalysisDirection(direction) {
+	case "up":
+		return "20/50 同步上推"
+	case "down":
+		return "20/50 同步下压"
+	default:
+		return "20/50 未同步"
+	}
+}
+
+func liquidationBandSyncFactorKey(direction string) string {
+	switch normalizeAnalysisDirection(direction) {
+	case "up":
+		return analysisSecondFactorBand2050Up
+	case "down":
+		return analysisSecondFactorBand2050Down
+	default:
+		return ""
+	}
+}
+
+func latestAnalysisBandSnapshotAt(history []analysisBandHistorySnapshot, atTS int64, maxAgeMS int64) (analysisBandHistorySnapshot, bool) {
+	if atTS <= 0 || maxAgeMS <= 0 {
+		return analysisBandHistorySnapshot{}, false
+	}
+	for i := len(history) - 1; i >= 0; i-- {
+		snap := history[i]
+		if snap.TS > atTS {
+			continue
+		}
+		if atTS-snap.TS > maxAgeMS {
+			return analysisBandHistorySnapshot{}, false
+		}
+		return snap, true
+	}
+	return analysisBandHistorySnapshot{}, false
+}
+
+func liquidationBandSyncSecondFactor(record AnalysisSignalRecord, snap analysisBandHistorySnapshot) (string, string, bool) {
+	signalDirection := normalizeAnalysisDirection(record.Direction)
+	if signalDirection != "up" && signalDirection != "down" {
+		return "", "", false
+	}
+	band20Direction := analysisBandSyncDirection(analysisBandPushScore(snap.UpByBand[20], snap.DownByBand[20]))
+	band50Direction := analysisBandSyncDirection(analysisBandPushScore(snap.UpByBand[50], snap.DownByBand[50]))
+	if band20Direction == "flat" || band20Direction != band50Direction || band20Direction != signalDirection {
+		return "", "", false
+	}
+	return liquidationBandSyncFactorKey(signalDirection), liquidationBandSyncFactorLabel(signalDirection), true
+}
+
+func applyLiquidationBandSyncSecondFactor(records []AnalysisSignalRecord, history []analysisBandHistorySnapshot) []AnalysisSignalRecord {
+	out := make([]AnalysisSignalRecord, 0, len(records))
+	for _, record := range records {
+		snap, ok := latestAnalysisBandSnapshotAt(history, record.SignalTS, analysisLiquidationBandSyncMaxAgeMS)
+		if !ok {
+			continue
+		}
+		key, label, ok := liquidationBandSyncSecondFactor(record, snap)
+		if !ok {
+			continue
+		}
+		record.SecondFactorKey = key
+		record.SecondFactorLabel = label
+		out = append(out, record)
+	}
+	return out
+}
+
+func (a *App) filterLiquidationBacktestRecordsByBandSync(records []AnalysisSignalRecord, sinceTS, endTS int64) []AnalysisSignalRecord {
+	if len(records) == 0 || a == nil || a.db == nil {
+		return nil
+	}
+	symbol := strings.TrimSpace(records[0].Symbol)
+	if symbol == "" {
+		symbol = defaultSymbol
+	}
+	startTS := sinceTS - analysisLiquidationBandSyncMaxAgeMS
+	if startTS < 0 {
+		startTS = 0
+	}
+	history := a.loadAnalysisBandHistoryRange(symbol, startTS, endTS)
+	return applyLiquidationBandSyncSecondFactor(records, history)
+}
+
 func findCandleIndexForTS(candles []analysisBacktestCandle, ts int64) int {
 	want := floorToFiveMinute(ts)
 	for i := len(candles) - 1; i >= 0; i-- {
@@ -405,6 +505,10 @@ func buildAnalysisSignalHorizonResult(record AnalysisSignalRecord, direction str
 
 func buildAnalysisSignalResult(record AnalysisSignalRecord, candles []analysisBacktestCandle, nowTS int64, horizons []int) AnalysisSignalResult {
 	secondFactorKey, secondFactorLabel := classifyAnalysisSecondFactor(record, candles)
+	if key := strings.TrimSpace(record.SecondFactorKey); key != "" {
+		secondFactorKey = key
+		secondFactorLabel = strings.TrimSpace(record.SecondFactorLabel)
+	}
 	direction := normalizeAnalysisDirection(record.Direction)
 	if len(horizons) == 0 {
 		horizons = analysisBacktestHorizons
@@ -1443,6 +1547,7 @@ func (a *App) buildLiquidationBacktestResults(hours int, minConfidence float64) 
 		Interval: analysisLiquidationBacktestSampleInterval,
 	})
 	records := buildLiquidationBacktestSignalRecords(tradeSignals, sinceTS, minConfidence)
+	records = a.filterLiquidationBacktestRecordsByBandSync(records, sinceTS, sampleEndTS)
 
 	startTS := floorToFiveMinute(sinceTS - int64(30*time.Minute/time.Millisecond))
 	endTS := floorToFiveMinute(nowTS) + int64(time.Hour/time.Millisecond) + baseStep

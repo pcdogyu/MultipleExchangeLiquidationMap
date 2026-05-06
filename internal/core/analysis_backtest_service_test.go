@@ -1,12 +1,17 @@
 package liqmap
 
 import (
+	"database/sql"
 	"fmt"
 	"math"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	dbpkg "multipleexchangeliquidationmap/internal/platform/db"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestAnalysisBacktestHorizonsForSignalTrimmedByOppositeSignal(t *testing.T) {
@@ -299,6 +304,154 @@ func TestClassifyAnalysisSecondFactorUsesRelativeVolume(t *testing.T) {
 				t.Fatalf("factor key = %q, want %q", got, tt.wantFactorKey)
 			}
 		})
+	}
+}
+
+func TestLiquidationBandSyncSecondFactorRequiresBothBandsAligned(t *testing.T) {
+	record := AnalysisSignalRecord{Direction: "up"}
+	tests := []struct {
+		name    string
+		record  AnalysisSignalRecord
+		snap    analysisBandHistorySnapshot
+		wantKey string
+		wantOK  bool
+	}{
+		{
+			name:   "up signal keeps synchronized upward bands",
+			record: record,
+			snap: analysisBandHistorySnapshot{
+				UpByBand:   map[int]float64{20: 100, 50: 180},
+				DownByBand: map[int]float64{20: 10, 50: 20},
+			},
+			wantKey: analysisSecondFactorBand2050Up,
+			wantOK:  true,
+		},
+		{
+			name:   "down signal keeps synchronized downward bands",
+			record: AnalysisSignalRecord{Direction: "down"},
+			snap: analysisBandHistorySnapshot{
+				UpByBand:   map[int]float64{20: 10, 50: 20},
+				DownByBand: map[int]float64{20: 100, 50: 180},
+			},
+			wantKey: analysisSecondFactorBand2050Down,
+			wantOK:  true,
+		},
+		{
+			name:   "opposite direction is rejected",
+			record: record,
+			snap: analysisBandHistorySnapshot{
+				UpByBand:   map[int]float64{20: 10, 50: 20},
+				DownByBand: map[int]float64{20: 100, 50: 180},
+			},
+		},
+		{
+			name:   "neutral 20 point band is rejected",
+			record: record,
+			snap: analysisBandHistorySnapshot{
+				UpByBand:   map[int]float64{20: 100, 50: 180},
+				DownByBand: map[int]float64{20: 95, 50: 20},
+			},
+		},
+		{
+			name:   "20 and 50 point conflict is rejected",
+			record: record,
+			snap: analysisBandHistorySnapshot{
+				UpByBand:   map[int]float64{20: 100, 50: 20},
+				DownByBand: map[int]float64{20: 10, 50: 180},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotKey, gotLabel, gotOK := liquidationBandSyncSecondFactor(tt.record, tt.snap)
+			if gotOK != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", gotOK, tt.wantOK)
+			}
+			if gotKey != tt.wantKey {
+				t.Fatalf("key = %q, want %q", gotKey, tt.wantKey)
+			}
+			if gotOK && strings.TrimSpace(gotLabel) == "" {
+				t.Fatalf("expected label for accepted factor")
+			}
+		})
+	}
+}
+
+func newAnalysisBacktestMemoryDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := dbpkg.Configure(db); err != nil {
+		t.Fatalf("configure db: %v", err)
+	}
+	if err := dbpkg.Init(db); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	return db
+}
+
+func insertAnalysisBandSyncSnapshotForTest(t *testing.T, db *sql.DB, capturedAt int64, currentPrice float64, points []WebDataSourcePoint) {
+	t.Helper()
+	payload := fmt.Sprintf(`{"currentPrice":%.1f}`, currentPrice)
+	res, err := db.Exec(`INSERT INTO webdatasource_snapshots(symbol, window_days, captured_at, range_low, range_high, payload_json)
+		VALUES('ETH', 1, ?, ?, ?, ?)`, capturedAt, currentPrice-100, currentPrice+100, payload)
+	if err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	snapshotID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("snapshot id: %v", err)
+	}
+	for _, point := range points {
+		_, err = db.Exec(`INSERT INTO webdatasource_points(snapshot_id, symbol, window_days, side, exchange, price, liq_value, captured_at)
+			VALUES(?, 'ETH', 1, ?, ?, ?, ?, ?)`,
+			snapshotID, point.Side, point.Exchange, point.Price, point.LiqValue, capturedAt)
+		if err != nil {
+			t.Fatalf("insert point: %v", err)
+		}
+	}
+}
+
+func TestFilterLiquidationBacktestRecordsByBandSyncLoadsHistoricalSnapshots(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	minute := int64(time.Minute / time.Millisecond)
+	db := newAnalysisBacktestMemoryDB(t)
+	app := &App{db: db}
+
+	insertAnalysisBandSyncSnapshotForTest(t, db, baseTS-5*minute, 2300, []WebDataSourcePoint{
+		{Side: "short", Exchange: "test", Price: 2310, LiqValue: 100},
+		{Side: "short", Exchange: "test", Price: 2340, LiqValue: 80},
+		{Side: "long", Exchange: "test", Price: 2290, LiqValue: 10},
+		{Side: "long", Exchange: "test", Price: 2260, LiqValue: 10},
+	})
+	insertAnalysisBandSyncSnapshotForTest(t, db, baseTS+55*minute, 2300, []WebDataSourcePoint{
+		{Side: "short", Exchange: "test", Price: 2310, LiqValue: 10},
+		{Side: "short", Exchange: "test", Price: 2340, LiqValue: 10},
+		{Side: "long", Exchange: "test", Price: 2290, LiqValue: 100},
+		{Side: "long", Exchange: "test", Price: 2260, LiqValue: 80},
+	})
+	insertAnalysisBandSyncSnapshotForTest(t, db, baseTS+89*minute, 2300, []WebDataSourcePoint{
+		{Side: "short", Exchange: "test", Price: 2310, LiqValue: 100},
+		{Side: "short", Exchange: "test", Price: 2340, LiqValue: 80},
+	})
+
+	records := []AnalysisSignalRecord{
+		{ID: 1, SignalTS: baseTS, Symbol: defaultSymbol, Direction: "up"},
+		{ID: 2, SignalTS: baseTS + 60*minute, Symbol: defaultSymbol, Direction: "down"},
+		{ID: 3, SignalTS: baseTS + 120*minute, Symbol: defaultSymbol, Direction: "up"},
+	}
+	got := app.filterLiquidationBacktestRecordsByBandSync(records, baseTS, baseTS+120*minute)
+	if len(got) != 2 {
+		t.Fatalf("filtered count = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].ID != 1 || got[0].SecondFactorKey != analysisSecondFactorBand2050Up || got[0].SecondFactorLabel != "20/50 同步上推" {
+		t.Fatalf("first filtered record = %+v", got[0])
+	}
+	if got[1].ID != 2 || got[1].SecondFactorKey != analysisSecondFactorBand2050Down || got[1].SecondFactorLabel != "20/50 同步下压" {
+		t.Fatalf("second filtered record = %+v", got[1])
 	}
 }
 
