@@ -141,8 +141,8 @@ func normalizeMarketInfoLimit(limit int) int {
 	if limit <= 0 {
 		return defaultMarketInfoLimit
 	}
-	if limit < 12 {
-		return 12
+	if limit < 2 {
+		return 2
 	}
 	if limit > 500 {
 		return 500

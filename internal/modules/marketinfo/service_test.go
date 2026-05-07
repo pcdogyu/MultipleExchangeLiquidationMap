@@ -60,3 +60,19 @@ func TestHandleMarketInfoRejectsInvalidPeriod(t *testing.T) {
 		t.Fatalf("unexpected body: %q", rec.Body.String())
 	}
 }
+
+func TestHandleMarketInfoAcceptsShortWindowLimit(t *testing.T) {
+	stub := &stubMarketInfoServices{}
+	svc := newService(stub)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/market-info?period=5m&limit=2", nil)
+	rec := httptest.NewRecorder()
+	svc.handleMarketInfo(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%q", rec.Code, rec.Body.String())
+	}
+	if stub.limit != 2 {
+		t.Fatalf("expected limit 2, got %d", stub.limit)
+	}
+}

@@ -47,7 +47,7 @@ func (s *service) handleMarketInfo(w http.ResponseWriter, r *http.Request) {
 	limit := 288
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		n, err := strconv.Atoi(raw)
-		if err != nil || n < 12 || n > 500 {
+		if err != nil || n < 2 || n > 500 {
 			http.Error(w, "invalid limit", http.StatusBadRequest)
 			return
 		}

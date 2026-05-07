@@ -14,8 +14,10 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui
 .title h1{font-size:22px;line-height:1.2;margin:0 0 4px 0;letter-spacing:0}
 .sub{font-size:12px;color:var(--muted)}
 .controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.seg{display:inline-flex;align-items:center;border:1px solid var(--ctlLine);border-radius:8px;background:var(--ctl);overflow:hidden}
+.seg{display:inline-flex;align-items:center;border:1px solid var(--ctlLine);border-radius:8px;background:var(--ctl);overflow-x:auto;max-width:min(760px,calc(100vw - 130px));scrollbar-width:none}
+.seg::-webkit-scrollbar{display:none}
 .seg button,.refresh{height:34px;border:0;background:transparent;color:var(--text);padding:0 12px;cursor:pointer;font-size:13px}
+.seg button{flex:0 0 auto;min-width:44px}
 .seg button+button{border-left:1px solid var(--ctlLine)}
 .seg button.active{background:var(--text);color:var(--panel)}
 .refresh{border:1px solid var(--ctlLine);border-radius:8px;background:var(--ctl)}
@@ -61,10 +63,15 @@ th{font-size:12px;color:var(--muted);font-weight:700;background:var(--panel2)}
     <div>
       <div class="controls">
         <div class="seg" id="periodSeg">
-          <button type="button" data-period="5m" class="active">5m</button>
-          <button type="button" data-period="15m">15m</button>
-          <button type="button" data-period="1h">1h</button>
-          <button type="button" data-period="4h">4h</button>
+          <button type="button" data-range="5m" class="active">5m</button>
+          <button type="button" data-range="15m">15m</button>
+          <button type="button" data-range="1h">1h</button>
+          <button type="button" data-range="4h">4h</button>
+          <button type="button" data-range="12h">12H</button>
+          <button type="button" data-range="24h">24H</button>
+          <button type="button" data-range="2d">2D</button>
+          <button type="button" data-range="3d">3D</button>
+          <button type="button" data-range="7d">7D</button>
         </div>
         <button id="refreshBtn" class="refresh" type="button">刷新</button>
       </div>
@@ -107,8 +114,19 @@ th{font-size:12px;color:var(--muted);font-weight:700;background:var(--panel2)}
 
 <script>
 let marketInfo=null;
-let period='5m';
+let range='5m';
 let loading=false;
+const rangePresets={
+  '5m':{label:'5m',period:'5m',limit:2},
+  '15m':{label:'15m',period:'5m',limit:4},
+  '1h':{label:'1H',period:'5m',limit:13},
+  '4h':{label:'4H',period:'5m',limit:49},
+  '12h':{label:'12H',period:'5m',limit:145},
+  '24h':{label:'24H',period:'5m',limit:289},
+  '2d':{label:'2D',period:'15m',limit:193},
+  '3d':{label:'3D',period:'15m',limit:289},
+  '7d':{label:'7D',period:'1h',limit:169}
+};
 
 function setTheme(t){const theme=t==='dark'?'dark':'light';document.documentElement.setAttribute('data-theme',theme);try{localStorage.setItem('theme',theme)}catch(_){}const bd=document.getElementById('themeDark'),bl=document.getElementById('themeLight');if(bd)bd.classList.toggle('active',theme==='dark');if(bl)bl.classList.toggle('active',theme==='light');drawAllCharts();}
 function initTheme(){let t='light';try{t=localStorage.getItem('theme')||'light'}catch(_){}setTheme(t);}
@@ -123,6 +141,23 @@ function signedRatio(n){n=Number(n||0);return (n>0?'+':'')+n.toFixed(4);}
 function cls(n){n=Number(n||0);return n>0?'up':(n<0?'down':'flat');}
 function tsText(ts){if(!ts)return '-';return new Date(Number(ts)).toLocaleString('zh-CN',{hour12:false});}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function currentPreset(){return rangePresets[range]||rangePresets['5m'];}
+function pad2(n){return String(n).padStart(2,'0');}
+function timeTickLabel(ts,minT,maxT){
+  const d=new Date(Number(ts)),span=Math.max(0,Number(maxT||0)-Number(minT||0));
+  if(span<=24*60*60*1000)return pad2(d.getHours())+':'+pad2(d.getMinutes());
+  if(span<=3*24*60*60*1000)return (d.getMonth()+1)+'/'+d.getDate()+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());
+  return (d.getMonth()+1)+'/'+d.getDate();
+}
+function drawTimeAxis(x,padL,padT,pw,ph,H,minT,maxT){
+  x.font='12px sans-serif';
+  for(let i=0;i<5;i++){
+    const ratio=i/4,ts=minT+(maxT-minT)*ratio,px=padL+pw*ratio,label=timeTickLabel(ts,minT,maxT);
+    x.strokeStyle=cssVar('--line');x.beginPath();x.moveTo(px,padT+ph);x.lineTo(px,padT+ph+4);x.stroke();
+    const tw=x.measureText(label).width;
+    x.fillStyle=cssVar('--muted');x.fillText(label,Math.max(padL,Math.min(px-tw/2,padL+pw-tw)),H-10);
+  }
+}
 
 async function load(){
   if(loading)return;
@@ -130,7 +165,8 @@ async function load(){
   const status=document.getElementById('status');
   status.textContent='加载中...';
   try{
-    const r=await fetch('/api/market-info?period='+encodeURIComponent(period)+'&limit=288',{cache:'no-store'});
+    const preset=currentPreset();
+    const r=await fetch('/api/market-info?period='+encodeURIComponent(preset.period)+'&limit='+encodeURIComponent(preset.limit),{cache:'no-store'});
     if(!r.ok)throw new Error(await r.text());
     marketInfo=await r.json();
     render();
@@ -147,7 +183,8 @@ function render(){
   const c=d.current||{};
   const g=d.gamma||{};
   const w=(d.windows||[]).find(x=>x.label==='24h')||{};
-  document.getElementById('subtitle').textContent=(d.symbol||'ETHUSDT')+' · '+(d.period||period)+' · '+(c.current_data_quality==='live'?'live':'cache');
+  const preset=currentPreset();
+  document.getElementById('subtitle').textContent=(d.symbol||'ETHUSDT')+' · '+preset.label+' · 采样 '+(d.period||preset.period)+' · '+(c.current_data_quality==='live'?'live':'cache');
   const basis=c.net_position_basis==='top_position_ratio'?'顶级持仓比':'全账户多空比';
   document.getElementById('metrics').innerHTML=[
     metric('标记价', '$'+price(c.mark_price), 'Funding '+pct(c.funding_rate), ''),
@@ -242,7 +279,7 @@ function drawLineChart(id,points,valueFn,color,formatFn){
   const {x,W,H}=env;
   const pts=(points||[]).map(p=>({ts:Number(p.ts||0),v:Number(valueFn(p)||0)})).filter(p=>p.ts>0&&isFinite(p.v));
   if(pts.length<2){drawEmpty(env,'暂无数据');return;}
-  const padL=58,padR=16,padT=18,padB=34,pw=W-padL-padR,ph=H-padT-padB;
+  const padL=58,padR=16,padT=18,padB=42,pw=W-padL-padR,ph=H-padT-padB;
   let minV=Math.min(...pts.map(p=>p.v)),maxV=Math.max(...pts.map(p=>p.v));
   if(minV===maxV){minV-=1;maxV+=1;}
   const span=maxV-minV,minT=pts[0].ts,maxT=pts[pts.length-1].ts||minT+1;
@@ -256,6 +293,7 @@ function drawLineChart(id,points,valueFn,color,formatFn){
     x.strokeStyle=cssVar('--line');x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();
     x.fillStyle=cssVar('--muted');x.fillText(formatFn?formatFn(val):val.toFixed(2),6,y+4);
   }
+  drawTimeAxis(x,padL,padT,pw,ph,H,minT,maxT);
   x.strokeStyle=color;x.lineWidth=2;x.beginPath();
   pts.forEach((p,i)=>{const px=sx(p.ts),py=sy(p.v);if(i===0)x.moveTo(px,py);else x.lineTo(px,py);});
   x.stroke();
@@ -268,12 +306,13 @@ function drawRatioChart(){
   const all=[...g.map(p=>({ts:Number(p.ts),v:Number(p.ratio),kind:'g'})),...t.map(p=>({ts:Number(p.ts),v:Number(p.ratio),kind:'t'}))].filter(p=>p.ts>0&&p.v>0);
   if(all.length<2){drawEmpty(env,'暂无数据');return;}
   all.sort((a,b)=>a.ts-b.ts);
-  const {x,W,H}=env,padL=44,padR=16,padT=18,padB=34,pw=W-padL-padR,ph=H-padT-padB;
+  const {x,W,H}=env,padL=44,padR=16,padT=18,padB=42,pw=W-padL-padR,ph=H-padT-padB;
   let minV=Math.min(...all.map(p=>p.v)),maxV=Math.max(...all.map(p=>p.v));if(minV===maxV){minV-=0.1;maxV+=0.1;}
   const minT=all[0].ts,maxT=all[all.length-1].ts||minT+1,span=maxV-minV;
   const sx=ts=>padL+((ts-minT)/(maxT-minT||1))*pw,sy=v=>padT+ph-((v-minV)/span)*ph;
   x.clearRect(0,0,W,H);x.fillStyle=cssVar('--panel2');x.fillRect(0,0,W,H);x.strokeStyle=cssVar('--line');x.strokeRect(padL,padT,pw,ph);
   x.font='12px sans-serif';for(let i=0;i<=4;i++){const y=padT+ph*i/4,val=maxV-span*i/4;x.strokeStyle=cssVar('--line');x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke();x.fillStyle=cssVar('--muted');x.fillText(val.toFixed(2),8,y+4);}
+  drawTimeAxis(x,padL,padT,pw,ph,H,minT,maxT);
   drawRatioLine(g,cssVar('--blue'),sx,sy,x);drawRatioLine(t,cssVar('--amber'),sx,sy,x);
   x.fillStyle=cssVar('--blue');x.fillText('全账户',padL,padT-5);x.fillStyle=cssVar('--amber');x.fillText('顶级持仓',padL+56,padT-5);
 }
@@ -325,8 +364,8 @@ function drawAllCharts(){
 }
 
 document.getElementById('periodSeg').addEventListener('click',e=>{
-  const b=e.target.closest('button[data-period]');if(!b)return;
-  period=b.dataset.period;
+  const b=e.target.closest('button[data-range]');if(!b)return;
+  range=b.dataset.range;
   document.querySelectorAll('#periodSeg button').forEach(x=>x.classList.toggle('active',x===b));
   load();
 });
