@@ -19,9 +19,7 @@ type navItem struct {
 }
 
 var sharedNavItems = []navItem{
-	{Href: "/", Label: "清算热区"},
 	{Href: "/market-info", Label: "市场信息"},
-	{Href: "/config", Label: "模型配置"},
 	{Href: "/monitor", Label: "雷区监控"},
 	{Href: "/map", Label: "盘口汇总"},
 	{Href: "/liquidations", Label: "强平清算"},
@@ -35,8 +33,6 @@ var sharedNavItems = []navItem{
 }
 
 var templateActivePath = map[string]string{
-	"index":                         "/",
-	"model_config_page":             "/config",
 	"monitor":                       "/monitor",
 	"map":                           "/map",
 	"liquidations":                  "/liquidations",

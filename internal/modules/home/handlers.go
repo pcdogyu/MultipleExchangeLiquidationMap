@@ -9,14 +9,14 @@ import (
 
 	liqmap "multipleexchangeliquidationmap/internal/core"
 	"multipleexchangeliquidationmap/internal/platform/httpx"
-	"multipleexchangeliquidationmap/internal/platform/pageview"
-	"multipleexchangeliquidationmap/internal/shared/pages"
 )
 
 func (s *service) handlePage(w http.ResponseWriter, r *http.Request) {
-	pageview.Serve(w, r, pages.Home(), nil, pageview.Options{
-		ExactPath: "/",
-	})
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	http.Redirect(w, r, "/webdatasource", http.StatusFound)
 }
 
 func parseRequestedDays(r *http.Request) (int, bool, error) {

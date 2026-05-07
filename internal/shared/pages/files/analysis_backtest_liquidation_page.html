@@ -186,7 +186,7 @@ th{color:var(--muted);font-weight:600}
           <label for="confMinSelect">&#24378;&#24230;</label>
           <select id="confMinSelect">
             <option value="0">&#20840;&#37096;</option>
-            <option value="70">&gt;70</option>
+            <option value="70" selected>&gt;70</option>
             <option value="80">&gt;80</option>
             <option value="85">&gt;85</option>
             <option value="90">&gt;90</option>
@@ -255,6 +255,9 @@ th{color:var(--muted);font-weight:600}
 const DAY_MS=24*60*60*1000;
 const BACKTEST_HOURS=336;
 const BACKTEST_RANGE_LABEL='近2周';
+const DEFAULT_CHART_VIEW_HOURS=24;
+const DEFAULT_CONF_MIN='70';
+const MAX_DRAWN_CHART_SIGNALS=60;
 const INTERVAL_CONFIG={
   '1m':{label:'1m',source:'1m',bucketMs:60*1000,direct:true},
   '5m':{label:'5m',source:'5m',bucketMs:5*60*1000,direct:true},
@@ -273,7 +276,7 @@ const state={
   summary:{},
   horizonStats:[],
   candles:[],
-  confMin:'0',
+  confMin:DEFAULT_CONF_MIN,
   interval:'5m',
   chartWidth:1600,
   chartHeight:620,
@@ -426,10 +429,7 @@ async function loadChartCandles(){
   chartRows=chartRows.filter(row=>row.ts<=endTS&&row.ts>=startTS-cfg.bucketMs);
   state.candles=chartRows;
   state.chartSource=base.source;
-  state.viewStart=0;
-  state.viewCount=Math.max(1,chartRows.length||0);
-  state.yZoom=1;
-  state.yPan=0;
+  setDefaultChartView();
   state.chartLoading=false;
   updateChartMeta();
   draw();
@@ -442,6 +442,20 @@ function updateChartMeta(){
   const count=state.candles.length;
   const visible=count?Math.min(state.viewCount,count):0;
   meta.textContent=BACKTEST_RANGE_LABEL+'清算信号图 | 周期 '+cfg.label+' | 来源 '+state.chartSource+' | K线 '+count+' | 可见 '+visible;
+}
+function defaultChartViewCount(total){
+  if(!total)return 0;
+  const cfg=INTERVAL_CONFIG[state.interval]||INTERVAL_CONFIG['5m'];
+  const count=Math.ceil(DEFAULT_CHART_VIEW_HOURS*60*60*1000/Math.max(1,cfg.bucketMs));
+  return clamp(count,1,total);
+}
+function setDefaultChartView(){
+  const total=state.candles.length;
+  state.viewCount=defaultChartViewCount(total);
+  state.viewStart=Math.max(0,total-state.viewCount);
+  state.yZoom=1;
+  state.yPan=0;
+  updateChartMeta();
 }
 function syncChartWidthToViewport(force){
   const viewport=document.getElementById('chartViewport');
@@ -497,6 +511,21 @@ function drawMarkerLabel(x,y,text,color,ctx,W,H){
   const w=ctx.measureText(text).width;
   ctx.fillText(text,clamp(x-w/2,82,W-28-w),clamp(y,14,H-8));
   ctx.restore();
+}
+function chartSignalsForView(candleIndexByTS,cfg){
+  const hits=[];
+  for(const sig of state.signals){
+    const bucket=bucketStart(Number(sig.signal_ts||0),cfg.bucketMs);
+    const idx=candleIndexByTS[String(bucket)];
+    if(idx==null)continue;
+    hits.push({sig,idx});
+  }
+  if(hits.length<=MAX_DRAWN_CHART_SIGNALS)return hits;
+  return hits
+    .slice()
+    .sort((a,b)=>(Number(b.sig.confidence||0)-Number(a.sig.confidence||0))||(Number(b.sig.signal_ts||0)-Number(a.sig.signal_ts||0)))
+    .slice(0,MAX_DRAWN_CHART_SIGNALS)
+    .sort((a,b)=>a.idx-b.idx);
 }
 function draw(){
   const v=fit(),ctx=v.x,W=v.w,H=v.h,padL=78,padR=22,padT=18,padB=54;
@@ -559,10 +588,8 @@ function draw(){
   const cfg=INTERVAL_CONFIG[state.interval]||INTERVAL_CONFIG['5m'];
   const candleIndexByTS={};
   view.forEach((c,idx)=>{candleIndexByTS[String(Number(c.ts||0))]=idx;});
-  for(const sig of state.signals){
-    const bucket=bucketStart(Number(sig.signal_ts||0),cfg.bucketMs);
-    const idx=candleIndexByTS[String(bucket)];
-    if(idx==null)continue;
+  for(const item of chartSignalsForView(candleIndexByTS,cfg)){
+    const sig=item.sig,idx=item.idx;
     const c=view[idx],x=sx(idx);
     if(sig.direction==='up'){
       const y=sy(Number(c.l||0))+18;
@@ -680,10 +707,7 @@ function applyBacktestData(d){
   const intervalSelect=document.getElementById('intervalSelect');
   if(intervalSelect)intervalSelect.value=state.interval;
   state.chartLoading=false;
-  state.viewStart=0;
-  state.viewCount=Math.max(1,state.candles.length||0);
-  state.yZoom=1;
-  state.yPan=0;
+  setDefaultChartView();
   renderSummary(buildSummaryFromSignals(state.signals));
   renderHorizonStats(buildHorizonStatsFromSignals(state.signals));
   renderHistory();
@@ -748,10 +772,7 @@ async function mutateSignals(kind){
   }
 }
 function resetViewState(){
-  state.viewStart=0;
-  state.viewCount=Math.max(1,state.candles.length||0);
-  state.yZoom=1;
-  state.yPan=0;
+  setDefaultChartView();
   updateChartMeta();
   draw();
 }

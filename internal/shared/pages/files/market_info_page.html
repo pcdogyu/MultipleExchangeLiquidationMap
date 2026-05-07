@@ -42,7 +42,7 @@ th:first-child,td:first-child,th:last-child,td:last-child{text-align:left}
 th{font-size:12px;color:var(--muted);font-weight:700;background:var(--panel2)}
 .gamma{display:flex;flex-direction:column;gap:8px}
 .gamma .label{font-size:18px;font-weight:800}
-.gamma .msg{font-size:13px;line-height:1.6;color:var(--muted)}
+.gamma-note{margin-top:8px;border-top:1px solid var(--line);padding-top:8px;font-size:13px;line-height:1.6;color:var(--muted)}
 .gamma-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .gamma-stat{border:1px solid var(--line);background:var(--panel2);border-radius:8px;padding:8px;min-width:0}
 .gamma-stat .a{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -100,10 +100,10 @@ th{font-size:12px;color:var(--muted);font-weight:700;background:var(--panel2)}
     <div class="panel">
       <div class="panel-head"><h2>净多净空变化</h2><div class="hint">5m / 1h / 4h / 24h</div></div>
       <div id="windowTable" class="table-wrap"></div>
+      <div id="gammaMsg" class="gamma-note">loading</div>
     </div>
     <div class="panel gamma">
       <div id="gammaLabel" class="label">Gamma / GEX</div>
-      <div id="gammaMsg" class="msg">loading</div>
       <div id="gammaStats" class="gamma-stats"></div>
       <canvas id="gammaChart" class="chart gamma-chart"></canvas>
       <div id="gammaExpiryTable" class="table-wrap"></div>

@@ -60,6 +60,21 @@ func TestNewRouterRegistersMenuPages(t *testing.T) {
 	}
 }
 
+func TestNewRouterRedirectsHomeToWebDataSource(t *testing.T) {
+	mux := newTestRouter(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected root to redirect, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/webdatasource" {
+		t.Fatalf("expected Location /webdatasource, got %q", got)
+	}
+}
+
 func TestNewRouterRegistersCompatibilityAPIs(t *testing.T) {
 	mux := newTestRouter(t)
 	cases := []struct {

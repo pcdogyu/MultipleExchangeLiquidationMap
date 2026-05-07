@@ -102,6 +102,24 @@ func TestHTMLPageInsertsSharedChromeWithoutOldChrome(t *testing.T) {
 	}
 }
 
+func TestSharedTopNavHidesHomeAndConfigMenuItems(t *testing.T) {
+	rr := httptest.NewRecorder()
+	body := `<!doctype html><html><head><title>x</title></head><body><main>content</main></body></html>`
+
+	HTMLPage(rr, "webdatasource", body, nil)
+
+	got := rr.Body.String()
+	if strings.Contains(got, `<a href="/">清算热区</a>`) {
+		t.Fatalf("expected heat map nav item to be hidden, got %q", got)
+	}
+	if strings.Contains(got, `<a href="/config">模型配置</a>`) {
+		t.Fatalf("expected model config nav item to be hidden, got %q", got)
+	}
+	if !strings.Contains(got, `<a href="/webdatasource" class="active">页面数据源</a>`) {
+		t.Fatalf("expected webdatasource nav item to remain active, got %q", got)
+	}
+}
+
 func TestSharedNavActivePathForEveryKnownTemplate(t *testing.T) {
 	for templateName, activePath := range templateActivePath {
 		rr := httptest.NewRecorder()
