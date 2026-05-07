@@ -283,7 +283,7 @@ th{color:var(--muted);font-weight:600}
     </div>
   </div>
 
-  <div class="footer" id="footer">双因子回测加载中...</div>
+  <div class="footer page-status" id="pageStatus">双因子回测加载中...</div>
 </div>
 
 <script>
@@ -350,6 +350,8 @@ function resultLabel(v){if(v==='correct')return ['正确','ok'];if(v==='wrong')r
 function directionLabel(v){return v==='up'?'向上':'向下';}
 function factorLabel(v){if(v==='volume_spike')return '放量';if(v==='volume_normal')return '正常';if(v==='volume_low')return '缩量';if(v==='insufficient')return '样本不足';return '全部';}
 function normalizeSecondFactor(v){v=String(v||'').trim();if(v==='volume_spike'||v==='volume_normal'||v==='volume_low')return v;return 'all';}
+function footerEl(){return document.getElementById('pageStatus');}
+function setFooter(text){const el=footerEl();if(el)el.textContent=text;}
 function filterSignalsBySecondFactor(signals,factor){
   const rows=Array.isArray(signals)?signals:[];
   const key=normalizeSecondFactor(factor);
@@ -839,24 +841,24 @@ async function reloadChartOnly(){
   try{
     const applied=await loadSignals();
     if(!applied)return;
-    document.getElementById('footer').textContent='策略 '+strategyLabel(state.strategyMode)+' | 因子 '+factorLabel(state.secondFactor)+' | 置信度 '+confidenceFilterLabel(state.confMin)+' | 周期 '+state.interval+' | 信号 '+state.signals.length+' | K线 '+state.candles.length;
+    setFooter('策略 '+strategyLabel(state.strategyMode)+' | 因子 '+factorLabel(state.secondFactor)+' | 置信度 '+confidenceFilterLabel(state.confMin)+' | 周期 '+state.interval+' | 信号 '+state.signals.length+' | K线 '+state.candles.length);
   }catch(err){
     state.chartLoading=false;
     state.candles=[];
     draw();
     document.getElementById('chartMeta').textContent='图表加载失败: '+String(err&&err.message||err||'未知错误');
-    document.getElementById('footer').textContent='图表加载失败';
+    setFooter('图表加载失败');
   }
 }
 async function reloadAll(){
   try{
-    document.getElementById('footer').textContent='加载中...';
+    setFooter('加载中...');
     const applied=await loadSignals();
     if(!applied)return;
-    document.getElementById('footer').textContent='策略 '+strategyLabel(state.strategyMode)+' | 因子 '+factorLabel(state.secondFactor)+' | 置信度 '+confidenceFilterLabel(state.confMin)+' | 近24小时信号 '+state.signals.length+' | 周期 '+state.interval+' | K线 '+state.candles.length;
+    setFooter('策略 '+strategyLabel(state.strategyMode)+' | 因子 '+factorLabel(state.secondFactor)+' | 置信度 '+confidenceFilterLabel(state.confMin)+' | 近24小时信号 '+state.signals.length+' | 周期 '+state.interval+' | K线 '+state.candles.length);
   }catch(err){
     state.chartLoading=false;
-    document.getElementById('footer').textContent=String(err&&err.message||err||'加载失败');
+    setFooter(String(err&&err.message||err||'加载失败'));
     draw();
   }
 }

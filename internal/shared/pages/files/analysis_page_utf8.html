@@ -183,7 +183,7 @@ h1{margin:10px 0 10px;font-size:34px;line-height:1.15}
     </div>
   </div>
 
-<div class="footer" id="footer">analysis loading...</div>
+<div class="footer page-status" id="pageStatus">analysis loading...</div>
 </div>
 <script>
 const analysisCaptureMode=(function(){try{return new URLSearchParams(window.location.search).get('capture')==='1';}catch(_){return false;}})();
@@ -326,7 +326,7 @@ function renderChangeCard(it){
 }
 
 function setFooterText(text){
-  const footer=document.getElementById('footer')||document.getElementById('shared-global-footer');
+  const footer=document.getElementById('pageStatus');
   if(footer) footer.textContent=text;
 }
 

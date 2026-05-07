@@ -48,6 +48,12 @@ var templateActivePath = map[string]string{
 	"analysis_backtest_liquidation": "/analysis-backtest-liquidation",
 }
 
+var legacyGlobalFooterVersionLoaders = []*regexp.Regexp{
+	regexp.MustCompile(`(?s)\(async\(\)=>\{try\{const r=await fetch\('/api/version'\);.*?document\.getElementById\('globalFooter'\).*?\}\)\(\);`),
+	regexp.MustCompile(`(?s)\(async function\(\)\{\s*try\{\s*const r=await fetch\('/api/version'\);.*?document\.getElementById\('globalFooter'\).*?\}\)\(\);`),
+	regexp.MustCompile(`(?m)^\s*async function loadFooter\(\)\{[^\n]*globalFooter[^\n]*\}\s*$\n?`),
+}
+
 const sharedTopNavStyle = `<style id="shared-top-nav-style">
 #shared-top-nav.nav{height:58px;background:var(--nav, #101827);border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:200}
 #shared-top-nav .nav-left,#shared-top-nav .nav-right{display:flex;align-items:center;gap:20px}
@@ -62,11 +68,13 @@ const sharedTopNavStyle = `<style id="shared-top-nav-style">
 @media (max-width:980px){#shared-top-nav .menu{display:none}}
 </style>`
 
-const sharedFooterSnippet = `<style id="shared-global-footer-style">
+const sharedGlobalFooterStyle = `<style id="shared-global-footer-style">
 #shared-global-footer.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:var(--muted, #64748b);text-align:center}
-</style>
-<div id="shared-global-footer" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>
-<script id="shared-global-footer-script">
+</style>`
+
+const sharedGlobalFooterHTML = `<div id="shared-global-footer" class="footer">Code by Yuhao@jiansutech.com - loading - loading - loading</div>`
+
+const sharedGlobalFooterScript = `<script id="shared-global-footer-script">
 (async function(){
   if(typeof document==='undefined') return;
   const footer=document.getElementById('shared-global-footer');
@@ -80,6 +88,10 @@ const sharedFooterSnippet = `<style id="shared-global-footer-style">
   }
 })();
 </script>`
+
+func sharedGlobalFooter() string {
+	return sharedGlobalFooterStyle + "\n" + sharedGlobalFooterHTML + "\n" + sharedGlobalFooterScript
+}
 
 func sharedTopNav(templateName string) string {
 	activePath := templateActivePath[templateName]
@@ -122,10 +134,20 @@ func withSharedFooter(body string) string {
 	if strings.Contains(body, `id="shared-global-footer-script"`) {
 		return body
 	}
+	body = removeLegacyGlobalFooterVersionLoaders(body)
 	body = removeFirstElement(body, func(tag string) bool {
-		return strings.EqualFold(attrValue(tag, "id"), "globalFooter") || attrHasToken(tag, "class", "footer")
+		return strings.EqualFold(attrValue(tag, "id"), "globalFooter") || strings.EqualFold(attrValue(tag, "id"), "shared-global-footer")
 	})
-	return strings.Replace(body, "</body>", sharedFooterSnippet+"</body>", 1)
+	return strings.Replace(body, "</body>", sharedGlobalFooter()+"</body>", 1)
+}
+
+func removeLegacyGlobalFooterVersionLoaders(body string) string {
+	for _, re := range legacyGlobalFooterVersionLoaders {
+		body = re.ReplaceAllString(body, "")
+	}
+	body = strings.ReplaceAll(body, "await loadFooter();", "")
+	body = strings.ReplaceAll(body, "loadFooter();", "")
+	return body
 }
 
 func hasBody(body string) bool {

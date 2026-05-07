@@ -247,7 +247,7 @@ th{color:var(--muted);font-weight:600}
     </div>
   </div>
 
-  <div class="footer" id="footer">analysis-backtest-liquidation loading...</div>
+  <div class="footer page-status" id="pageStatus">analysis-backtest-liquidation loading...</div>
 </div>
 
 
@@ -310,7 +310,7 @@ function resultLabel(v){if(v==='correct')return ['正确','ok'];if(v==='wrong')r
 function validationDirectionLabel(v){return v==='up'?'看涨':'看跌';}
 function signalActionLabel(sig){return String((sig&&sig.signal_label)||sig&&sig.headline||sig&&sig.summary||'交易信号');}
 function horizonLabel(min){const n=Number(min||0);if(n>=60&&n%60===0)return String(n/60)+'h';return String(n)+'m';}
-function footerEl(){return document.getElementById('footer')||document.getElementById('shared-global-footer')||document.getElementById('globalFooter')||document.querySelector('.footer');}
+function footerEl(){return document.getElementById('pageStatus');}
 function setFooter(text){const el=footerEl();if(el)el.textContent=text;}
 function setOperationStatus(text,type){
   const el=document.getElementById('signalOperationStatus');

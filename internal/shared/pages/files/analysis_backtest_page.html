@@ -240,7 +240,7 @@ th{color:var(--muted);font-weight:600}
     </div>
   </div>
 
-  <div class="footer" id="footer">analysis-backtest loading...</div>
+  <div class="footer page-status" id="pageStatus">analysis-backtest loading...</div>
 </div>
 
 
@@ -306,6 +306,8 @@ function directionLabel(v){return v==='up'?'Up':'Down';}
 function qualityModeLabel(v){return v==='high'?'High quality':'All signals';}
 function noiseStrategyLabel(v){return v==='persistence'?'Long-cycle denoise':'All';}
 function persistenceCell(sig){const score=Number(sig&&sig.persistence_score||0);if(!score)return '-';return score.toFixed(1)+' / '+esc(sig.persistence_label||'-');}
+function footerEl(){return document.getElementById('pageStatus');}
+function setFooter(text){const el=footerEl();if(el)el.textContent=text;}
 function horizonByMin(sig,min){for(const h of (sig&&sig.horizons||[])){if(Number(h&&h.horizon_min||0)===min)return h;}return null;}
 function renderHorizonCell(sig,min){const h=horizonByMin(sig,min);if(!h)return '<div class="horizon-pill nodata-pill"><span class="pending">已截断</span><span class="meta">反向信号</span></div>';const res=resultLabel(h.result);if(h.result==='pending')return '<div class="horizon-pill pending-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';if(h.result==='no_data')return '<div class="horizon-pill nodata-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';const isCorrect=h.result==='correct';const cls=isCorrect?'ok':'bad';const pillCls=isCorrect?'up-pill':'down-pill';return '<div class="horizon-pill '+pillCls+'"><span class="price">'+fmtPrice(h.verify_close_price)+'</span><span class="meta '+cls+'">'+fmtDelta(h.delta_price)+' / '+fmtPct(h.delta_pct)+'</span></div>';}
 function clamp(v,min,max){return Math.max(min,Math.min(max,v));}
@@ -711,23 +713,23 @@ function bindControls(){
 async function reloadChartOnly(){
   try{
     await loadSignals();
-    document.getElementById('footer').textContent='Range '+qualityModeLabel(state.qualityMode)+' | Noise '+noiseStrategyLabel(state.noiseStrategy)+' | Confidence '+confidenceFilterLabel(state.confMin)+' | Interval '+state.interval+' | Signals '+state.signals.length+' | K '+state.candles.length;
+    setFooter('Range '+qualityModeLabel(state.qualityMode)+' | Noise '+noiseStrategyLabel(state.noiseStrategy)+' | Confidence '+confidenceFilterLabel(state.confMin)+' | Interval '+state.interval+' | Signals '+state.signals.length+' | K '+state.candles.length);
   }catch(err){
     state.chartLoading=false;
     state.candles=[];
     draw();
     document.getElementById('chartMeta').textContent='Chart load failed: '+String(err&&err.message||err||'unknown error');
-    document.getElementById('footer').textContent='Chart load failed';
+    setFooter('Chart load failed');
   }
 }
 async function reloadAll(){
   try{
-    document.getElementById('footer').textContent='Loading...';
+    setFooter('Loading...');
     await loadSignals();
-    document.getElementById('footer').textContent='Range '+qualityModeLabel(state.qualityMode)+' | Noise '+noiseStrategyLabel(state.noiseStrategy)+' | Confidence '+confidenceFilterLabel(state.confMin)+' | '+BACKTEST_RANGE_LABEL+' signals '+state.signals.length+' | Interval '+state.interval+' | K '+state.candles.length;
+    setFooter('Range '+qualityModeLabel(state.qualityMode)+' | Noise '+noiseStrategyLabel(state.noiseStrategy)+' | Confidence '+confidenceFilterLabel(state.confMin)+' | '+BACKTEST_RANGE_LABEL+' signals '+state.signals.length+' | Interval '+state.interval+' | K '+state.candles.length);
   }catch(err){
     state.chartLoading=false;
-    document.getElementById('footer').textContent=String(err&&err.message||err||'Load failed');
+    setFooter(String(err&&err.message||err||'Load failed'));
     draw();
   }
 }
