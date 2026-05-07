@@ -21,6 +21,8 @@ const analysisLiquidationBacktestSampleInterval = "5m"
 const analysisLiquidationBacktestSourceGroup = 8
 const analysisLiquidationBandSyncMaxAgeMS = int64(30 * 60 * 1000)
 const analysisLiquidationBacktestCacheStateKey = "analysis_liquidation_backtest_signal_cache_state"
+const analysisLiquidationBacktestCacheStateFilled = "single_factor_state_v1_filled"
+const analysisLiquidationBacktestCacheStateEmpty = "single_factor_state_v1_empty"
 
 const (
 	analysisSecondFactorAll           = "all"
@@ -525,7 +527,11 @@ func buildAnalysisSignalHorizonResult(record AnalysisSignalRecord, direction str
 }
 
 func buildAnalysisSignalResult(record AnalysisSignalRecord, candles []analysisBacktestCandle, nowTS int64, horizons []int) AnalysisSignalResult {
-	secondFactorKey, secondFactorLabel := classifyAnalysisSecondFactor(record, candles)
+	secondFactorKey := ""
+	secondFactorLabel := ""
+	if record.SourceGroup != analysisLiquidationBacktestSourceGroup {
+		secondFactorKey, secondFactorLabel = classifyAnalysisSecondFactor(record, candles)
+	}
 	if key := strings.TrimSpace(record.SecondFactorKey); key != "" {
 		secondFactorKey = key
 		secondFactorLabel = strings.TrimSpace(record.SecondFactorLabel)
@@ -533,6 +539,19 @@ func buildAnalysisSignalResult(record AnalysisSignalRecord, candles []analysisBa
 	direction := normalizeAnalysisDirection(record.Direction)
 	if len(horizons) == 0 {
 		horizons = analysisBacktestHorizons
+	}
+	primaryHorizonMin := normalizedAnalysisVerifyHorizonMin(record.VerifyHorizonMin)
+	if len(horizons) > 0 {
+		foundPrimary := false
+		for _, horizonMin := range horizons {
+			if horizonMin == primaryHorizonMin {
+				foundPrimary = true
+				break
+			}
+		}
+		if !foundPrimary {
+			primaryHorizonMin = horizons[0]
+		}
 	}
 	result := AnalysisSignalResult{
 		ID:                record.ID,
@@ -545,17 +564,20 @@ func buildAnalysisSignalResult(record AnalysisSignalRecord, candles []analysisBa
 		AnalysisGenerated: record.AnalysisGenerated,
 		Headline:          record.Headline,
 		Summary:           record.Summary,
-		VerifyHorizonMin:  normalizedAnalysisVerifyHorizonMin(record.VerifyHorizonMin),
+		VerifyHorizonMin:  primaryHorizonMin,
+		SignalAction:      record.SignalAction,
+		SignalSide:        record.SignalSide,
+		SignalLabel:       record.SignalLabel,
 		SecondFactorKey:   secondFactorKey,
 		SecondFactorLabel: secondFactorLabel,
-		VerifyDueTS:       record.SignalTS + int64(normalizedAnalysisVerifyHorizonMin(record.VerifyHorizonMin))*int64(time.Minute/time.Millisecond),
+		VerifyDueTS:       record.SignalTS + int64(primaryHorizonMin)*int64(time.Minute/time.Millisecond),
 		Result:            "pending",
 	}
 	result.Horizons = make([]AnalysisSignalHorizonResult, 0, len(horizons))
 	for _, horizonMin := range horizons {
 		outcome := buildAnalysisSignalHorizonResult(record, direction, horizonMin, candles, nowTS)
 		result.Horizons = append(result.Horizons, outcome)
-		if horizonMin == normalizedAnalysisVerifyHorizonMin(record.VerifyHorizonMin) {
+		if horizonMin == primaryHorizonMin {
 			result.VerifyDueTS = outcome.VerifyDueTS
 			result.VerifyClosePrice = outcome.VerifyClosePrice
 			result.Result = outcome.Result
@@ -1425,19 +1447,35 @@ func filterAnalysisSignalsBySecondFactor(results []AnalysisSignalResult, factor 
 }
 
 func liquidationBacktestSignalRecord(signal TradeSignal, id int64) (AnalysisSignalRecord, bool) {
-	if strings.ToLower(strings.TrimSpace(signal.Action)) != "open" {
-		return AnalysisSignalRecord{}, false
-	}
-
+	side := strings.ToLower(strings.TrimSpace(signal.Side))
+	action := strings.ToLower(strings.TrimSpace(signal.Action))
 	direction := ""
 	headline := ""
-	switch strings.ToLower(strings.TrimSpace(signal.Side)) {
-	case "long":
+	switch side + ":" + action {
+	case "long:open":
 		direction = "up"
 		headline = "开多"
-	case "short":
+	case "long:add":
+		direction = "up"
+		headline = "多头增仓"
+	case "long:close":
+		direction = "down"
+		headline = "平多"
+	case "long:tp":
+		direction = "down"
+		headline = "多单TP"
+	case "short:open":
 		direction = "down"
 		headline = "开空"
+	case "short:add":
+		direction = "down"
+		headline = "空头增仓"
+	case "short:close":
+		direction = "up"
+		headline = "平空"
+	case "short:tp":
+		direction = "up"
+		headline = "空单TP"
 	default:
 		return AnalysisSignalRecord{}, false
 	}
@@ -1463,6 +1501,9 @@ func liquidationBacktestSignalRecord(signal TradeSignal, id int64) (AnalysisSign
 		Headline:          headline,
 		Summary:           summary,
 		VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+		SignalAction:      action,
+		SignalSide:        side,
+		SignalLabel:       headline,
 	}, true
 }
 
@@ -1507,15 +1548,15 @@ func (a *App) generateLiquidationBacktestRecords(hours int) ([]AnalysisSignalRec
 		Interval: analysisLiquidationBacktestSampleInterval,
 	})
 	records := buildLiquidationBacktestSignalRecords(tradeSignals, sinceTS, 0)
-	records = a.filterLiquidationBacktestRecordsByBandSync(records, sinceTS, sampleEndTS)
 	return records, sinceTS, floorToFiveMinute(nowTS) + baseStep
 }
 
 func (a *App) listLiquidationBacktestCachedRecords(sinceTS int64) ([]AnalysisSignalRecord, error) {
 	rows, err := a.db.Query(`SELECT id, signal_ts, symbol, source_group, direction, confidence, signal_price,
-			analysis_generated_at, headline, summary, verify_horizon_min, second_factor_key, second_factor_label
+			analysis_generated_at, headline, summary, verify_horizon_min, signal_action, signal_side, signal_label,
+			second_factor_key, second_factor_label
 		FROM analysis_liquidation_backtest_signals
-		WHERE symbol=? AND signal_ts>=?
+		WHERE symbol=? AND signal_ts>=? AND signal_action<>''
 		ORDER BY signal_ts ASC, id ASC`, defaultSymbol, sinceTS)
 	if err != nil {
 		return nil, err
@@ -1536,6 +1577,9 @@ func (a *App) listLiquidationBacktestCachedRecords(sinceTS int64) ([]AnalysisSig
 			&item.Headline,
 			&item.Summary,
 			&item.VerifyHorizonMin,
+			&item.SignalAction,
+			&item.SignalSide,
+			&item.SignalLabel,
 			&item.SecondFactorKey,
 			&item.SecondFactorLabel,
 		); err != nil {
@@ -1544,6 +1588,44 @@ func (a *App) listLiquidationBacktestCachedRecords(sinceTS int64) ([]AnalysisSig
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func fillLiquidationBacktestCacheKeys(record AnalysisSignalRecord) AnalysisSignalRecord {
+	record.SignalAction = strings.ToLower(strings.TrimSpace(record.SignalAction))
+	record.SignalSide = strings.ToLower(strings.TrimSpace(record.SignalSide))
+	if strings.TrimSpace(record.SignalLabel) == "" {
+		record.SignalLabel = strings.TrimSpace(record.Headline)
+	}
+	if record.SignalAction != "" && record.SignalSide != "" {
+		return record
+	}
+	switch strings.TrimSpace(record.Headline) {
+	case "开多":
+		record.SignalSide = "long"
+		record.SignalAction = "open"
+	case "多头增仓":
+		record.SignalSide = "long"
+		record.SignalAction = "add"
+	case "平多":
+		record.SignalSide = "long"
+		record.SignalAction = "close"
+	case "多单TP":
+		record.SignalSide = "long"
+		record.SignalAction = "tp"
+	case "开空":
+		record.SignalSide = "short"
+		record.SignalAction = "open"
+	case "空头增仓":
+		record.SignalSide = "short"
+		record.SignalAction = "add"
+	case "平空":
+		record.SignalSide = "short"
+		record.SignalAction = "close"
+	case "空单TP":
+		record.SignalSide = "short"
+		record.SignalAction = "tp"
+	}
+	return record
 }
 
 func (a *App) upsertLiquidationBacktestCachedRecords(records []AnalysisSignalRecord) (int, int, error) {
@@ -1556,7 +1638,7 @@ func (a *App) upsertLiquidationBacktestCachedRecords(records []AnalysisSignalRec
 	}
 	defer tx.Rollback()
 	existsStmt, err := tx.Prepare(`SELECT id FROM analysis_liquidation_backtest_signals
-		WHERE symbol=? AND signal_ts=? AND direction=? LIMIT 1`)
+		WHERE symbol=? AND signal_ts=? AND signal_side=? AND signal_action=? LIMIT 1`)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1564,9 +1646,10 @@ func (a *App) upsertLiquidationBacktestCachedRecords(records []AnalysisSignalRec
 	upsertStmt, err := tx.Prepare(`INSERT INTO analysis_liquidation_backtest_signals(
 			signal_ts, symbol, source_group, direction, confidence, signal_price,
 			analysis_generated_at, headline, summary, verify_horizon_min,
-			second_factor_key, second_factor_label, generated_at
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(symbol, signal_ts, direction) DO UPDATE SET
+			signal_action, signal_side, signal_label, second_factor_key, second_factor_label, generated_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(symbol, signal_ts, signal_side, signal_action) DO UPDATE SET
+			direction=excluded.direction,
 			source_group=excluded.source_group,
 			confidence=excluded.confidence,
 			signal_price=excluded.signal_price,
@@ -1574,6 +1657,7 @@ func (a *App) upsertLiquidationBacktestCachedRecords(records []AnalysisSignalRec
 			headline=excluded.headline,
 			summary=excluded.summary,
 			verify_horizon_min=excluded.verify_horizon_min,
+			signal_label=excluded.signal_label,
 			second_factor_key=excluded.second_factor_key,
 			second_factor_label=excluded.second_factor_label,
 			generated_at=excluded.generated_at`)
@@ -1585,8 +1669,14 @@ func (a *App) upsertLiquidationBacktestCachedRecords(records []AnalysisSignalRec
 	inserted := 0
 	updated := 0
 	for _, record := range records {
+		record = fillLiquidationBacktestCacheKeys(record)
+		if record.SignalAction == "" || record.SignalSide == "" {
+			return 0, 0, fmt.Errorf("liquidation backtest signal missing action/side at %d", record.SignalTS)
+		}
+		record.SecondFactorKey = ""
+		record.SecondFactorLabel = ""
 		var existingID int64
-		err := existsStmt.QueryRow(record.Symbol, record.SignalTS, record.Direction).Scan(&existingID)
+		err := existsStmt.QueryRow(record.Symbol, record.SignalTS, record.SignalSide, record.SignalAction).Scan(&existingID)
 		if err == nil {
 			updated++
 		} else if err == sql.ErrNoRows {
@@ -1605,6 +1695,9 @@ func (a *App) upsertLiquidationBacktestCachedRecords(records []AnalysisSignalRec
 			record.Headline,
 			record.Summary,
 			normalizedAnalysisVerifyHorizonMin(record.VerifyHorizonMin),
+			record.SignalAction,
+			record.SignalSide,
+			record.SignalLabel,
 			record.SecondFactorKey,
 			record.SecondFactorLabel,
 			generatedAt,
@@ -1620,7 +1713,7 @@ func (a *App) upsertLiquidationBacktestCachedRecords(records []AnalysisSignalRec
 
 func (a *App) liquidationBacktestSignalCacheAuthoritative() bool {
 	switch strings.TrimSpace(a.getSetting(analysisLiquidationBacktestCacheStateKey)) {
-	case "filled", "empty":
+	case analysisLiquidationBacktestCacheStateFilled, analysisLiquidationBacktestCacheStateEmpty, "empty":
 		return true
 	default:
 		return false
@@ -1815,9 +1908,9 @@ func (a *App) AnalysisBacktestLiquidationSignalBackfill(hours int) (AnalysisBack
 	if err != nil {
 		return AnalysisBacktestLiquidationSignalMutationResponse{}, err
 	}
-	state := "empty"
+	state := analysisLiquidationBacktestCacheStateEmpty
 	if len(records) > 0 {
-		state = "filled"
+		state = analysisLiquidationBacktestCacheStateFilled
 	}
 	if err := a.setSetting(analysisLiquidationBacktestCacheStateKey, state); err != nil {
 		return AnalysisBacktestLiquidationSignalMutationResponse{}, err
@@ -1838,7 +1931,7 @@ func (a *App) AnalysisBacktestLiquidationSignalReset(hours int) (AnalysisBacktes
 		return AnalysisBacktestLiquidationSignalMutationResponse{}, err
 	}
 	deleted64, _ := res.RowsAffected()
-	if err := a.setSetting(analysisLiquidationBacktestCacheStateKey, "empty"); err != nil {
+	if err := a.setSetting(analysisLiquidationBacktestCacheStateKey, analysisLiquidationBacktestCacheStateEmpty); err != nil {
 		return AnalysisBacktestLiquidationSignalMutationResponse{}, err
 	}
 	return AnalysisBacktestLiquidationSignalMutationResponse{

@@ -568,8 +568,6 @@ func TestLiquidationBacktestSignalCacheUpsertIsIdempotent(t *testing.T) {
 		Headline:          "开多",
 		Summary:           "test",
 		VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
-		SecondFactorKey:   analysisSecondFactorBand2050Up,
-		SecondFactorLabel: "20/50 同步上推",
 	}}
 
 	inserted, updated, err := app.upsertLiquidationBacktestCachedRecords(records)
@@ -590,8 +588,68 @@ func TestLiquidationBacktestSignalCacheUpsertIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].SecondFactorKey != analysisSecondFactorBand2050Up {
-		t.Fatalf("cached records = %+v, want one band sync up record", got)
+	if len(got) != 1 || got[0].SignalAction != "open" || got[0].SignalSide != "long" || got[0].SecondFactorKey != "" {
+		t.Fatalf("cached records = %+v, want one single-factor long open record", got)
+	}
+}
+
+func TestLiquidationBacktestSignalCacheKeepsSameTimestampActions(t *testing.T) {
+	db := newAnalysisBacktestMemoryDB(t)
+	app := &App{db: db}
+	baseTS := time.Now().Add(-time.Hour).UnixMilli()
+	records := []AnalysisSignalRecord{
+		{
+			SignalTS:          baseTS,
+			Symbol:            defaultSymbol,
+			SourceGroup:       analysisLiquidationBacktestSourceGroup,
+			Direction:         "up",
+			Confidence:        70,
+			SignalPrice:       2300,
+			AnalysisGenerated: baseTS,
+			Headline:          "开多",
+			Summary:           "open",
+			VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+			SignalAction:      "open",
+			SignalSide:        "long",
+			SignalLabel:       "开多",
+		},
+		{
+			SignalTS:          baseTS,
+			Symbol:            defaultSymbol,
+			SourceGroup:       analysisLiquidationBacktestSourceGroup,
+			Direction:         "up",
+			Confidence:        82,
+			SignalPrice:       2300,
+			AnalysisGenerated: baseTS,
+			Headline:          "多头增仓",
+			Summary:           "add",
+			VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+			SignalAction:      "add",
+			SignalSide:        "long",
+			SignalLabel:       "多头增仓",
+		},
+	}
+
+	inserted, updated, err := app.upsertLiquidationBacktestCachedRecords(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted != 2 || updated != 0 {
+		t.Fatalf("first upsert inserted=%d updated=%d, want 2/0", inserted, updated)
+	}
+	inserted, updated, err = app.upsertLiquidationBacktestCachedRecords(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted != 0 || updated != 2 {
+		t.Fatalf("second upsert inserted=%d updated=%d, want 0/2", inserted, updated)
+	}
+	got, err := app.listLiquidationBacktestCachedRecords(baseTS - 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].SignalAction != "open" || got[1].SignalAction != "add" {
+		t.Fatalf("cached records = %+v, want open and add at same timestamp", got)
 	}
 }
 
@@ -650,8 +708,6 @@ func TestAnalysisBacktestLiquidationUsesCachedRecords(t *testing.T) {
 		Headline:          "开多",
 		Summary:           "cached",
 		VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
-		SecondFactorKey:   analysisSecondFactorBand2050Up,
-		SecondFactorLabel: "20/50 同步上推",
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -664,8 +720,8 @@ func TestAnalysisBacktestLiquidationUsesCachedRecords(t *testing.T) {
 	if len(resp.Signals) != 1 {
 		t.Fatalf("signals = %d, want cached signal", len(resp.Signals))
 	}
-	if resp.Signals[0].SecondFactorKey != analysisSecondFactorBand2050Up || resp.Signals[0].Summary != "cached" {
-		t.Fatalf("signal = %+v, want cached band sync signal", resp.Signals[0])
+	if resp.Signals[0].SecondFactorKey != "" || resp.Signals[0].SignalAction != "open" || resp.Signals[0].SignalSide != "long" || resp.Signals[0].Summary != "cached" {
+		t.Fatalf("signal = %+v, want cached single-factor signal", resp.Signals[0])
 	}
 	gotHorizons := make([]int, 0, len(resp.Signals[0].Horizons))
 	for _, horizon := range resp.Signals[0].Horizons {
@@ -704,8 +760,6 @@ func TestAnalysisBacktestLiquidationSignalResetDeletesCachedRecords(t *testing.T
 		Headline:          "开空",
 		Summary:           "cached",
 		VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
-		SecondFactorKey:   analysisSecondFactorBand2050Down,
-		SecondFactorLabel: "20/50 同步下压",
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -725,8 +779,8 @@ func TestAnalysisBacktestLiquidationSignalResetDeletesCachedRecords(t *testing.T
 	if len(got) != 0 {
 		t.Fatalf("cached records after reset = %+v, want none", got)
 	}
-	if state := app.getSetting(analysisLiquidationBacktestCacheStateKey); state != "empty" {
-		t.Fatalf("cache state = %q, want empty", state)
+	if state := app.getSetting(analysisLiquidationBacktestCacheStateKey); state != analysisLiquidationBacktestCacheStateEmpty {
+		t.Fatalf("cache state = %q, want %q", state, analysisLiquidationBacktestCacheStateEmpty)
 	}
 }
 
@@ -748,8 +802,6 @@ func TestAnalysisBacktestLiquidationResetDeletesAllHistoricalCachedRecords(t *te
 			Headline:          "开多",
 			Summary:           "old",
 			VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
-			SecondFactorKey:   analysisSecondFactorBand2050Up,
-			SecondFactorLabel: "20/50 同步上推",
 		},
 		{
 			SignalTS:          recentTS,
@@ -762,8 +814,6 @@ func TestAnalysisBacktestLiquidationResetDeletesAllHistoricalCachedRecords(t *te
 			Headline:          "开空",
 			Summary:           "recent",
 			VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
-			SecondFactorKey:   analysisSecondFactorBand2050Down,
-			SecondFactorLabel: "20/50 同步下压",
 		},
 	}
 	if _, _, err := app.upsertLiquidationBacktestCachedRecords(records); err != nil {
@@ -789,7 +839,7 @@ func TestAnalysisBacktestLiquidationResetDeletesAllHistoricalCachedRecords(t *te
 func TestAnalysisBacktestLiquidationResetPreventsFallbackSignals(t *testing.T) {
 	db := newAnalysisBacktestMemoryDB(t)
 	app := &App{db: db}
-	if err := app.setSetting(analysisLiquidationBacktestCacheStateKey, "empty"); err != nil {
+	if err := app.setSetting(analysisLiquidationBacktestCacheStateKey, analysisLiquidationBacktestCacheStateEmpty); err != nil {
 		t.Fatal(err)
 	}
 
@@ -879,7 +929,7 @@ func TestAnalysisPersistenceCooldownKeepsBestOppositeConflict(t *testing.T) {
 	}
 }
 
-func TestBuildLiquidationBacktestSignalRecordsOnlyUsesOpenStateUpdates(t *testing.T) {
+func TestBuildLiquidationBacktestSignalRecordsUsesStateLifecycleActions(t *testing.T) {
 	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
 	signals := []TradeSignal{
 		{TS: baseTS - 1, Side: "long", Action: "open", Price: 2200, Strength: 45, Reason: "before window"},
@@ -887,15 +937,32 @@ func TestBuildLiquidationBacktestSignalRecordsOnlyUsesOpenStateUpdates(t *testin
 		{TS: baseTS + 1, Side: "long", Action: "add", Price: 2220, Strength: 65, Reason: "12h/24h 同时确认多头趋势，多单增仓。"},
 		{TS: baseTS + 2, Side: "long", Action: "close", Price: 2190, Strength: 75, Reason: "多单平仓。"},
 		{TS: baseTS + 3, Side: "short", Action: "open", Price: 2180, Strength: 85, Reason: "1h/4h 同时变为空同步，空单开仓。"},
+		{TS: baseTS + 4, Side: "short", Action: "add", Price: 2170, Strength: 88, Reason: "12h/24h 同时确认空头趋势，空单增仓。"},
+		{TS: baseTS + 5, Side: "short", Action: "tp", Price: 2160, Strength: 78, Reason: "空单TP。"},
 	}
 
-	records := buildLiquidationBacktestSignalRecords(signals, baseTS, 60)
-	if len(records) != 1 {
-		t.Fatalf("record count = %d, want 1: %+v", len(records), records)
+	records := buildLiquidationBacktestSignalRecords(signals, baseTS, 0)
+	if len(records) != 6 {
+		t.Fatalf("record count = %d, want 6: %+v", len(records), records)
 	}
-	got := records[0]
-	if got.Direction != "down" || got.Headline != "开空" || got.SignalPrice != 2180 || got.Confidence != 85 {
-		t.Fatalf("unexpected record: %+v", got)
+	want := []struct {
+		direction string
+		action    string
+		side      string
+		headline  string
+	}{
+		{"up", "open", "long", "开多"},
+		{"up", "add", "long", "多头增仓"},
+		{"down", "close", "long", "平多"},
+		{"down", "open", "short", "开空"},
+		{"down", "add", "short", "空头增仓"},
+		{"up", "tp", "short", "空单TP"},
+	}
+	for i, expected := range want {
+		got := records[i]
+		if got.Direction != expected.direction || got.SignalAction != expected.action || got.SignalSide != expected.side || got.Headline != expected.headline {
+			t.Fatalf("record[%d] = %+v, want %+v", i, got, expected)
+		}
 	}
 }
 

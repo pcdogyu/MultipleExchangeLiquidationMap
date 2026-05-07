@@ -110,6 +110,9 @@ type AnalysisSignalRecord struct {
 	Headline          string  `json:"headline"`
 	Summary           string  `json:"summary"`
 	VerifyHorizonMin  int     `json:"verify_horizon_min"`
+	SignalAction      string  `json:"signal_action,omitempty"`
+	SignalSide        string  `json:"signal_side,omitempty"`
+	SignalLabel       string  `json:"signal_label,omitempty"`
 	SecondFactorKey   string  `json:"-"`
 	SecondFactorLabel string  `json:"-"`
 }
@@ -126,6 +129,9 @@ type AnalysisSignalResult struct {
 	Headline          string                        `json:"headline"`
 	Summary           string                        `json:"summary"`
 	VerifyHorizonMin  int                           `json:"verify_horizon_min"`
+	SignalAction      string                        `json:"signal_action,omitempty"`
+	SignalSide        string                        `json:"signal_side,omitempty"`
+	SignalLabel       string                        `json:"signal_label,omitempty"`
 	SecondFactorKey   string                        `json:"second_factor_key,omitempty"`
 	SecondFactorLabel string                        `json:"second_factor_label,omitempty"`
 	PersistenceScore  float64                       `json:"persistence_score,omitempty"`

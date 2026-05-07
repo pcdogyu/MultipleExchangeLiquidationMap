@@ -31,14 +31,13 @@ func TestBuildTradeSignalsLongLifecycle(t *testing.T) {
 		tradePoint(5, true, "down", true, "up"),
 	})
 
-	if len(signals) != 5 {
-		t.Fatalf("signal count = %d, want 5: %+v", len(signals), signals)
+	if len(signals) != 4 {
+		t.Fatalf("signal count = %d, want 4: %+v", len(signals), signals)
 	}
 	assertTradeSignal(t, signals[0], "long", "open")
 	assertTradeSignal(t, signals[1], "long", "add")
-	assertTradeSignal(t, signals[2], "long", "reduce")
-	assertTradeSignal(t, signals[3], "long", "close")
-	assertTradeSignal(t, signals[4], "short", "open")
+	assertTradeSignal(t, signals[2], "long", "tp")
+	assertTradeSignal(t, signals[3], "short", "open")
 }
 
 func TestBuildTradeSignalsShortLifecycle(t *testing.T) {
@@ -50,14 +49,48 @@ func TestBuildTradeSignalsShortLifecycle(t *testing.T) {
 		tradePoint(5, true, "up", true, "down"),
 	})
 
-	if len(signals) != 5 {
-		t.Fatalf("signal count = %d, want 5: %+v", len(signals), signals)
+	if len(signals) != 4 {
+		t.Fatalf("signal count = %d, want 4: %+v", len(signals), signals)
 	}
 	assertTradeSignal(t, signals[0], "short", "open")
 	assertTradeSignal(t, signals[1], "short", "add")
-	assertTradeSignal(t, signals[2], "short", "reduce")
+	assertTradeSignal(t, signals[2], "short", "tp")
+	assertTradeSignal(t, signals[3], "long", "open")
+}
+
+func TestBuildTradeSignalsCloseBeforeAddWhenShortStateBreaks(t *testing.T) {
+	signals := buildTradeSignalsFromSyncPoints([]tradeSignalSyncPoint{
+		tradePoint(1, false, "", false, ""),
+		tradePoint(2, true, "up", false, ""),
+		tradePoint(3, false, "", false, ""),
+		tradePoint(4, true, "down", false, ""),
+		tradePoint(5, false, "", false, ""),
+	})
+
+	if len(signals) != 4 {
+		t.Fatalf("signal count = %d, want 4: %+v", len(signals), signals)
+	}
+	assertTradeSignal(t, signals[0], "long", "open")
+	assertTradeSignal(t, signals[1], "long", "close")
+	assertTradeSignal(t, signals[2], "short", "open")
 	assertTradeSignal(t, signals[3], "short", "close")
-	assertTradeSignal(t, signals[4], "long", "open")
+}
+
+func TestBuildTradeSignalsOppositeSyncAfterAddUsesCloseBeforeNewOpen(t *testing.T) {
+	signals := buildTradeSignalsFromSyncPoints([]tradeSignalSyncPoint{
+		tradePoint(1, false, "", false, ""),
+		tradePoint(2, true, "up", false, ""),
+		tradePoint(3, true, "up", true, "up"),
+		tradePoint(4, true, "down", true, "up"),
+	})
+
+	if len(signals) != 4 {
+		t.Fatalf("signal count = %d, want 4: %+v", len(signals), signals)
+	}
+	assertTradeSignal(t, signals[0], "long", "open")
+	assertTradeSignal(t, signals[1], "long", "add")
+	assertTradeSignal(t, signals[2], "long", "close")
+	assertTradeSignal(t, signals[3], "short", "open")
 }
 
 func TestSyncPointFromBucketsUsesLiquidationSyncThreshold(t *testing.T) {

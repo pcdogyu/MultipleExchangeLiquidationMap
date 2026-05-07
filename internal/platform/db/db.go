@@ -195,12 +195,13 @@ func Init(db *sql.DB) error {
 			headline TEXT NOT NULL DEFAULT '',
 			summary TEXT NOT NULL DEFAULT '',
 			verify_horizon_min INTEGER NOT NULL DEFAULT 5,
+			signal_action TEXT NOT NULL DEFAULT '',
+			signal_side TEXT NOT NULL DEFAULT '',
+			signal_label TEXT NOT NULL DEFAULT '',
 			second_factor_key TEXT NOT NULL DEFAULT '',
 			second_factor_label TEXT NOT NULL DEFAULT '',
 			generated_at INTEGER NOT NULL
 		);`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_liq_backtest_signals_uniq
-			ON analysis_liquidation_backtest_signals(symbol, signal_ts, direction);`,
 		`CREATE INDEX IF NOT EXISTS idx_analysis_liq_backtest_signals_symbol_ts
 			ON analysis_liquidation_backtest_signals(symbol, signal_ts DESC);`,
 	}
@@ -213,6 +214,13 @@ func Init(db *sql.DB) error {
 		SET verify_horizon_min=5
 		WHERE verify_horizon_min IS NULL OR verify_horizon_min<>5`)
 	_ = ensureColumn(db, "analysis_direction_signals", "confidence", "REAL NOT NULL DEFAULT 0")
+	_ = ensureColumn(db, "analysis_liquidation_backtest_signals", "signal_action", "TEXT NOT NULL DEFAULT ''")
+	_ = ensureColumn(db, "analysis_liquidation_backtest_signals", "signal_side", "TEXT NOT NULL DEFAULT ''")
+	_ = ensureColumn(db, "analysis_liquidation_backtest_signals", "signal_label", "TEXT NOT NULL DEFAULT ''")
+	_ = execWithBusyRetry(db, `DELETE FROM analysis_liquidation_backtest_signals WHERE signal_action='' OR signal_side='';`)
+	_ = execWithBusyRetry(db, `DROP INDEX IF EXISTS idx_analysis_liq_backtest_signals_uniq;`)
+	_ = execWithBusyRetry(db, `CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_liq_backtest_signals_uniq
+		ON analysis_liquidation_backtest_signals(symbol, signal_ts, signal_side, signal_action);`)
 	_ = ensureColumn(db, "market_state", "long_short_ratio", "REAL")
 	_ = ensureColumn(db, "oi_snapshots", "long_short_ratio", "REAL")
 	return nil

@@ -39,18 +39,18 @@ func tradeSignalLabel(side, action string) string {
 		return "多单开仓"
 	case "long:add":
 		return "多单增仓"
-	case "long:reduce":
-		return "多单减仓"
 	case "long:close":
 		return "多单平仓"
+	case "long:tp":
+		return "多单TP"
 	case "short:open":
 		return "空单开仓"
 	case "short:add":
 		return "空单增仓"
-	case "short:reduce":
-		return "空单减仓"
 	case "short:close":
 		return "空单平仓"
+	case "short:tp":
+		return "空单TP"
 	default:
 		return "交易信号"
 	}
@@ -78,6 +78,7 @@ func buildTradeSignalsFromSyncPoints(points []tradeSignalSyncPoint) []TradeSigna
 	sort.Slice(points, func(i, j int) bool { return points[i].TS < points[j].TS })
 
 	position := ""
+	positionAdded := false
 	prevShortDir := ""
 	prevContDir := ""
 	out := make([]TradeSignal, 0, len(points))
@@ -85,36 +86,47 @@ func buildTradeSignalsFromSyncPoints(points []tradeSignalSyncPoint) []TradeSigna
 		shortDir := normalizeTradeSignalDirection(point.ShortActive, point.ShortDir)
 		contDir := normalizeTradeSignalDirection(point.ContActive, point.ContDir)
 
-		if position == "long" && shortDir == "down" && prevShortDir != "down" {
-			out = appendTradeSignal(out, point, "long", "close", "1h/4h 同时转为空同步，多单平仓。", point.ShortStrength)
+		if position == "long" && shortDir != "up" {
+			if shortDir == "" && positionAdded {
+				out = appendTradeSignal(out, point, "long", "tp", "多单增仓后 1h/4h 同步失效，多单TP。", math.Max(point.ShortStrength, 35))
+			} else if shortDir == "down" {
+				out = appendTradeSignal(out, point, "long", "close", "1h/4h 同时转为空同步，多单平仓。", point.ShortStrength)
+			} else {
+				out = appendTradeSignal(out, point, "long", "close", "1h/4h 多同步失效，多单平仓。", math.Max(point.ShortStrength, 35))
+			}
 			position = ""
+			positionAdded = false
 		}
-		if position == "short" && shortDir == "up" && prevShortDir != "up" {
-			out = appendTradeSignal(out, point, "short", "close", "1h/4h 同时转为多同步，空单平仓。", point.ShortStrength)
+		if position == "short" && shortDir != "down" {
+			if shortDir == "" && positionAdded {
+				out = appendTradeSignal(out, point, "short", "tp", "空单增仓后 1h/4h 同步失效，空单TP。", math.Max(point.ShortStrength, 35))
+			} else if shortDir == "up" {
+				out = appendTradeSignal(out, point, "short", "close", "1h/4h 同时转为多同步，空单平仓。", point.ShortStrength)
+			} else {
+				out = appendTradeSignal(out, point, "short", "close", "1h/4h 空同步失效，空单平仓。", math.Max(point.ShortStrength, 35))
+			}
 			position = ""
+			positionAdded = false
 		}
 
 		if shortDir == "up" && prevShortDir != "up" {
 			out = appendTradeSignal(out, point, "long", "open", "1h/4h 同时变为多同步，多单开仓。", point.ShortStrength)
 			position = "long"
+			positionAdded = false
 		}
 		if shortDir == "down" && prevShortDir != "down" {
 			out = appendTradeSignal(out, point, "short", "open", "1h/4h 同时变为空同步，空单开仓。", point.ShortStrength)
 			position = "short"
+			positionAdded = false
 		}
 
-		if position == "long" && contDir == "up" && prevContDir != "up" {
+		if position == "long" && !positionAdded && contDir == "up" && prevContDir != "up" {
 			out = appendTradeSignal(out, point, "long", "add", "12h/24h 同时确认多头趋势，多单增仓。", point.ContStrength)
+			positionAdded = true
 		}
-		if position == "short" && contDir == "down" && prevContDir != "down" {
+		if position == "short" && !positionAdded && contDir == "down" && prevContDir != "down" {
 			out = appendTradeSignal(out, point, "short", "add", "12h/24h 同时确认空头趋势，空单增仓。", point.ContStrength)
-		}
-
-		if position == "long" && prevShortDir == "up" && shortDir == "" {
-			out = appendTradeSignal(out, point, "long", "reduce", "1h/4h 多同步失效但未反向同步，多单减仓。", math.Max(point.ShortStrength, 35))
-		}
-		if position == "short" && prevShortDir == "down" && shortDir == "" {
-			out = appendTradeSignal(out, point, "short", "reduce", "1h/4h 空同步失效但未反向同步，空单减仓。", math.Max(point.ShortStrength, 35))
+			positionAdded = true
 		}
 
 		prevShortDir = shortDir
