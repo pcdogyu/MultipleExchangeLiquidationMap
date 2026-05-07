@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,8 +29,9 @@ func Run() {
 	defer cleanupLogging()
 
 	dbPath := liqmap.Getenv("DB_PATH", liqmap.DefaultDBPath)
+	addr := serverAddrFromEnv()
 	if debug {
-		log.Printf("debug enabled: db_path=%s addr=%s symbol=%s", dbPath, liqmap.DefaultServerAddr, liqmap.DefaultSymbol)
+		log.Printf("debug enabled: db_path=%s addr=%s symbol=%s", dbPath, addr, liqmap.DefaultSymbol)
 	}
 	if dir := filepath.Dir(dbPath); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -63,13 +65,13 @@ func Run() {
 			case <-rootCtx.Done():
 				return
 			case <-ticker.C:
-				log.Printf("heartbeat: server alive addr=%s", liqmap.DefaultServerAddr)
+				log.Printf("heartbeat: server alive addr=%s", addr)
 			}
 		}
 	}()
 
 	mux := app.NewRouter(core, debug)
-	srv := &http.Server{Addr: liqmap.DefaultServerAddr, Handler: mux}
+	srv := &http.Server{Addr: addr, Handler: mux}
 	go func() {
 		<-rootCtx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -77,8 +79,24 @@ func Run() {
 		_ = srv.Shutdown(shutCtx)
 	}()
 
-	log.Printf("dashboard listening on http://127.0.0.1%s", liqmap.DefaultServerAddr)
+	log.Printf("dashboard listening on http://127.0.0.1%s", addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+}
+
+func serverAddrFromEnv() string {
+	if raw := strings.TrimSpace(os.Getenv("APP_ADDR")); raw != "" {
+		if strings.Contains(raw, ":") {
+			return raw
+		}
+		return ":" + raw
+	}
+	if raw := strings.TrimSpace(os.Getenv("APP_PORT")); raw != "" {
+		raw = strings.TrimPrefix(raw, ":")
+		if raw != "" {
+			return ":" + raw
+		}
+	}
+	return liqmap.DefaultServerAddr
 }

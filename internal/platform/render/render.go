@@ -25,6 +25,7 @@ var sharedNavItems = []navItem{
 	{Href: "/map", Label: "盘口汇总"},
 	{Href: "/liquidations", Label: "强平清算"},
 	{Href: "/bubbles", Label: "气泡图"},
+	{Href: "/market-info", Label: "市场信息"},
 	{Href: "/webdatasource", Label: "页面数据源"},
 	{Href: "/channel", Label: "消息通道"},
 	{Href: "/analysis", Label: "日内分析"},
@@ -40,6 +41,7 @@ var templateActivePath = map[string]string{
 	"map":                           "/map",
 	"liquidations":                  "/liquidations",
 	"bubbles":                       "/bubbles",
+	"market_info":                   "/market-info",
 	"webdatasource":                 "/webdatasource",
 	"channel":                       "/channel",
 	"analysis":                      "/analysis",
@@ -58,7 +60,9 @@ const sharedTopNavStyle = `<style id="shared-top-nav-style">
 #shared-top-nav.nav{height:58px;background:var(--nav, #101827);border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:200}
 #shared-top-nav .nav-left,#shared-top-nav .nav-right{display:flex;align-items:center;gap:20px}
 #shared-top-nav .brand{font-size:18px;font-weight:700;color:var(--navInk, #f6f7fb)}
-#shared-top-nav .menu a{color:#cdd5e4;text-decoration:none;font-size:15px;margin-right:16px}
+#shared-top-nav .menu{display:flex;align-items:center;gap:14px;overflow-x:auto;white-space:nowrap;max-width:min(74vw,1280px);scrollbar-width:none}
+#shared-top-nav .menu::-webkit-scrollbar{display:none}
+#shared-top-nav .menu a{color:#cdd5e4;text-decoration:none;font-size:15px;flex:0 0 auto}
 #shared-top-nav .menu a.active{color:#fff;font-weight:700}
 #shared-top-nav .nav-right a{color:#fff;text-decoration:none;font-size:14px;padding:8px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.18)}
 #shared-top-nav .theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}

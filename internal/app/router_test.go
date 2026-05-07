@@ -44,6 +44,7 @@ func TestNewRouterRegistersMenuPages(t *testing.T) {
 		"/map",
 		"/liquidations",
 		"/bubbles",
+		"/market-info",
 		"/analysis",
 		"/webdatasource",
 		"/channel",

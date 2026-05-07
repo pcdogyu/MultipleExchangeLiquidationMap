@@ -85,6 +85,14 @@ func Bubbles() sharedtypes.HTMLPage {
 	}
 }
 
+func MarketInfo() sharedtypes.HTMLPage {
+	return sharedtypes.HTMLPage{
+		TemplateName: "market_info",
+		FallbackHTML: `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>市场信息</title></head><body style="font-family:Segoe UI,Microsoft YaHei,sans-serif;padding:24px"><h2>市场信息页面文件缺失</h2><p>请确认 <code>internal/shared/pages/files/market_info_page.html</code> 存在，然后刷新页面。</p></body></html>`,
+		Preferred:    []string{file("market_info_page.html")},
+	}
+}
+
 func Config() sharedtypes.HTMLPage {
 	return sharedtypes.HTMLPage{
 		TemplateName: "model_config_page",

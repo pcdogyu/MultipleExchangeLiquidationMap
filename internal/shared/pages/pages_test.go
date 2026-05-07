@@ -14,6 +14,7 @@ func TestKnownPagesExposeTemplateAndPreferredFiles(t *testing.T) {
 		{name: Bookmap().TemplateName, templateName: "map", preferredMin: 1},
 		{name: Liquidations().TemplateName, templateName: "liquidations", preferredMin: 1},
 		{name: Bubbles().TemplateName, templateName: "bubbles", preferredMin: 1},
+		{name: MarketInfo().TemplateName, templateName: "market_info", preferredMin: 1},
 		{name: Config().TemplateName, templateName: "model_config_page", preferredMin: 1},
 		{name: Channel().TemplateName, templateName: "channel", preferredMin: 1},
 	}
