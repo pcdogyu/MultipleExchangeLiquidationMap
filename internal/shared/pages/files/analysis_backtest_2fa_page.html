@@ -62,6 +62,8 @@ body{margin:0;background:radial-gradient(circle at top left,#fff8ee,transparent 
 table{width:100%;border-collapse:collapse}
 th,td{padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px;text-align:left;white-space:nowrap}
 th{color:var(--muted);font-weight:600}
+.bucket-factor td{background:rgba(255,255,255,.35)}
+.bucket-factor .factor-indent{padding-left:18px;color:var(--muted)}
 .horizon-cell{white-space:normal;min-width:132px}
 .horizon-pill{display:inline-flex;flex-direction:column;gap:4px;min-width:110px;padding:8px 10px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.72);line-height:1.25}
 .horizon-pill .price{font-weight:800;color:var(--ink)}
@@ -78,6 +80,7 @@ th{color:var(--muted);font-weight:600}
 .empty{padding:18px 0;color:var(--muted)}
 .footer{margin-top:20px;font-size:12px;color:var(--muted);text-align:center}
 [data-theme="dark"] .panel,[data-theme="dark"] .stat,[data-theme="dark"] .size-pill{background:#000;border-color:var(--line);box-shadow:none}
+[data-theme="dark"] .bucket-factor td{background:rgba(15,23,42,.45)}
 [data-theme="dark"] .principle-box,[data-theme="dark"] .principle-pill{background:#000;border-color:var(--line)}
 [data-theme="dark"] .hero-main{background:linear-gradient(140deg,rgba(245,158,11,.10),rgba(94,234,212,.06)),#0f172a}
 [data-theme="dark"] th,[data-theme="dark"] td{border-bottom-color:#263041}
@@ -87,6 +90,7 @@ th{color:var(--muted);font-weight:600}
 [data-theme="dark"] .horizon-pill.pending-pill{background:rgba(217,119,6,.14);border-color:rgba(251,191,36,.24)}
 [data-theme="dark"] .horizon-pill.nodata-pill{background:rgba(51,65,85,.45);border-color:#334155}
 [data-theme="dark"] .toolbar select,[data-theme="dark"] .toolbar button{background:#000;color:#f8fafc;border-color:#475569}
+.toolbar button:disabled{opacity:.65;cursor:wait}
 @media (max-width:1100px){.hero,.stats{grid-template-columns:1fr}.horizon-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:1100px){.principle-card,.principle-points{grid-template-columns:1fr}}
 @media (max-width:980px){.menu{display:none}.wrap{padding:18px 12px 32px}.toolbar{flex-direction:column;align-items:stretch}}
@@ -288,6 +292,8 @@ th{color:var(--muted);font-weight:600}
 
 <script>
 const DAY_MS=24*60*60*1000;
+const BACKTEST_WINDOW_HOURS=336;
+const BACKTEST_WINDOW_LABEL='近2周';
 const INTERVAL_CONFIG={
   '1m':{label:'1m',source:'1m',bucketMs:60*1000,direct:true},
   '5m':{label:'5m',source:'5m',bucketMs:5*60*1000,direct:true},
@@ -308,6 +314,7 @@ const state={
   secondFactor:'all',
   horizonStats:[],
   confidenceBuckets:[],
+  confidenceFactorBuckets:[],
   candles:[],
   confMin:'0',
   strategyMode:'preferred',
@@ -352,6 +359,7 @@ function factorLabel(v){if(v==='volume_spike')return '放量';if(v==='volume_nor
 function normalizeSecondFactor(v){v=String(v||'').trim();if(v==='volume_spike'||v==='volume_normal'||v==='volume_low')return v;return 'all';}
 function footerEl(){return document.getElementById('pageStatus');}
 function setFooter(text){const el=footerEl();if(el)el.textContent=text;}
+function setReloadBusy(busy){const btn=document.getElementById('reloadBtn');if(!btn)return;btn.disabled=!!busy;btn.textContent=busy?'刷新中...':'刷新图表';}
 function filterSignalsBySecondFactor(signals,factor){
   const rows=Array.isArray(signals)?signals:[];
   const key=normalizeSecondFactor(factor);
@@ -711,29 +719,38 @@ function renderHorizonStats(stats){
     return '<div class="stat"><div class="k">'+esc(label)+' 收盘判断</div><div class="v">'+rate+'</div><div class="small">样本 '+total+' | 已验证 '+verified+' | 待验证 '+Number(stat.pending_count||0)+'</div></div>';
   }).join('');
 }
-function renderConfidenceBuckets(rows,selectedFactor){
+function renderConfidenceBuckets(rows,factorRows,selectedFactor){
   state.confidenceBuckets=Array.isArray(rows)?rows:[];
+  state.confidenceFactorBuckets=Array.isArray(factorRows)?factorRows:[];
   const body=document.getElementById('confidenceBucketBody');
   const meta=document.getElementById('confidenceBucketMeta');
   const factor=normalizeSecondFactor(selectedFactor||state.secondFactor||'all');
   if(meta){
-    meta.textContent='当前第二因子 '+factorLabel(factor)+' 的置信度分桶统计；切换第二因子会重新统计这张表。';
+    meta.textContent='每个置信度档位展示全部样本，并展开放量、正常、缩量三个成交量第二因子统计；图表和历史仍按当前第二因子 '+factorLabel(factor)+' 筛选。';
   }
   if(!body)return;
   if(!state.confidenceBuckets.length){
     body.innerHTML='<tr><td colspan="9" class="empty">当前条件下暂无可统计的置信度分桶样本</td></tr>';
     return;
   }
-  body.innerHTML=state.confidenceBuckets.map(bucket=>{
+  const factorsByLabel={};
+  for(const row of state.confidenceFactorBuckets){
+    const label=String(row&&row.label||'');
+    if(!label)continue;
+    if(!factorsByLabel[label])factorsByLabel[label]=[];
+    factorsByLabel[label].push(row);
+  }
+  const factorOrder={volume_spike:1,volume_normal:2,volume_low:3};
+  const bucketRow=(bucket,label,extraClass)=>{
     const total=Number(bucket.total_signals||0);
     const correct=Number(bucket.correct_count||0);
     const wrong=Number(bucket.wrong_count||0);
     const pending=Number(bucket.pending_count||0);
     const noData=Number(bucket.no_data_count||0);
     const verified=correct+wrong;
-    return '<tr>'
+    return '<tr'+(extraClass?' class="'+extraClass+'"':'')+'>'
       +'<td>'+esc(bucket.label||'-')+'</td>'
-      +'<td>'+esc(factorLabel(factor))+'</td>'
+      +'<td>'+label+'</td>'
       +'<td>'+total+'</td>'
       +'<td>'+verified+'</td>'
       +'<td class="ok">'+correct+'</td>'
@@ -742,7 +759,18 @@ function renderConfidenceBuckets(rows,selectedFactor){
       +'<td>'+noData+'</td>'
       +'<td>'+(verified>0?(Number(bucket.correct_rate||0).toFixed(1)+'%'):'-')+'</td>'
       +'</tr>';
-  }).join('');
+  };
+  const html=[];
+  for(const bucket of state.confidenceBuckets){
+    html.push(bucketRow(bucket,'全部',''));
+    const factorBuckets=(factorsByLabel[String(bucket.label||'')]||[]).slice().sort((a,b)=>{
+      return Number(factorOrder[String(a.factor_key||'')]||99)-Number(factorOrder[String(b.factor_key||'')]||99);
+    });
+    for(const factorBucket of factorBuckets){
+      html.push(bucketRow(factorBucket,'<span class="factor-indent">'+esc(factorBucket.factor_label||factorLabel(factorBucket.factor_key))+'</span>','bucket-factor'));
+    }
+  }
+  body.innerHTML=html.join('');
 }
 function renderBacktestViews(){
   renderSummary(buildSummaryFromSignals(state.signals));
@@ -768,7 +796,7 @@ function applyBacktestData(d,selectedFactor){
   state.yPan=0;
   renderFactorOptions(d.factor_options||[],factor);
   renderStrategyMeta(d);
-  renderConfidenceBuckets(d.confidence_buckets||[],factor);
+  renderConfidenceBuckets(d.confidence_buckets||[],d.confidence_factor_buckets||[],factor);
   renderBacktestViews();
 }
 async function loadSignals(){
@@ -781,7 +809,7 @@ async function loadSignals(){
   const bucketMeta=document.getElementById('confidenceBucketMeta');
   if(bucketMeta)bucketMeta.textContent='正在按当前筛选重新统计置信度分桶...';
   draw();
-  const params=new URLSearchParams({hours:'24',interval:String(state.interval||'5m'),factor2:requestedFactor,conf_min:String(state.confMin||'0'),strategy:requestedStrategy,_:String(Date.now())});
+  const params=new URLSearchParams({hours:String(BACKTEST_WINDOW_HOURS),interval:String(state.interval||'5m'),factor2:requestedFactor,conf_min:String(state.confMin||'0'),strategy:requestedStrategy,_:String(Date.now())});
   const r=await fetch('/api/analysis-backtest-2fa?'+params.toString(),{cache:'no-store'}).catch(()=>null);
   if(!r)throw new Error('无法连接 /api/analysis-backtest-2fa');
   if(!r.ok)throw new Error(await r.text().catch(()=>('HTTP '+r.status)));
@@ -838,6 +866,7 @@ function bindControls(){
   });
 }
 async function reloadChartOnly(){
+  setReloadBusy(true);
   try{
     const applied=await loadSignals();
     if(!applied)return;
@@ -848,18 +877,23 @@ async function reloadChartOnly(){
     draw();
     document.getElementById('chartMeta').textContent='图表加载失败: '+String(err&&err.message||err||'未知错误');
     setFooter('图表加载失败');
+  }finally{
+    setReloadBusy(false);
   }
 }
 async function reloadAll(){
+  setReloadBusy(true);
   try{
     setFooter('加载中...');
     const applied=await loadSignals();
     if(!applied)return;
-    setFooter('策略 '+strategyLabel(state.strategyMode)+' | 因子 '+factorLabel(state.secondFactor)+' | 置信度 '+confidenceFilterLabel(state.confMin)+' | 近24小时信号 '+state.signals.length+' | 周期 '+state.interval+' | K线 '+state.candles.length);
+    setFooter('策略 '+strategyLabel(state.strategyMode)+' | 因子 '+factorLabel(state.secondFactor)+' | 置信度 '+confidenceFilterLabel(state.confMin)+' | '+BACKTEST_WINDOW_LABEL+'信号 '+state.signals.length+' | 周期 '+state.interval+' | K线 '+state.candles.length);
   }catch(err){
     state.chartLoading=false;
     setFooter(String(err&&err.message||err||'加载失败'));
     draw();
+  }finally{
+    setReloadBusy(false);
   }
 }
 function bindChartInteractions(){

@@ -805,6 +805,18 @@ func (a *App) buildHeatReportCaption(r HeatReportData) string {
 	return strings.Join(lines, "\n")
 }
 
+func heatReportRowClass(i, band int, highlight bool) string {
+	cls := ""
+	useBaseBg := band == 40 || band == 60
+	if !useBaseBg && i%2 == 1 {
+		cls += " alt"
+	}
+	if !useBaseBg && highlight {
+		cls += " hot"
+	}
+	return cls
+}
+
 func (a *App) renderHeatReportPNG(r HeatReportData) ([]byte, error) {
 	chromePath := detectChromePath()
 	if chromePath == "" {
@@ -812,13 +824,7 @@ func (a *App) renderHeatReportPNG(r HeatReportData) ([]byte, error) {
 	}
 	var rows strings.Builder
 	for i, b := range r.Bands {
-		cls := ""
-		if i%2 == 1 {
-			cls += " alt"
-		}
-		if b.Highlight {
-			cls += " hot"
-		}
+		cls := heatReportRowClass(i, b.Band, b.Highlight)
 		diffClass := "diff-flat"
 		if b.DownNotionalUSD > b.UpNotionalUSD {
 			diffClass = "diff-long"
@@ -881,13 +887,7 @@ td:nth-child(4),td:nth-child(5){color:#cf7436}
 func buildHeatReportTableHTML(r HeatReportData) string {
 	var rows strings.Builder
 	for i, b := range r.Bands {
-		cls := ""
-		if i%2 == 1 {
-			cls += " alt"
-		}
-		if b.Highlight {
-			cls += " hot"
-		}
+		cls := heatReportRowClass(i, b.Band, b.Highlight)
 		diffClass := "diff-flat"
 		if b.DownNotionalUSD > b.UpNotionalUSD {
 			diffClass = "diff-long"

@@ -23,7 +23,7 @@ func analysisBandPushScore(up, down float64) float64 {
 	if total <= 0 {
 		return 0
 	}
-	return clamp(((up - down) / total) * 100, -100, 100)
+	return clamp(((up-down)/total)*100, -100, 100)
 }
 
 func analysisPushDirectionText(score float64) string {

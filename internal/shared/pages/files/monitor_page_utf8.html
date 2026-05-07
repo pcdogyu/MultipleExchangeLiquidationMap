@@ -450,6 +450,15 @@ function renderTopCards(d){
 
 
 
+function heatReportRowClass(i,band,hot){
+  const baseBg={40:true,60:true};
+  const useBaseBg=!!baseBg[Number(band)];
+  const classes=[];
+  if(!useBaseBg&&i%2) classes.push('alt');
+  if(!useBaseBg&&hot&&hot[band]) classes.push('hot');
+  return classes.join(' ');
+}
+
 function renderHeatReport(d){
   const wrap=document.getElementById('heatReport');
   if(!wrap) return;
@@ -475,7 +484,7 @@ function renderHeatReport(d){
     const b=bands[i];
     const up=Number(b.up_notional_usd||0);
     const down=Number(b.down_notional_usd||0);
-    const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
+    const cls=heatReportRowClass(i,b.band,hot);
     const diffClass=down>up?'diff-long':(up>down?'diff-short':'diff-flat');
     html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="down-cell">'+fmtHeatPrice(b.down_price)+'</td><td class="down-cell">'+amountYi(down)+'</td><td class="up-cell">'+fmtHeatPrice(b.up_price)+'</td><td class="up-cell">'+amountYi(up)+'</td><td class="diff-cell '+diffClass+'">'+signedAmountYiDiff(down,up)+'</td></tr>';
   }
@@ -581,7 +590,7 @@ function renderHeatReport(d){
     const b=bands[i];
     const up=Number(b.up_notional_usd||0);
     const down=Number(b.down_notional_usd||0);
-    const cls=(i%2?'alt ':'')+(hot[b.band]?'hot':'');
+    const cls=heatReportRowClass(i,b.band,hot);
     const diffClass=down>up?'diff-long':(up>down?'diff-short':'diff-flat');
     html+='<tr class="'+cls+'"><td>'+b.band+'点内</td><td class="down-cell">'+fmtHeatPrice(b.down_price)+'</td><td class="down-cell">'+amountYi(down)+'</td><td class="up-cell">'+fmtHeatPrice(b.up_price)+'</td><td class="up-cell">'+amountYi(up)+'</td><td class="diff-cell '+diffClass+'">'+signedAmountYiDiff(down,up)+'</td></tr>';
   }

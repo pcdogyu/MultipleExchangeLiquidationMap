@@ -1,6 +1,7 @@
 package liqmap
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +120,24 @@ func TestBuildHeatReportTableHTMLOrdersLowerLongsBeforeUpperShorts(t *testing.T)
 	for _, unwanted := range []string{"3500.12", "3480.44", "3520.66"} {
 		if strings.Contains(html, unwanted) {
 			t.Fatalf("expected heat report html not to contain %q, got:\n%s", unwanted, html)
+		}
+	}
+}
+
+func TestBuildHeatReportTableHTMLUsesBaseBackgroundForFortyAndSixty(t *testing.T) {
+	bands := []HeatReportBand{}
+	for _, band := range []int{10, 20, 30, 40, 50, 60} {
+		bands = append(bands, HeatReportBand{Band: band, Highlight: band == 40 || band == 60})
+	}
+
+	html := buildHeatReportTableHTML(HeatReportData{Bands: bands})
+
+	for _, band := range []int{40, 60} {
+		if strings.Contains(html, fmt.Sprintf(`<tr class=" alt"><td>%d点内`, band)) {
+			t.Fatalf("expected %d row to use the base background class, got:\n%s", band, html)
+		}
+		if !strings.Contains(html, fmt.Sprintf(`<tr class=""><td>%d点内`, band)) {
+			t.Fatalf("expected %d row to match the 10-point base row background, got:\n%s", band, html)
 		}
 	}
 }

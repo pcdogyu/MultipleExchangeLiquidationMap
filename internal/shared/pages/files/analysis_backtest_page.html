@@ -39,6 +39,12 @@ body{margin:0;background:radial-gradient(circle at top left,#fff8ee,transparent 
 .principle-pill{padding:12px 14px;border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.72)}
 .principle-pill .k{font-size:12px;color:var(--muted)}
 .principle-pill .v{margin-top:6px;font-size:13px;font-weight:700;line-height:1.6;color:var(--ink)}
+.interpretation-card{margin-top:14px;padding:16px 18px;border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,.62)}
+.interpretation-card h3{margin:0 0 10px;font-size:15px}
+.interpretation-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.interpretation-item{padding:12px 14px;border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.72)}
+.interpretation-item .k{font-size:12px;color:var(--muted)}
+.interpretation-item .v{margin-top:6px;font-size:13px;font-weight:700;line-height:1.6;color:var(--ink)}
 .section{margin-top:18px}
 .section h2{margin:0 0 10px;font-size:18px}
 .toolbar{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:14px}
@@ -78,7 +84,7 @@ th{color:var(--muted);font-weight:600}
 .empty{padding:18px 0;color:var(--muted)}
 .footer{margin-top:20px;font-size:12px;color:var(--muted);text-align:center}
 [data-theme="dark"] .panel,[data-theme="dark"] .stat,[data-theme="dark"] .size-pill{background:#000;border-color:var(--line);box-shadow:none}
-[data-theme="dark"] .principle-box,[data-theme="dark"] .principle-pill{background:#000;border-color:var(--line)}
+[data-theme="dark"] .principle-box,[data-theme="dark"] .principle-pill,[data-theme="dark"] .interpretation-card,[data-theme="dark"] .interpretation-item{background:#000;border-color:var(--line)}
 [data-theme="dark"] .hero-main{background:linear-gradient(140deg,rgba(245,158,11,.10),rgba(94,234,212,.06)),#0f172a}
 [data-theme="dark"] th,[data-theme="dark"] td{border-bottom-color:#263041}
 [data-theme="dark"] .horizon-pill{background:#020617;border-color:#334155}
@@ -87,8 +93,9 @@ th{color:var(--muted);font-weight:600}
 [data-theme="dark"] .horizon-pill.pending-pill{background:rgba(217,119,6,.14);border-color:rgba(251,191,36,.24)}
 [data-theme="dark"] .horizon-pill.nodata-pill{background:rgba(51,65,85,.45);border-color:#334155}
 [data-theme="dark"] .toolbar select,[data-theme="dark"] .toolbar button{background:#000;color:#f8fafc;border-color:#475569}
+.toolbar button:disabled{opacity:.65;cursor:wait}
 @media (max-width:1100px){.hero,.stats{grid-template-columns:1fr}.horizon-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:1100px){.principle-card,.principle-points{grid-template-columns:1fr}}
+@media (max-width:1100px){.principle-card,.principle-points,.interpretation-grid{grid-template-columns:1fr}}
 @media (max-width:980px){.menu{display:none}.wrap{padding:18px 12px 32px}.toolbar{flex-direction:column;align-items:stretch}}
 </style>
 </head>
@@ -139,6 +146,16 @@ th{color:var(--muted);font-weight:600}
           <div class="principle-pill"><div class="k">&#36755;&#20986;</div><div class="v">&#26368;&#32456;&#36755;&#20986;&#26041;&#21521;&#12289;&#32622;&#20449;&#24230;&#21644;&#25688;&#35201;&#65307;&#20998;&#25968;&#25509;&#36817;&#20013;&#24615;&#26102;&#19981;&#29983;&#25104;&#20449;&#21495;&#12290;</div></div>
         </div>
       </div>
+      <div class="interpretation-card">
+        <h3>清算柱方向解读速记</h3>
+        <div class="small">收盘价夹在上方空头清算柱和下方多头清算柱之间时，先把它理解成上下都有流动性靶子；单因子页不会直接预测主观方向，而是只看 1D / 7D / 30D 清算带是否同向迁移、增厚、靠近现价。</div>
+        <div class="interpretation-grid" style="margin-top:10px">
+          <div class="interpretation-item"><div class="k">方向优先级</div><div class="v">累计清算金额 &gt; 收盘相对位置 &gt; 扫柱后的反应 &gt; 单根柱子大小。上方 short 累计更重且更近，偏向上扫；下方 long 累计更重且更近，偏向下探。</div></div>
+          <div class="interpretation-item"><div class="k">多头减仓影响</div><div class="v">盈利多头平掉一部分后，个人剩余仓位清算价通常下移；如果群体都这样做，近端多单清算柱会变薄，更低位置可能形成新的多单清算带。</div></div>
+          <div class="interpretation-item"><div class="k">需求 / 抛售区</div><div class="v">下方多单清算柱先是潜在被动卖压，不等于需求区；上方空头清算柱先是潜在被动买盘，不等于抛售区。扫完能否反转，要看是否被承接或吸收。</div></div>
+          <div class="interpretation-item"><div class="k">回测页用法</div><div class="v">当 1D / 7D / 30D 多窗口同时指向同一侧，且近价清算带变化明显，信号置信度更高；上下强度接近或互相冲突时，更容易被判为中性、降置信度或不触发。</div></div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -179,13 +196,13 @@ th{color:var(--muted);font-weight:600}
           </select>
           <label for="qualityModeSelect">&#20449;&#21495;&#33539;&#22260;</label>
           <select id="qualityModeSelect">
-            <option value="high" selected>&#39640;&#36136;&#37327;</option>
-            <option value="all">&#20840;&#37096;&#20449;&#21495;</option>
+            <option value="high">&#39640;&#36136;&#37327;</option>
+            <option value="all" selected>&#20840;&#37096;&#20449;&#21495;</option>
           </select>
           <label for="noiseStrategySelect">&#38477;&#22122;</label>
           <select id="noiseStrategySelect">
-            <option value="persistence" selected>&#38271;&#21608;&#26399;&#38477;&#22122;</option>
-            <option value="none">&#20840;&#37096;</option>
+            <option value="persistence">&#38271;&#21608;&#26399;&#38477;&#22122;</option>
+            <option value="none" selected>&#20840;&#37096;</option>
           </select>
           <button class="primary" type="button" id="reloadBtn">&#21047;&#26032;&#22270;&#34920;</button>
         </div>
@@ -246,8 +263,8 @@ th{color:var(--muted);font-weight:600}
 
 <script>
 const DAY_MS=24*60*60*1000;
-const BACKTEST_HOURS=168;
-const BACKTEST_RANGE_LABEL='Last 7d';
+const BACKTEST_HOURS=336;
+const BACKTEST_RANGE_LABEL='Last 14d';
 const INTERVAL_CONFIG={
   '1m':{label:'1m',source:'1m',bucketMs:60*1000,direct:true},
   '5m':{label:'5m',source:'5m',bucketMs:5*60*1000,direct:true},
@@ -267,8 +284,8 @@ const state={
   horizonStats:[],
   candles:[],
   confMin:'0',
-  qualityMode:'high',
-  noiseStrategy:'persistence',
+  qualityMode:'all',
+  noiseStrategy:'none',
   interval:'5m',
   chartWidth:1600,
   chartHeight:620,
@@ -308,6 +325,7 @@ function noiseStrategyLabel(v){return v==='persistence'?'Long-cycle denoise':'Al
 function persistenceCell(sig){const score=Number(sig&&sig.persistence_score||0);if(!score)return '-';return score.toFixed(1)+' / '+esc(sig.persistence_label||'-');}
 function footerEl(){return document.getElementById('pageStatus');}
 function setFooter(text){const el=footerEl();if(el)el.textContent=text;}
+function setReloadBusy(busy){const btn=document.getElementById('reloadBtn');if(!btn)return;btn.disabled=!!busy;btn.textContent=busy?'刷新中...':'刷新图表';}
 function horizonByMin(sig,min){for(const h of (sig&&sig.horizons||[])){if(Number(h&&h.horizon_min||0)===min)return h;}return null;}
 function renderHorizonCell(sig,min){const h=horizonByMin(sig,min);if(!h)return '<div class="horizon-pill nodata-pill"><span class="pending">已截断</span><span class="meta">反向信号</span></div>';const res=resultLabel(h.result);if(h.result==='pending')return '<div class="horizon-pill pending-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';if(h.result==='no_data')return '<div class="horizon-pill nodata-pill"><span class="'+res[1]+'">'+res[0]+'</span><span class="meta">'+fmtTime(h.verify_due_ts)+'</span></div>';const isCorrect=h.result==='correct';const cls=isCorrect?'ok':'bad';const pillCls=isCorrect?'up-pill':'down-pill';return '<div class="horizon-pill '+pillCls+'"><span class="price">'+fmtPrice(h.verify_close_price)+'</span><span class="meta '+cls+'">'+fmtDelta(h.delta_price)+' / '+fmtPct(h.delta_pct)+'</span></div>';}
 function clamp(v,min,max){return Math.max(min,Math.min(max,v));}
@@ -636,10 +654,10 @@ function applyBacktestData(d){
   if(d.chart_interval)state.interval=String(d.chart_interval);
   const confMinSelect=document.getElementById('confMinSelect');
   if(confMinSelect)confMinSelect.value=String(state.confMin||'0');
-  state.qualityMode=String(d.quality_mode||state.qualityMode||'high');
+  state.qualityMode=String(d.quality_mode||state.qualityMode||'all');
   const qualityModeSelect=document.getElementById('qualityModeSelect');
   if(qualityModeSelect)qualityModeSelect.value=state.qualityMode;
-  state.noiseStrategy=String(d.noise_strategy||state.noiseStrategy||'persistence');
+  state.noiseStrategy=String(d.noise_strategy||state.noiseStrategy||'none');
   const noiseStrategySelect=document.getElementById('noiseStrategySelect');
   if(noiseStrategySelect)noiseStrategySelect.value=state.noiseStrategy;
   const intervalSelect=document.getElementById('intervalSelect');
@@ -659,7 +677,7 @@ async function loadSignals(){
   state.chartLoading=true;
   renderStatsLoading();
   draw();
-  const params=new URLSearchParams({hours:String(BACKTEST_HOURS),interval:String(state.interval||'5m'),conf_min:String(state.confMin||'0'),quality:String(state.qualityMode||'high'),noise_strategy:String(state.noiseStrategy||'persistence'),_:String(Date.now())});
+  const params=new URLSearchParams({hours:String(BACKTEST_HOURS),interval:String(state.interval||'5m'),conf_min:String(state.confMin||'0'),quality:String(state.qualityMode||'all'),noise_strategy:String(state.noiseStrategy||'none'),_:String(Date.now())});
   const r=await fetch('/api/analysis-backtest?'+params.toString()).catch(()=>null);
   if(!r)throw new Error('Cannot request /api/analysis-backtest');
   if(!r.ok)throw new Error(await r.text().catch(()=>('HTTP '+r.status)));
@@ -692,7 +710,7 @@ function bindControls(){
     await reloadAll();
   });
   document.getElementById('qualityModeSelect').addEventListener('change',async e=>{
-    state.qualityMode=String(e.target.value||'high');
+    state.qualityMode=String(e.target.value||'all');
     await reloadAll();
   });
   document.getElementById('noiseStrategySelect').addEventListener('change',async e=>{
@@ -711,6 +729,7 @@ function bindControls(){
   });
 }
 async function reloadChartOnly(){
+  setReloadBusy(true);
   try{
     await loadSignals();
     setFooter('Range '+qualityModeLabel(state.qualityMode)+' | Noise '+noiseStrategyLabel(state.noiseStrategy)+' | Confidence '+confidenceFilterLabel(state.confMin)+' | Interval '+state.interval+' | Signals '+state.signals.length+' | K '+state.candles.length);
@@ -720,9 +739,12 @@ async function reloadChartOnly(){
     draw();
     document.getElementById('chartMeta').textContent='Chart load failed: '+String(err&&err.message||err||'unknown error');
     setFooter('Chart load failed');
+  }finally{
+    setReloadBusy(false);
   }
 }
 async function reloadAll(){
+  setReloadBusy(true);
   try{
     setFooter('Loading...');
     await loadSignals();
@@ -731,6 +753,8 @@ async function reloadAll(){
     state.chartLoading=false;
     setFooter(String(err&&err.message||err||'Load failed'));
     draw();
+  }finally{
+    setReloadBusy(false);
   }
 }
 function bindChartInteractions(){
