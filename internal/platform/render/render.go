@@ -20,10 +20,10 @@ type navItem struct {
 
 var sharedNavItems = []navItem{
 	{Href: "/", Label: "清算热区"},
+	{Href: "/market-info", Label: "市场信息"},
 	{Href: "/config", Label: "模型配置"},
 	{Href: "/monitor", Label: "雷区监控"},
 	{Href: "/map", Label: "盘口汇总"},
-	{Href: "/market-info", Label: "市场信息"},
 	{Href: "/liquidations", Label: "强平清算"},
 	{Href: "/bubbles", Label: "气泡图"},
 	{Href: "/webdatasource", Label: "页面数据源"},
