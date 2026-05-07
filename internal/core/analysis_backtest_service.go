@@ -14,11 +14,13 @@ import (
 const analysisSignalVerifyHorizonMin = 5
 
 var analysisBacktestHorizons = []int{5, 15, 30, 60}
+var analysisLiquidationBacktestHorizons = []int{60, 240, 720, 1440}
 
 const analysisBacktestKlinePageLimit = 1000
 const analysisLiquidationBacktestSampleInterval = "5m"
 const analysisLiquidationBacktestSourceGroup = 8
 const analysisLiquidationBandSyncMaxAgeMS = int64(30 * 60 * 1000)
+const analysisLiquidationBacktestCacheStateKey = "analysis_liquidation_backtest_signal_cache_state"
 
 const (
 	analysisSecondFactorAll           = "all"
@@ -256,8 +258,21 @@ func normalizedAnalysisVerifyHorizonMin(v int) int {
 	return v
 }
 
-func analysisBacktestHorizonsForSignal(records []AnalysisSignalRecord, index int) []int {
-	horizons := append([]int(nil), analysisBacktestHorizons...)
+func maxAnalysisBacktestHorizonMin(horizons []int) int {
+	maxHorizon := analysisSignalVerifyHorizonMin
+	for _, horizon := range horizons {
+		if horizon > maxHorizon {
+			maxHorizon = horizon
+		}
+	}
+	return maxHorizon
+}
+
+func analysisBacktestHorizonsForSignalWithHorizons(records []AnalysisSignalRecord, index int, sourceHorizons []int) []int {
+	horizons := append([]int(nil), sourceHorizons...)
+	if len(horizons) == 0 {
+		horizons = append([]int(nil), analysisBacktestHorizons...)
+	}
 	if index < 0 || index >= len(records)-1 {
 		return horizons
 	}
@@ -289,9 +304,13 @@ func analysisBacktestHorizonsForSignal(records []AnalysisSignalRecord, index int
 		}
 	}
 	if len(out) == 0 {
-		return []int{analysisSignalVerifyHorizonMin}
+		return []int{horizons[0]}
 	}
 	return out
+}
+
+func analysisBacktestHorizonsForSignal(records []AnalysisSignalRecord, index int) []int {
+	return analysisBacktestHorizonsForSignalWithHorizons(records, index, analysisBacktestHorizons)
 }
 
 func normalizeAnalysisSecondFactorKey(v string) string {
@@ -743,15 +762,22 @@ func buildAnalysisBacktestSummary(results []AnalysisSignalResult, hours int) Ana
 	return out
 }
 
-func buildAnalysisBacktestHorizonStats(results []AnalysisSignalResult) []AnalysisBacktestHorizonStat {
-	out := make([]AnalysisBacktestHorizonStat, 0, len(analysisBacktestHorizons))
-	for _, horizonMin := range analysisBacktestHorizons {
+func analysisBacktestHorizonLabel(horizonMin int) string {
+	if horizonMin >= 60 && horizonMin%60 == 0 {
+		return fmt.Sprintf("%dh", horizonMin/60)
+	}
+	return fmt.Sprintf("%dm", horizonMin)
+}
+
+func buildAnalysisBacktestHorizonStatsForHorizons(results []AnalysisSignalResult, horizons []int) []AnalysisBacktestHorizonStat {
+	if len(horizons) == 0 {
+		horizons = analysisBacktestHorizons
+	}
+	out := make([]AnalysisBacktestHorizonStat, 0, len(horizons))
+	for _, horizonMin := range horizons {
 		stat := AnalysisBacktestHorizonStat{
 			HorizonMin: horizonMin,
-			Label:      fmt.Sprintf("%dm", horizonMin),
-		}
-		if horizonMin == 60 {
-			stat.Label = "1h"
+			Label:      analysisBacktestHorizonLabel(horizonMin),
 		}
 		for _, item := range results {
 			for _, horizon := range item.Horizons {
@@ -779,6 +805,10 @@ func buildAnalysisBacktestHorizonStats(results []AnalysisSignalResult) []Analysi
 		out = append(out, stat)
 	}
 	return out
+}
+
+func buildAnalysisBacktestHorizonStats(results []AnalysisSignalResult) []AnalysisBacktestHorizonStat {
+	return buildAnalysisBacktestHorizonStatsForHorizons(results, analysisBacktestHorizons)
 }
 
 type analysisConfidenceBucketDef struct {
@@ -1588,6 +1618,15 @@ func (a *App) upsertLiquidationBacktestCachedRecords(records []AnalysisSignalRec
 	return inserted, updated, nil
 }
 
+func (a *App) liquidationBacktestSignalCacheAuthoritative() bool {
+	switch strings.TrimSpace(a.getSetting(analysisLiquidationBacktestCacheStateKey)) {
+	case "filled", "empty":
+		return true
+	default:
+		return false
+	}
+}
+
 func filterAnalysisSignalRecordsByConfidence(records []AnalysisSignalRecord, minConfidence float64) []AnalysisSignalRecord {
 	if minConfidence <= 0 {
 		return append([]AnalysisSignalRecord(nil), records...)
@@ -1608,14 +1647,14 @@ func (a *App) buildLiquidationBacktestResultsFromRecords(records []AnalysisSigna
 	}
 	const baseStep = int64(5 * time.Minute / time.Millisecond)
 	startTS := floorToFiveMinute(sinceTS - int64(30*time.Minute/time.Millisecond))
-	endTS := chartEndTS + int64(time.Hour/time.Millisecond)
+	endTS := chartEndTS + int64(maxAnalysisBacktestHorizonMin(analysisLiquidationBacktestHorizons))*int64(time.Minute/time.Millisecond)
 	candles, _, err := a.fetchAnalysisBacktestCandleRange("5m", baseStep, startTS, endTS)
 	if err != nil {
 		return nil, err
 	}
 	results := make([]AnalysisSignalResult, 0, len(records))
 	for i, record := range records {
-		results = append(results, buildAnalysisSignalResult(record, candles, time.Now().UnixMilli(), analysisBacktestHorizonsForSignal(records, i)))
+		results = append(results, buildAnalysisSignalResult(record, candles, time.Now().UnixMilli(), analysisBacktestHorizonsForSignalWithHorizons(records, i, analysisLiquidationBacktestHorizons)))
 	}
 	return results, nil
 }
@@ -1755,6 +1794,9 @@ func (a *App) buildLiquidationBacktestResults(hours int, minConfidence float64) 
 		results, err := a.buildLiquidationBacktestResultsFromRecords(cachedRecords, sinceTS, chartEndTS, minConfidence)
 		return results, sinceTS, chartEndTS, err
 	}
+	if a.liquidationBacktestSignalCacheAuthoritative() {
+		return nil, sinceTS, chartEndTS, nil
+	}
 
 	records, _, _ := a.generateLiquidationBacktestRecords(hours)
 	results, err := a.buildLiquidationBacktestResultsFromRecords(records, sinceTS, chartEndTS, minConfidence)
@@ -1773,6 +1815,13 @@ func (a *App) AnalysisBacktestLiquidationSignalBackfill(hours int) (AnalysisBack
 	if err != nil {
 		return AnalysisBacktestLiquidationSignalMutationResponse{}, err
 	}
+	state := "empty"
+	if len(records) > 0 {
+		state = "filled"
+	}
+	if err := a.setSetting(analysisLiquidationBacktestCacheStateKey, state); err != nil {
+		return AnalysisBacktestLiquidationSignalMutationResponse{}, err
+	}
 	return AnalysisBacktestLiquidationSignalMutationResponse{
 		Inserted: inserted,
 		Updated:  updated,
@@ -1784,12 +1833,14 @@ func (a *App) AnalysisBacktestLiquidationSignalReset(hours int) (AnalysisBacktes
 	if hours <= 0 {
 		hours = 24
 	}
-	sinceTS := time.Now().Add(-time.Duration(hours) * time.Hour).UnixMilli()
-	res, err := a.db.Exec(`DELETE FROM analysis_liquidation_backtest_signals WHERE symbol=? AND signal_ts>=?`, defaultSymbol, sinceTS)
+	res, err := a.db.Exec(`DELETE FROM analysis_liquidation_backtest_signals WHERE symbol=?`, defaultSymbol)
 	if err != nil {
 		return AnalysisBacktestLiquidationSignalMutationResponse{}, err
 	}
 	deleted64, _ := res.RowsAffected()
+	if err := a.setSetting(analysisLiquidationBacktestCacheStateKey, "empty"); err != nil {
+		return AnalysisBacktestLiquidationSignalMutationResponse{}, err
+	}
 	return AnalysisBacktestLiquidationSignalMutationResponse{
 		Deleted: int(deleted64),
 		Total:   0,
@@ -1833,7 +1884,7 @@ func (a *App) AnalysisBacktestLiquidation(hours int, interval string, minConfide
 		Candles:           candles,
 		Signals:           results,
 		Summary:           buildAnalysisBacktestSummary(results, hours),
-		HorizonStats:      buildAnalysisBacktestHorizonStats(results),
+		HorizonStats:      buildAnalysisBacktestHorizonStatsForHorizons(results, analysisLiquidationBacktestHorizons),
 		ConfidenceBuckets: buildAnalysisBacktestConfidenceBuckets(results),
 		ChartSource:       source,
 		ChartInterval:     chartInterval,

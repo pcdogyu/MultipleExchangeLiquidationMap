@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -109,11 +110,15 @@ func (s *service) handleBacktestLiquidationSignalBackfill(w http.ResponseWriter,
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	resp, err := s.core.AnalysisBacktestLiquidationSignalBackfill(parseAnalysisBacktestHours(r))
+	hours := parseAnalysisBacktestHours(r)
+	log.Printf("analysis liquidation backtest signal backfill start hours=%d", hours)
+	resp, err := s.core.AnalysisBacktestLiquidationSignalBackfill(hours)
 	if err != nil {
+		log.Printf("analysis liquidation backtest signal backfill failed hours=%d err=%v", hours, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("analysis liquidation backtest signal backfill done hours=%d inserted=%d updated=%d total=%d", hours, resp.Inserted, resp.Updated, resp.Total)
 	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
@@ -122,11 +127,15 @@ func (s *service) handleBacktestLiquidationSignalReset(w http.ResponseWriter, r 
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	resp, err := s.core.AnalysisBacktestLiquidationSignalReset(parseAnalysisBacktestHours(r))
+	hours := parseAnalysisBacktestHours(r)
+	log.Printf("analysis liquidation backtest signal reset start hours=%d", hours)
+	resp, err := s.core.AnalysisBacktestLiquidationSignalReset(hours)
 	if err != nil {
+		log.Printf("analysis liquidation backtest signal reset failed hours=%d err=%v", hours, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("analysis liquidation backtest signal reset done hours=%d deleted=%d total=%d", hours, resp.Deleted, resp.Total)
 	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 

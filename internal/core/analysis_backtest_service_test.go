@@ -104,6 +104,29 @@ func TestAnalysisBacktestHorizonsForSignalTrimmedByOppositeSignal(t *testing.T) 
 	}
 }
 
+func TestLiquidationBacktestHorizonsForSignalUsesLongHorizonSet(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	minutes := func(v int) int64 {
+		return int64(v) * int64(time.Minute/time.Millisecond)
+	}
+	records := []AnalysisSignalRecord{
+		{ID: 1, SignalTS: baseTS, Direction: "up"},
+		{ID: 2, SignalTS: baseTS + minutes(720), Direction: "down"},
+	}
+	got := analysisBacktestHorizonsForSignalWithHorizons(records, 0, analysisLiquidationBacktestHorizons)
+	want := []int{60, 240}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("liquidation horizons = %v, want %v", got, want)
+	}
+
+	records[1].SignalTS = baseTS + minutes(30)
+	got = analysisBacktestHorizonsForSignalWithHorizons(records, 0, analysisLiquidationBacktestHorizons)
+	want = []int{60}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("liquidation minimum horizon = %v, want %v", got, want)
+	}
+}
+
 func TestAnalysisBacktestHorizonStatsSkipTrimmedHorizons(t *testing.T) {
 	stats := buildAnalysisBacktestHorizonStats([]AnalysisSignalResult{
 		{
@@ -576,6 +599,7 @@ func TestAnalysisBacktestLiquidationUsesCachedRecords(t *testing.T) {
 	const step = int64(5 * time.Minute / time.Millisecond)
 	db := newAnalysisBacktestMemoryDB(t)
 	baseTS := floorToFiveMinute(time.Now().Add(-time.Hour).UnixMilli())
+	maxRequestedDuration := int64(0)
 	app := &App{
 		db: db,
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -587,6 +611,9 @@ func TestAnalysisBacktestLiquidationUsesCachedRecords(t *testing.T) {
 			endTS, err := strconv.ParseInt(q.Get("endTime"), 10, 64)
 			if err != nil {
 				return nil, err
+			}
+			if duration := endTS - startTS; duration > maxRequestedDuration {
+				maxRequestedDuration = duration
 			}
 			limit, err := strconv.Atoi(q.Get("limit"))
 			if err != nil {
@@ -640,6 +667,23 @@ func TestAnalysisBacktestLiquidationUsesCachedRecords(t *testing.T) {
 	if resp.Signals[0].SecondFactorKey != analysisSecondFactorBand2050Up || resp.Signals[0].Summary != "cached" {
 		t.Fatalf("signal = %+v, want cached band sync signal", resp.Signals[0])
 	}
+	gotHorizons := make([]int, 0, len(resp.Signals[0].Horizons))
+	for _, horizon := range resp.Signals[0].Horizons {
+		gotHorizons = append(gotHorizons, horizon.HorizonMin)
+	}
+	if !reflect.DeepEqual(gotHorizons, analysisLiquidationBacktestHorizons) {
+		t.Fatalf("liquidation signal horizons = %v, want %v", gotHorizons, analysisLiquidationBacktestHorizons)
+	}
+	gotStatLabels := make([]string, 0, len(resp.HorizonStats))
+	for _, stat := range resp.HorizonStats {
+		gotStatLabels = append(gotStatLabels, stat.Label)
+	}
+	if !reflect.DeepEqual(gotStatLabels, []string{"1h", "4h", "12h", "24h"}) {
+		t.Fatalf("liquidation horizon stat labels = %v", gotStatLabels)
+	}
+	if maxRequestedDuration < int64(24*time.Hour/time.Millisecond) {
+		t.Fatalf("max kline request duration = %d, want at least 24h", maxRequestedDuration)
+	}
 	if len(resp.Candles) == 0 {
 		t.Fatalf("expected chart candles")
 	}
@@ -680,6 +724,84 @@ func TestAnalysisBacktestLiquidationSignalResetDeletesCachedRecords(t *testing.T
 	}
 	if len(got) != 0 {
 		t.Fatalf("cached records after reset = %+v, want none", got)
+	}
+	if state := app.getSetting(analysisLiquidationBacktestCacheStateKey); state != "empty" {
+		t.Fatalf("cache state = %q, want empty", state)
+	}
+}
+
+func TestAnalysisBacktestLiquidationResetDeletesAllHistoricalCachedRecords(t *testing.T) {
+	db := newAnalysisBacktestMemoryDB(t)
+	app := &App{db: db}
+	now := time.Now()
+	oldTS := now.Add(-30 * 24 * time.Hour).UnixMilli()
+	recentTS := now.Add(-time.Hour).UnixMilli()
+	records := []AnalysisSignalRecord{
+		{
+			SignalTS:          oldTS,
+			Symbol:            defaultSymbol,
+			SourceGroup:       analysisLiquidationBacktestSourceGroup,
+			Direction:         "up",
+			Confidence:        70,
+			SignalPrice:       2300,
+			AnalysisGenerated: oldTS,
+			Headline:          "开多",
+			Summary:           "old",
+			VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+			SecondFactorKey:   analysisSecondFactorBand2050Up,
+			SecondFactorLabel: "20/50 同步上推",
+		},
+		{
+			SignalTS:          recentTS,
+			Symbol:            defaultSymbol,
+			SourceGroup:       analysisLiquidationBacktestSourceGroup,
+			Direction:         "down",
+			Confidence:        70,
+			SignalPrice:       2300,
+			AnalysisGenerated: recentTS,
+			Headline:          "开空",
+			Summary:           "recent",
+			VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+			SecondFactorKey:   analysisSecondFactorBand2050Down,
+			SecondFactorLabel: "20/50 同步下压",
+		},
+	}
+	if _, _, err := app.upsertLiquidationBacktestCachedRecords(records); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := app.AnalysisBacktestLiquidationSignalReset(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Deleted != 2 {
+		t.Fatalf("deleted = %d, want all 2 cached records", resp.Deleted)
+	}
+	got, err := app.listLiquidationBacktestCachedRecords(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("cached records after full reset = %+v, want none", got)
+	}
+}
+
+func TestAnalysisBacktestLiquidationResetPreventsFallbackSignals(t *testing.T) {
+	db := newAnalysisBacktestMemoryDB(t)
+	app := &App{db: db}
+	if err := app.setSetting(analysisLiquidationBacktestCacheStateKey, "empty"); err != nil {
+		t.Fatal(err)
+	}
+
+	results, sinceTS, chartEndTS, err := app.buildLiquidationBacktestResults(2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("results = %+v, want no fallback signals after reset", results)
+	}
+	if sinceTS == 0 || chartEndTS == 0 {
+		t.Fatalf("expected chart range even without signals, got since=%d end=%d", sinceTS, chartEndTS)
 	}
 }
 
