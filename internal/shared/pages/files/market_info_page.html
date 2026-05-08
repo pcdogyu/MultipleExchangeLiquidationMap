@@ -135,11 +135,25 @@ function qty(n){n=Number(n||0);const a=Math.abs(n);if(a>=1e6)return (n/1e6).toFi
 function price(n){n=Number(n||0);return n>0?n.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2}):'-';}
 function pct(n){if(n==null||!isFinite(Number(n)))return '-';return (Number(n)*100).toFixed(4)+'%';}
 function ratio(n){if(n==null||!isFinite(Number(n)))return '-';return Number(n).toFixed(3);}
+function optPrice(n){n=Number(n);return n>0?'$'+price(n):'-';}
+function optQty(n){n=Number(n);return isFinite(n)&&n!==0?qty(n):'-';}
+function optRatio(n){n=Number(n);return isFinite(n)&&n!==0?n.toFixed(3):'-';}
+function optPct(n){n=Number(n);return isFinite(n)&&n!==0?(n*100).toFixed(4)+'%':'-';}
 function signedMoney(n){n=Number(n||0);return (n>0?'+':'')+money(n);}
 function signedQty(n){n=Number(n||0);return (n>0?'+':'')+qty(n);}
 function signedRatio(n){n=Number(n||0);return (n>0?'+':'')+n.toFixed(4);}
+function signedPrice(n){n=Number(n||0);if(!isFinite(n)||n===0)return '-';return (n>0?'+':'-')+'$'+price(Math.abs(n));}
+function signedPct(n){n=Number(n||0);if(!isFinite(n)||n===0)return '-';return (n>0?'+':'')+(n*100).toFixed(4)+'%';}
 function cls(n){n=Number(n||0);return n>0?'up':(n<0?'down':'flat');}
+function ratioCls(n){n=Number(n||0);return n>1?'up':(n>0&&n<1?'down':'flat');}
 function tsText(ts){if(!ts)return '-';return new Date(Number(ts)).toLocaleString('zh-CN',{hour12:false});}
+function nextFundingText(ts){return ts?'下次 '+tsText(ts):'下次 -';}
+function settleSpreadText(settle,mark){
+  settle=Number(settle||0);mark=Number(mark||0);
+  if(!(settle>0&&mark>0))return '较标记价 -';
+  const diff=settle-mark;
+  return '较标记价 '+signedPrice(diff)+' / '+signedPct(diff/mark);
+}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function currentPreset(){return rangePresets[range]||rangePresets['5m'];}
 function pad2(n){return String(n).padStart(2,'0');}
@@ -186,11 +200,19 @@ function render(){
   const preset=currentPreset();
   document.getElementById('subtitle').textContent=(d.symbol||'ETHUSDT')+' · '+preset.label+' · 采样 '+(d.period||preset.period)+' · '+(c.current_data_quality==='live'?'live':'cache');
   const basis=c.net_position_basis==='top_position_ratio'?'顶级持仓比':'全账户多空比';
+  const takerDelta=Number(c.taker_buy_vol||0)-Number(c.taker_sell_vol||0);
+  const settleDelta=Number(c.estimated_settle_price||0)-Number(c.mark_price||0);
   document.getElementById('metrics').innerHTML=[
-    metric('标记价', '$'+price(c.mark_price), 'Funding '+pct(c.funding_rate), ''),
+    metric('标记价', optPrice(c.mark_price), '更新 '+tsText(c.updated_ts), ''),
+    metric('预估结算价', optPrice(c.estimated_settle_price), settleSpreadText(c.estimated_settle_price,c.mark_price), cls(settleDelta)),
+    metric('资金费率', optPct(c.funding_rate), nextFundingText(c.next_funding_time), cls(c.funding_rate)),
     metric('OI 价值', money(c.oi_value_usd), '24h '+signedMoney(w.oi_delta_usd), cls(w.oi_delta_usd)),
     metric('OI 数量', qty(c.oi_qty), 'ETH 合约口径', ''),
     metric('全账户多空比', ratio(c.long_short_ratio), '24h '+signedRatio(w.long_short_delta), cls(w.long_short_delta)),
+    metric('顶级持仓比', optRatio(c.top_position_ratio), '24h '+signedRatio(w.top_position_delta), cls(w.top_position_delta)),
+    metric('主动买量', optQty(c.taker_buy_vol), '当前周期', ''),
+    metric('主动卖量', optQty(c.taker_sell_vol), '买卖差 '+signedQty(takerDelta), cls(takerDelta)),
+    metric('主动买卖比', optRatio(c.taker_buy_sell_ratio), '买量 / 卖量', ratioCls(c.taker_buy_sell_ratio)),
     metric('CVD', qty(c.cvd), '24h '+signedQty(w.cvd_delta), cls(w.cvd_delta)),
     metric(c.net_position_label||'净多净空', money(c.net_position_usd), basis, cls(c.net_position_usd)),
     metric('Net GEX', signedMoney(g.net_gex_usd), 'Gamma Wall '+(g.gamma_wall_strike?price(g.gamma_wall_strike):'-'), cls(g.net_gex_usd)),
