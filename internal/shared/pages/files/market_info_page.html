@@ -74,8 +74,9 @@ th{font-size:12px;color:var(--muted);font-weight:700;background:var(--panel2)}
           <button type="button" data-range="5m">5m</button>
           <button type="button" data-range="15m">15m</button>
           <button type="button" data-range="1h">1h</button>
-          <button type="button" data-range="4h">4h</button>
-          <button type="button" data-range="12h" class="active">12H</button>
+          <button type="button" data-range="4h" class="active">4H</button>
+          <button type="button" data-range="8h">8H</button>
+          <button type="button" data-range="12h">12H</button>
           <button type="button" data-range="24h">24H</button>
           <button type="button" data-range="2d">2D</button>
           <button type="button" data-range="3d">3D</button>
@@ -134,13 +135,14 @@ th{font-size:12px;color:var(--muted);font-weight:700;background:var(--panel2)}
 
 <script>
 let marketInfo=null;
-let range='12h';
+let range='4h';
 let loading=false;
 const rangePresets={
   '5m':{label:'5m',period:'5m',limit:2},
   '15m':{label:'15m',period:'5m',limit:4},
   '1h':{label:'1H',period:'5m',limit:13},
   '4h':{label:'4H',period:'5m',limit:49},
+  '8h':{label:'8H',period:'5m',limit:97},
   '12h':{label:'12H',period:'5m',limit:145},
   '24h':{label:'24H',period:'5m',limit:289},
   '2d':{label:'2D',period:'15m',limit:193},
