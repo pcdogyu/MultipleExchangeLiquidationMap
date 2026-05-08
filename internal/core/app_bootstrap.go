@@ -12,8 +12,9 @@ func NewApp(db *sql.DB, debug bool) *App {
 		httpClient: &http.Client{
 			Timeout: 12 * time.Second,
 		},
-		ob:         newOrderBookHub(),
-		apiGuards:  map[string]*ExchangeAPIGuard{},
+		ob:                  newOrderBookHub(),
+		apiGuards:           map[string]*ExchangeAPIGuard{},
+		marketInfoRefreshes: map[string]time.Time{},
 		retrySignals: map[string]chan struct{}{
 			"binance": make(chan struct{}, 1),
 			"bybit":   make(chan struct{}, 1),

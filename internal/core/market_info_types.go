@@ -124,14 +124,17 @@ type MarketInfoGammaExpiry struct {
 }
 
 type MarketInfoResponse struct {
-	Exchange    string                `json:"exchange"`
-	Symbol      string                `json:"symbol"`
-	Period      string                `json:"period"`
-	Limit       int                   `json:"limit"`
-	GeneratedAt int64                 `json:"generated_at"`
-	Current     MarketInfoCurrent     `json:"current"`
-	Windows     []MarketInfoWindow    `json:"windows"`
-	Series      MarketInfoSeries      `json:"series"`
-	Gamma       MarketInfoGammaStatus `json:"gamma"`
-	Warnings    []string              `json:"warnings,omitempty"`
+	Exchange       string                `json:"exchange"`
+	Symbol         string                `json:"symbol"`
+	Period         string                `json:"period"`
+	Limit          int                   `json:"limit"`
+	GeneratedAt    int64                 `json:"generated_at"`
+	CacheStatus    string                `json:"cache_status,omitempty"`
+	CacheUpdatedAt int64                 `json:"cache_updated_at,omitempty"`
+	Refreshing     bool                  `json:"refreshing,omitempty"`
+	Current        MarketInfoCurrent     `json:"current"`
+	Windows        []MarketInfoWindow    `json:"windows"`
+	Series         MarketInfoSeries      `json:"series"`
+	Gamma          MarketInfoGammaStatus `json:"gamma"`
+	Warnings       []string              `json:"warnings,omitempty"`
 }

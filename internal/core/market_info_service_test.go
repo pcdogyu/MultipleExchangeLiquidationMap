@@ -1,6 +1,17 @@
 package liqmap
 
-import "testing"
+import (
+	"database/sql"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	dbpkg "multipleexchangeliquidationmap/internal/platform/db"
+
+	_ "modernc.org/sqlite"
+)
 
 func TestBuildMarketInfoWindowsClassifiesNetLongIncrease(t *testing.T) {
 	now := int64(1_700_000_000_000)
@@ -74,6 +85,113 @@ func TestMergeMarketInfoCurrentAddsTickerAndSpreadFields(t *testing.T) {
 	}
 	if got.BidPrice != live.BidPrice || got.AskPrice != live.AskPrice || got.BidAskSpread != live.BidAskSpread || got.BidAskSpreadPct != live.BidAskSpreadPct {
 		t.Fatalf("book ticker fields not merged: %+v", got)
+	}
+}
+
+func TestFetchBinanceMarketInfoCurrentUsesFuturesBookTickerEndpoint(t *testing.T) {
+	seenPaths := map[string]bool{}
+	app := &App{
+		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			seenPaths[req.URL.Path] = true
+			body := "{}"
+			switch req.URL.Path {
+			case "/fapi/v1/premiumIndex":
+				body = `{"markPrice":"3000","lastFundingRate":"0.0001","estimatedSettlePrice":"3001","nextFundingTime":1700000000000,"time":1699999900000}`
+			case "/fapi/v1/openInterest":
+				body = `{"openInterest":"100","time":1699999900000}`
+			case "/fapi/v1/ticker/24hr":
+				body = `{"priceChangePercent":"1.23","highPrice":"3100","lowPrice":"2950","quoteVolume":"1000000","closeTime":1699999950000}`
+			case "/fapi/v1/ticker/bookTicker":
+				body = `{"bidPrice":"2999.90","askPrice":"3000.10","time":1700000000000}`
+			default:
+				return &http.Response{
+					StatusCode: http.StatusNotFound,
+					Status:     "404 Not Found",
+					Body:       io.NopCloser(strings.NewReader("not found")),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     make(http.Header),
+			}, nil
+		})},
+	}
+
+	current, warnings, err := app.fetchBinanceMarketInfoCurrent("ETHUSDT")
+	if err != nil {
+		t.Fatalf("fetch current: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	if !seenPaths["/fapi/v1/ticker/bookTicker"] {
+		t.Fatalf("book ticker endpoint was not requested; paths=%v", seenPaths)
+	}
+	if seenPaths["/fapi/v1/bookTicker"] {
+		t.Fatalf("old book ticker endpoint was requested; paths=%v", seenPaths)
+	}
+	if current.BidPrice != 2999.90 || current.AskPrice != 3000.10 || current.BidAskSpread <= 0 {
+		t.Fatalf("book ticker fields not populated: %+v", current)
+	}
+}
+
+func TestMarketInfoUsesFreshSQLiteCache(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	if err := dbpkg.Configure(db); err != nil {
+		t.Fatalf("configure db: %v", err)
+	}
+	if err := dbpkg.Init(db); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+
+	calledHTTP := false
+	app := NewApp(db, false)
+	app.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calledHTTP = true
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Status:     "500 Internal Server Error",
+			Body:       io.NopCloser(strings.NewReader("unexpected")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	cached := newMarketInfoResponse("ETHUSDT", "5m", 2)
+	cached.GeneratedAt = time.Now().UnixMilli()
+	cached.Current = MarketInfoCurrent{
+		MarkPrice:          3000,
+		BidPrice:           2999.9,
+		AskPrice:           3000.1,
+		BidAskSpread:       0.2,
+		CurrentDataQuality: "live",
+	}
+	cached.Series.OI = []MarketInfoOIPoint{{TS: cached.GeneratedAt, OIValueUSD: 100_000}}
+	if err := app.saveMarketInfoCache(cached, "ready", ""); err != nil {
+		t.Fatalf("save cache: %v", err)
+	}
+
+	got, err := app.MarketInfo("ETHUSDT", "5m", 2)
+	if err != nil {
+		t.Fatalf("market info: %v", err)
+	}
+	if calledHTTP {
+		t.Fatalf("fresh cache should not synchronously call HTTP")
+	}
+	if got.CacheStatus != "ready" || got.Refreshing {
+		t.Fatalf("unexpected cache status=%q refreshing=%v", got.CacheStatus, got.Refreshing)
+	}
+	if got.Current.CurrentDataQuality != "cache" {
+		t.Fatalf("cached response quality = %q, want cache", got.Current.CurrentDataQuality)
+	}
+	if got.Current.MarkPrice != 3000 || got.Current.BidAskSpread != 0.2 {
+		t.Fatalf("unexpected cached current: %+v", got.Current)
 	}
 }
 

@@ -52,35 +52,37 @@ const (
 var bandSizes = []int{10, 20, 30, 40, 50, 60, 80, 100, 125, 150, 175, 200, 250, 300, 350, 400}
 
 type App struct {
-	db            *sql.DB
-	httpClient    *http.Client
-	ob            *OrderBookHub
-	webds         *WebDataSourceManager
-	mu            sync.RWMutex
-	analysisMu    sync.Mutex
-	analysisCache AnalysisSnapshot
-	analysisAt    time.Time
-	fitStatsMu    sync.Mutex
-	fitStatsCount int
-	fitStatsSE    float64
-	fitStatsAt    time.Time
-	fitStatsBusy  bool
-	errLogMu      sync.Mutex
-	errLogNext    map[string]time.Time
-	apiGuardMu    sync.Mutex
-	apiGuards     map[string]*ExchangeAPIGuard
-	retrySignals  map[string]chan struct{}
-	liqWSMu       sync.RWMutex
-	liqWS         map[string]*liquidationWSState
-	liqSymbolsMu  sync.RWMutex
-	liqSymbols    map[string]struct{}
-	windowDays    int
-	debug         bool
-	lastNotify    int64
-	testSendMu    sync.Mutex
-	testSending   bool
-	bundleSendMu  sync.Mutex
-	bundleSending bool
+	db                  *sql.DB
+	httpClient          *http.Client
+	ob                  *OrderBookHub
+	webds               *WebDataSourceManager
+	mu                  sync.RWMutex
+	analysisMu          sync.Mutex
+	analysisCache       AnalysisSnapshot
+	analysisAt          time.Time
+	marketInfoRefreshMu sync.Mutex
+	marketInfoRefreshes map[string]time.Time
+	fitStatsMu          sync.Mutex
+	fitStatsCount       int
+	fitStatsSE          float64
+	fitStatsAt          time.Time
+	fitStatsBusy        bool
+	errLogMu            sync.Mutex
+	errLogNext          map[string]time.Time
+	apiGuardMu          sync.Mutex
+	apiGuards           map[string]*ExchangeAPIGuard
+	retrySignals        map[string]chan struct{}
+	liqWSMu             sync.RWMutex
+	liqWS               map[string]*liquidationWSState
+	liqSymbolsMu        sync.RWMutex
+	liqSymbols          map[string]struct{}
+	windowDays          int
+	debug               bool
+	lastNotify          int64
+	testSendMu          sync.Mutex
+	testSending         bool
+	bundleSendMu        sync.Mutex
+	bundleSending       bool
 }
 
 var errResnapshot = errors.New("periodic resnapshot")

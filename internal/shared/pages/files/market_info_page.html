@@ -137,6 +137,7 @@ th{font-size:12px;color:var(--muted);font-weight:700;background:var(--panel2)}
 let marketInfo=null;
 let range='4h';
 let loading=false;
+let refreshPollTimer=null;
 const rangePresets={
   '5m':{label:'5m',period:'5m',limit:2},
   '15m':{label:'15m',period:'5m',limit:4},
@@ -174,6 +175,19 @@ function ratioCls(n){n=Number(n||0);return n>1?'up':(n>0&&n<1?'down':'flat');}
 function nullableNum(n){n=Number(n);return isFinite(n)&&n!==0?n:null;}
 function safeDiv(a,b){a=Number(a||0);b=Number(b||0);return b!==0?a/b:null;}
 function tsText(ts){if(!ts)return '-';return new Date(Number(ts)).toLocaleString('zh-CN',{hour12:false});}
+function marketInfoStatusText(d){
+  d=d||{};
+  const at=tsText(d.cache_updated_at||d.generated_at);
+  if(d.refreshing)return '本地缓存 '+at+' · 后台刷新中...';
+  if(d.cache_status)return '本地缓存 '+at;
+  return '更新时间 '+tsText(d.generated_at);
+}
+function scheduleRefreshPoll(d){
+  if(refreshPollTimer){clearTimeout(refreshPollTimer);refreshPollTimer=null;}
+  if(d&&d.refreshing){
+    refreshPollTimer=setTimeout(()=>{refreshPollTimer=null;load();},3000);
+  }
+}
 function nextFundingText(ts){return ts?'下次 '+tsText(ts):'下次 -';}
 function settleSpreadText(settle,mark){
   settle=Number(settle||0);mark=Number(mark||0);
@@ -223,7 +237,8 @@ async function load(){
     if(!r.ok)throw new Error(await r.text());
     marketInfo=await r.json();
     render();
-    status.textContent='更新时间 '+tsText(marketInfo.generated_at);
+    status.textContent=marketInfoStatusText(marketInfo);
+    scheduleRefreshPoll(marketInfo);
   }catch(err){
     status.textContent='加载失败: '+String(err&&err.message||err).trim();
   }finally{

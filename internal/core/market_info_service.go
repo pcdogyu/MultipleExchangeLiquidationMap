@@ -2,6 +2,7 @@ package liqmap
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 const (
 	defaultMarketInfoPeriod = "5m"
 	defaultMarketInfoLimit  = 288
+	marketInfoCacheFreshAge = 15 * time.Second
 )
 
 var marketInfoWindows = []struct {
@@ -29,26 +31,81 @@ func (a *App) MarketInfo(symbol, period string, limit int) (MarketInfoResponse, 
 	symbol = normalizeMarketInfoSymbol(symbol)
 	period = normalizeMarketInfoPeriod(period)
 	limit = normalizeMarketInfoLimit(limit)
-	now := time.Now().UnixMilli()
 
-	resp := MarketInfoResponse{
+	if cached, ok, err := a.loadMarketInfoCache(symbol, period, limit); err != nil {
+		return a.buildMarketInfoLocalCache(symbol, period, limit, "cache_error")
+	} else if ok {
+		refreshAfter := cached.CacheUpdatedAt
+		if cached.CacheStatus != "ready" {
+			refreshAfter = 0
+		}
+		cached.Refreshing = a.triggerMarketInfoRefresh(symbol, period, limit, refreshAfter)
+		return cached, nil
+	}
+
+	resp, err := a.buildMarketInfoLocalCache(symbol, period, limit, "local")
+	if err != nil {
+		return resp, err
+	}
+	resp.Refreshing = a.triggerMarketInfoRefresh(symbol, period, limit, 0)
+	if len(resp.Series.OI) == 0 && len(resp.Series.LongShort) == 0 && resp.Current.UpdatedTS == 0 {
+		resp.Warnings = append(resp.Warnings, "本地市场信息缓存为空，正在后台拉取最新数据。")
+	}
+	return resp, nil
+}
+
+func newMarketInfoResponse(symbol, period string, limit int) MarketInfoResponse {
+	return MarketInfoResponse{
 		Exchange:    "binance",
 		Symbol:      symbol,
 		Period:      period,
 		Limit:       limit,
-		GeneratedAt: now,
+		GeneratedAt: time.Now().UnixMilli(),
 		Gamma: MarketInfoGammaStatus{
 			Status:  "pending_options_chain",
 			Label:   "Gamma / GEX 待接入",
 			Message: "第一版先展示 Binance USDⓈ-M 永续合约市场信息。Gamma 属于期权链希腊值，需要接入期权 OI、strike、expiry 和 greeks 后再计算，暂不混入永续指标。",
 		},
 	}
+}
 
+func (a *App) buildMarketInfoLocalCache(symbol, period string, limit int, status string) (MarketInfoResponse, error) {
+	resp := newMarketInfoResponse(symbol, period, limit)
+	resp.CacheStatus = status
+	resp.CacheUpdatedAt = resp.GeneratedAt
 	if current, ok, err := a.loadBinanceMarketInfoCurrent(symbol); err != nil {
 		return resp, err
 	} else if ok {
 		resp.Current = current
 		resp.Current.CurrentDataQuality = "db"
+	}
+
+	lookbackMinutes := periodMinutes(period) * limit
+	if lookbackMinutes < 24*60 {
+		lookbackMinutes = 24 * 60
+	}
+	oiHistory, dbRatioHistory, err := a.loadBinanceOISnapshotHistory(symbol, resp.GeneratedAt-int64(lookbackMinutes)*60*1000)
+	if err != nil {
+		return resp, err
+	}
+	resp.Series.OI = oiHistory
+	resp.Series.LongShort = dbRatioHistory
+	return finalizeMarketInfoResponse(resp), nil
+}
+
+func (a *App) fetchMarketInfoLive(symbol, period string, limit int, onBatch func(MarketInfoResponse)) (MarketInfoResponse, error) {
+	resp, err := a.buildMarketInfoLocalCache(symbol, period, limit, "refreshing")
+	if err != nil {
+		return resp, err
+	}
+	publish := func() {
+		resp.GeneratedAt = time.Now().UnixMilli()
+		resp.CacheStatus = "refreshing"
+		resp.CacheUpdatedAt = resp.GeneratedAt
+		resp = finalizeMarketInfoResponse(resp)
+		if onBatch != nil {
+			onBatch(resp)
+		}
 	}
 
 	if current, tickerWarnings, err := a.fetchBinanceMarketInfoCurrent(symbol); err == nil {
@@ -58,12 +115,13 @@ func (a *App) MarketInfo(symbol, period string, limit int) (MarketInfoResponse, 
 	} else {
 		resp.Warnings = append(resp.Warnings, "Binance 当前市场信息接口不可用，已使用本地缓存: "+err.Error())
 	}
+	publish()
 
 	lookbackMinutes := periodMinutes(period) * limit
 	if lookbackMinutes < 24*60 {
 		lookbackMinutes = 24 * 60
 	}
-	oiHistory, dbRatioHistory, err := a.loadBinanceOISnapshotHistory(symbol, now-int64(lookbackMinutes)*60*1000)
+	oiHistory, dbRatioHistory, err := a.loadBinanceOISnapshotHistory(symbol, resp.GeneratedAt-int64(lookbackMinutes)*60*1000)
 	if err != nil {
 		return resp, err
 	}
@@ -76,6 +134,7 @@ func (a *App) MarketInfo(symbol, period string, limit int) (MarketInfoResponse, 
 		}
 		resp.Series.OI = oiHistory
 	}
+	publish()
 
 	if globalRatio, err := a.fetchBinanceRatioHistory(symbol, period, limit, "globalLongShortAccountRatio", "全账户多空比"); err == nil && len(globalRatio) > 0 {
 		resp.Series.LongShort = globalRatio
@@ -85,23 +144,34 @@ func (a *App) MarketInfo(symbol, period string, limit int) (MarketInfoResponse, 
 		}
 		resp.Series.LongShort = dbRatioHistory
 	}
+	publish()
 
 	if topRatio, err := a.fetchBinanceRatioHistory(symbol, period, limit, "topLongShortPositionRatio", "顶级交易员持仓比"); err == nil && len(topRatio) > 0 {
 		resp.Series.TopPosition = topRatio
 	} else if err != nil {
 		resp.Warnings = append(resp.Warnings, "Binance 顶级交易员持仓比接口不可用: "+err.Error())
 	}
+	publish()
 
 	if taker, err := a.fetchBinanceTakerHistory(symbol, period, limit); err == nil && len(taker) > 0 {
 		resp.Series.Taker = taker
 	} else if err != nil {
 		resp.Warnings = append(resp.Warnings, "Binance 主动买卖量/CVD 接口不可用: "+err.Error())
 	}
+	publish()
 
-	resp.Current = fillMarketInfoCurrentFromSeries(resp.Current, resp.Series)
 	gamma, gammaWarnings := a.fetchBinanceOptionsGamma(symbol, resp.Current.MarkPrice)
 	resp.Gamma = gamma
 	resp.Warnings = append(resp.Warnings, gammaWarnings...)
+	publish()
+	resp.CacheStatus = "ready"
+	resp.CacheUpdatedAt = resp.GeneratedAt
+	resp.Refreshing = false
+	return finalizeMarketInfoResponse(resp), nil
+}
+
+func finalizeMarketInfoResponse(resp MarketInfoResponse) MarketInfoResponse {
+	resp.Current = fillMarketInfoCurrentFromSeries(resp.Current, resp.Series)
 	resp.Windows = buildMarketInfoWindows(resp.Series)
 	if resp.Current.NetPositionBasis == "" {
 		resp.Current.NetPositionBasis = "top_position_ratio"
@@ -109,7 +179,129 @@ func (a *App) MarketInfo(symbol, period string, limit int) (MarketInfoResponse, 
 	if resp.Current.NetPositionLabel == "" {
 		resp.Current.NetPositionLabel = marketInfoNetPositionLabel(resp.Current.NetPositionUSD)
 	}
-	return resp, nil
+	return resp
+}
+
+func marketInfoCacheKey(symbol, period string, limit int) string {
+	return strings.ToUpper(symbol) + "|" + strings.ToLower(period) + "|" + fmt.Sprint(limit)
+}
+
+func (a *App) triggerMarketInfoRefresh(symbol, period string, limit int, cacheUpdatedAt int64) bool {
+	if cacheUpdatedAt > 0 && time.Since(time.UnixMilli(cacheUpdatedAt)) < marketInfoCacheFreshAge {
+		return false
+	}
+	key := marketInfoCacheKey(symbol, period, limit)
+	now := time.Now()
+
+	a.marketInfoRefreshMu.Lock()
+	if a.marketInfoRefreshes == nil {
+		a.marketInfoRefreshes = map[string]time.Time{}
+	}
+	if startedAt, ok := a.marketInfoRefreshes[key]; ok && now.Sub(startedAt) < 5*time.Minute {
+		a.marketInfoRefreshMu.Unlock()
+		return true
+	}
+	a.marketInfoRefreshes[key] = now
+	a.marketInfoRefreshMu.Unlock()
+
+	go func() {
+		defer func() {
+			a.marketInfoRefreshMu.Lock()
+			delete(a.marketInfoRefreshes, key)
+			a.marketInfoRefreshMu.Unlock()
+		}()
+		if err := a.refreshMarketInfoCache(symbol, period, limit); err != nil {
+			resp, localErr := a.buildMarketInfoLocalCache(symbol, period, limit, "error")
+			if localErr == nil {
+				resp.Warnings = append(resp.Warnings, "市场信息后台刷新失败: "+err.Error())
+				_ = a.saveMarketInfoCache(resp, "error", err.Error())
+			}
+		}
+	}()
+	return true
+}
+
+func (a *App) refreshMarketInfoCache(symbol, period string, limit int) error {
+	resp, err := a.fetchMarketInfoLive(symbol, period, limit, func(batch MarketInfoResponse) {
+		_ = a.saveMarketInfoCache(batch, "refreshing", "")
+	})
+	if err != nil {
+		return err
+	}
+	return a.saveMarketInfoCache(resp, "ready", "")
+}
+
+func (a *App) loadMarketInfoCache(symbol, period string, limit int) (MarketInfoResponse, bool, error) {
+	var generatedAt, refreshedAt int64
+	var status, errorMessage, payload string
+	err := a.db.QueryRow(`SELECT generated_at, refreshed_at, status, error_message, payload_json
+		FROM market_info_snapshots
+		WHERE exchange='binance' AND symbol=? AND period=? AND limit_count=?
+		LIMIT 1`, symbol, period, limit).Scan(&generatedAt, &refreshedAt, &status, &errorMessage, &payload)
+	if err == sql.ErrNoRows {
+		return MarketInfoResponse{}, false, nil
+	}
+	if err != nil {
+		return MarketInfoResponse{}, false, err
+	}
+	var resp MarketInfoResponse
+	if err := json.Unmarshal([]byte(payload), &resp); err != nil {
+		return MarketInfoResponse{}, false, err
+	}
+	if resp.Exchange == "" {
+		resp.Exchange = "binance"
+	}
+	resp.Symbol = symbol
+	resp.Period = period
+	resp.Limit = limit
+	if generatedAt > 0 {
+		resp.GeneratedAt = generatedAt
+	}
+	if status == "" {
+		status = "ready"
+	}
+	resp.CacheStatus = status
+	resp.CacheUpdatedAt = generatedAt
+	resp.Refreshing = status == "refreshing"
+	if resp.Current.CurrentDataQuality == "" || resp.Current.CurrentDataQuality == "live" {
+		resp.Current.CurrentDataQuality = "cache"
+	}
+	if errorMessage != "" {
+		resp.Warnings = append(resp.Warnings, "市场信息后台刷新失败: "+errorMessage)
+	}
+	if refreshedAt > resp.CacheUpdatedAt {
+		resp.CacheUpdatedAt = refreshedAt
+	}
+	return finalizeMarketInfoResponse(resp), true, nil
+}
+
+func (a *App) saveMarketInfoCache(resp MarketInfoResponse, status, errorMessage string) error {
+	if resp.Exchange == "" {
+		resp.Exchange = "binance"
+	}
+	if status == "" {
+		status = "ready"
+	}
+	resp = finalizeMarketInfoResponse(resp)
+	resp.CacheStatus = status
+	resp.Refreshing = status == "refreshing"
+	resp.CacheUpdatedAt = resp.GeneratedAt
+	payload, err := json.Marshal(resp)
+	if err != nil {
+		return err
+	}
+	refreshedAt := time.Now().UnixMilli()
+	_, err = a.db.Exec(`INSERT INTO market_info_snapshots(
+			exchange, symbol, period, limit_count, generated_at, refreshed_at, status, error_message, payload_json
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(exchange, symbol, period, limit_count) DO UPDATE SET
+			generated_at=excluded.generated_at,
+			refreshed_at=excluded.refreshed_at,
+			status=excluded.status,
+			error_message=excluded.error_message,
+			payload_json=excluded.payload_json`,
+		resp.Exchange, resp.Symbol, resp.Period, resp.Limit, resp.GeneratedAt, refreshedAt, status, errorMessage, string(payload))
+	return err
 }
 
 func normalizeMarketInfoSymbol(raw string) string {
@@ -278,7 +470,7 @@ func (a *App) fetchBinanceMarketInfoCurrent(symbol string) (MarketInfoCurrent, [
 	if err := a.fetchJSON("https://fapi.binance.com/fapi/v1/ticker/24hr?symbol="+url.QueryEscape(symbol), &ticker); err != nil {
 		warnings = append(warnings, "Binance 24h 行情接口不可用: "+err.Error())
 	}
-	if err := a.fetchJSON("https://fapi.binance.com/fapi/v1/bookTicker?symbol="+url.QueryEscape(symbol), &book); err != nil {
+	if err := a.fetchJSON("https://fapi.binance.com/fapi/v1/ticker/bookTicker?symbol="+url.QueryEscape(symbol), &book); err != nil {
 		warnings = append(warnings, "Binance 盘口价差接口不可用: "+err.Error())
 	}
 	mark := parseFloat(premium.MarkPrice)

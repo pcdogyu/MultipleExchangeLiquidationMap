@@ -110,6 +110,22 @@ func Init(db *sql.DB) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_model_liqmap_snapshots_key_ts
 			ON model_liqmap_snapshots(symbol, window_days, config_rev, generated_at);`,
+		`CREATE TABLE IF NOT EXISTS market_info_snapshots (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			exchange TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			period TEXT NOT NULL,
+			limit_count INTEGER NOT NULL,
+			generated_at INTEGER NOT NULL,
+			refreshed_at INTEGER NOT NULL,
+			status TEXT NOT NULL DEFAULT 'ready',
+			error_message TEXT NOT NULL DEFAULT '',
+			payload_json TEXT NOT NULL
+		);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_market_info_snapshots_key
+			ON market_info_snapshots(exchange, symbol, period, limit_count);`,
+		`CREATE INDEX IF NOT EXISTS idx_market_info_snapshots_generated_at
+			ON market_info_snapshots(symbol, generated_at);`,
 		`CREATE TABLE IF NOT EXISTS price_wall_events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			side TEXT NOT NULL,
