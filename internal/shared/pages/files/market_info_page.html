@@ -36,6 +36,11 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui
 .panel .hint{font-size:12px;color:var(--muted)}
 .chart{width:100%;height:260px;display:block;background:var(--panel2);border:1px solid var(--line);border-radius:8px}
 .sub-chart{height:230px}
+.market-analysis{margin-top:12px}
+.analysis-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;font-size:13px;line-height:1.55}
+.analysis-item{border-top:1px solid var(--line);padding-top:8px;min-width:0}
+.analysis-item .a{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.analysis-item .b{margin-top:3px;color:var(--text)}
 .bottom{display:grid;grid-template-columns:minmax(0,2fr) minmax(320px,1fr);gap:12px;margin-top:12px}
 .table-wrap{overflow:auto}
 table{width:100%;border-collapse:collapse;min-width:760px}
@@ -52,8 +57,8 @@ th{font-size:12px;color:var(--muted);font-weight:700;background:var(--panel2)}
 .gamma-stat .b{font-size:15px;font-weight:800;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gamma-chart{height:220px}
 .warnings{margin-top:10px;display:none;border:1px solid rgba(180,83,9,.35);background:rgba(180,83,9,.08);color:var(--amber);border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.5}
-@media (max-width:1180px){.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.grid{grid-template-columns:1fr}.bottom{grid-template-columns:1fr}}
-@media (max-width:720px){.wrap{padding:12px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.metric .v{font-size:18px}.top{align-items:flex-start}.status{text-align:left}.chart{height:230px}}
+@media (max-width:1180px){.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.grid{grid-template-columns:1fr}.analysis-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.bottom{grid-template-columns:1fr}}
+@media (max-width:720px){.wrap{padding:12px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.metric .v{font-size:18px}.top{align-items:flex-start}.status{text-align:left}.chart{height:230px}.analysis-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -105,6 +110,11 @@ th{font-size:12px;color:var(--muted);font-weight:700;background:var(--panel2)}
     </div>
   </section>
 
+  <section class="panel market-analysis">
+    <div class="panel-head"><h2>市场状态分析</h2><div class="hint">行情 / 资金流 / 多空 / 期权</div></div>
+    <div id="marketAnalysis" class="analysis-grid"></div>
+  </section>
+
   <section class="bottom">
     <div class="panel">
       <div class="panel-head"><h2>净多净空变化</h2><div class="hint">5m / 1h / 4h / 24h</div></div>
@@ -149,6 +159,9 @@ function optPrice(n){n=Number(n);return n>0?'$'+price(n):'-';}
 function optQty(n){n=Number(n);return isFinite(n)&&n!==0?qty(n):'-';}
 function optRatio(n){n=Number(n);return isFinite(n)&&n!==0?n.toFixed(3):'-';}
 function optPct(n){n=Number(n);return isFinite(n)&&n!==0?(n*100).toFixed(4)+'%':'-';}
+function optSignedPct(n){n=Number(n);return isFinite(n)&&n!==0?(n>0?'+':'')+(n*100).toFixed(2)+'%':'-';}
+function optSignedRatio(n){n=Number(n);return isFinite(n)&&n!==0?(n>0?'+':'')+n.toFixed(3):'-';}
+function optMoney(n){n=Number(n);return isFinite(n)&&n!==0?money(n):'-';}
 function signedMoney(n){n=Number(n||0);return (n>0?'+':'')+money(n);}
 function signedQty(n){n=Number(n||0);return (n>0?'+':'')+qty(n);}
 function signedRatio(n){n=Number(n||0);return (n>0?'+':'')+n.toFixed(4);}
@@ -156,6 +169,8 @@ function signedPrice(n){n=Number(n||0);if(!isFinite(n)||n===0)return '-';return 
 function signedPct(n){n=Number(n||0);if(!isFinite(n)||n===0)return '-';return (n>0?'+':'')+(n*100).toFixed(4)+'%';}
 function cls(n){n=Number(n||0);return n>0?'up':(n<0?'down':'flat');}
 function ratioCls(n){n=Number(n||0);return n>1?'up':(n>0&&n<1?'down':'flat');}
+function nullableNum(n){n=Number(n);return isFinite(n)&&n!==0?n:null;}
+function safeDiv(a,b){a=Number(a||0);b=Number(b||0);return b!==0?a/b:null;}
 function tsText(ts){if(!ts)return '-';return new Date(Number(ts)).toLocaleString('zh-CN',{hour12:false});}
 function nextFundingText(ts){return ts?'下次 '+tsText(ts):'下次 -';}
 function settleSpreadText(settle,mark){
@@ -163,6 +178,18 @@ function settleSpreadText(settle,mark){
   if(!(settle>0&&mark>0))return '较标记价 -';
   const diff=settle-mark;
   return '较标记价 '+signedPrice(diff)+' / '+signedPct(diff/mark);
+}
+function highLowText(low,high){
+  low=Number(low||0);high=Number(high||0);
+  return low>0&&high>0?'$'+price(low)+' / $'+price(high):'-';
+}
+function spreadText(c){
+  const bid=Number(c.bid_price||0),ask=Number(c.ask_price||0);
+  return bid>0&&ask>0?'买 '+price(bid)+' / 卖 '+price(ask):'买卖价 -';
+}
+function gammaWallDiff(c,g){
+  const wall=Number(g.gamma_wall_strike||0),spot=Number(g.spot_price||0)||Number(c.mark_price||0);
+  return wall>0&&spot>0?wall-spot:null;
 }
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function currentPreset(){return rangePresets[range]||rangePresets['5m'];}
@@ -211,9 +238,18 @@ function render(){
   document.getElementById('subtitle').textContent=(d.symbol||'ETHUSDT')+' · '+preset.label+' · 采样 '+(d.period||preset.period)+' · '+(c.current_data_quality==='live'?'live':'cache');
   const basis=c.net_position_basis==='top_position_ratio'?'顶级持仓比':'全账户多空比';
   const takerDelta=Number(c.taker_buy_vol||0)-Number(c.taker_sell_vol||0);
+  const takerTotal=Number(c.taker_buy_vol||0)+Number(c.taker_sell_vol||0);
+  const takerNetPct=safeDiv(takerDelta,takerTotal);
+  const positionDivergence=(nullableNum(c.top_position_ratio)!=null&&nullableNum(c.long_short_ratio)!=null)?Number(c.top_position_ratio)-Number(c.long_short_ratio):null;
+  const putCallRatio=safeDiv(g.put_oi,g.call_oi);
+  const gammaDiff=gammaWallDiff(c,g);
   const settleDelta=Number(c.estimated_settle_price||0)-Number(c.mark_price||0);
   document.getElementById('metrics').innerHTML=[
     metric('标记价', optPrice(c.mark_price), '更新 '+tsText(c.updated_ts), ''),
+    metric('24h 涨跌幅', optSignedPct(c.price_change_pct_24h), 'Binance ticker', cls(c.price_change_pct_24h)),
+    metric('24h 成交额', optMoney(c.quote_volume_24h), 'USDT 计价', ''),
+    metric('24h 高低区间', highLowText(c.low_24h,c.high_24h), '低 / 高', ''),
+    metric('盘口价差', optPrice(c.bid_ask_spread), spreadText(c), cls(-Number(c.bid_ask_spread_pct||0))),
     metric('预估结算价', optPrice(c.estimated_settle_price), settleSpreadText(c.estimated_settle_price,c.mark_price), cls(settleDelta)),
     metric('资金费率', optPct(c.funding_rate), nextFundingText(c.next_funding_time), cls(c.funding_rate)),
     metric('OI 价值', money(c.oi_value_usd), '24h '+signedMoney(w.oi_delta_usd), cls(w.oi_delta_usd)),
@@ -223,11 +259,16 @@ function render(){
     metric('主动买量', optQty(c.taker_buy_vol), '当前周期', ''),
     metric('主动卖量', optQty(c.taker_sell_vol), '买卖差 '+signedQty(takerDelta), cls(takerDelta)),
     metric('主动买卖比', optRatio(c.taker_buy_sell_ratio), '买量 / 卖量', ratioCls(c.taker_buy_sell_ratio)),
+    metric('主动净额占比', takerNetPct==null?'-':optSignedPct(takerNetPct), '买卖差 / 总量', cls(takerNetPct)),
+    metric('顶级/全账户分歧', positionDivergence==null?'-':optSignedRatio(positionDivergence), '顶级持仓 - 全账户', cls(positionDivergence)),
     metric('CVD', qty(c.cvd), '24h '+signedQty(w.cvd_delta), cls(w.cvd_delta)),
     metric(c.net_position_label||'净多净空', money(c.net_position_usd), basis, cls(c.net_position_usd)),
+    metric('Put/Call OI 比', putCallRatio==null?'-':ratio(putCallRatio), 'Put OI / Call OI', cls((putCallRatio||0)-1)),
+    metric('距 Gamma Wall', gammaDiff==null?'-':signedPrice(gammaDiff), 'Gamma Wall '+(g.gamma_wall_strike?price(g.gamma_wall_strike):'-'), cls(gammaDiff)),
     metric('Net GEX', signedMoney(g.net_gex_usd), 'Gamma Wall '+(g.gamma_wall_strike?price(g.gamma_wall_strike):'-'), cls(g.net_gex_usd)),
     metric('期权 OI', qty(g.total_oi), (g.expirations||0)+' 个到期日', '')
   ].join('');
+  renderMarketAnalysis(c,g);
   renderWindows(d.windows||[]);
   renderGamma(d.gamma||{},d.warnings||[]);
   drawAllCharts();
@@ -235,6 +276,56 @@ function render(){
 
 function metric(k,v,s,color){
   return '<div class="metric"><div class="k">'+esc(k)+'</div><div class="v '+esc(color||'')+'">'+esc(v)+'</div><div class="s">'+esc(s)+'</div></div>';
+}
+
+function renderMarketAnalysis(c,g){
+  const items=[];
+  const change=Number(c.price_change_pct_24h||0);
+  if(change!==0){
+    items.push(analysisItem('24h 趋势',change>0?'价格 24h 上涨 '+optSignedPct(change)+'，短线动能偏多。':'价格 24h 下跌 '+optSignedPct(change)+'，短线动能偏空。',cls(change)));
+  }
+  const spreadPct=Number(c.bid_ask_spread_pct||0);
+  if(spreadPct>0){
+    const tone=spreadPct<=0.0001?'盘口价差较窄，成交摩擦低。':(spreadPct<=0.0005?'盘口价差正常，流动性可接受。':'盘口价差偏宽，追价成本上升。');
+    items.push(analysisItem('盘口流动性',tone+' 当前价差 '+optPrice(c.bid_ask_spread)+' / '+optSignedPct(spreadPct)+'.',spreadPct<=0.0005?'flat':'warn'));
+  }
+  const buy=Number(c.taker_buy_vol||0),sell=Number(c.taker_sell_vol||0),total=buy+sell;
+  if(total>0){
+    const net=buy-sell,p=net/total;
+    const tone=Math.abs(p)<0.08?'主动买卖接近平衡。':(p>0?'主动买盘占优，短线承接较强。':'主动卖盘占优，短线抛压较强。');
+    items.push(analysisItem('资金流',tone+' 净额占比 '+optSignedPct(p)+'。',cls(p)));
+  }
+  const global=nullableNum(c.long_short_ratio),top=nullableNum(c.top_position_ratio);
+  if(global!=null||top!=null){
+    let text=[];
+    if(global!=null)text.push('全账户多空比 '+ratio(global));
+    if(top!=null)text.push('顶级持仓比 '+ratio(top));
+    if(global!=null&&top!=null){
+      const diff=top-global;
+      text.push(Math.abs(diff)<0.05?'两者分歧不大。':(diff>0?'顶级持仓比高于全账户，头部账户更偏多。':'顶级持仓比低于全账户，头部账户更谨慎。'));
+      items.push(analysisItem('多空拥挤度',text.join('，'),cls(diff)));
+    }else{
+      items.push(analysisItem('多空拥挤度',text.join('，')+'。','flat'));
+    }
+  }
+  const putCall=safeDiv(g.put_oi,g.call_oi);
+  const gammaDiff=gammaWallDiff(c,g);
+  if(putCall!=null||gammaDiff!=null){
+    let text=[];
+    if(putCall!=null){
+      text.push('Put/Call OI '+ratio(putCall));
+      text.push(putCall>1.05?'Put OI 偏高。':(putCall<0.95?'Call OI 偏高。':'期权 OI 较均衡。'));
+    }
+    if(gammaDiff!=null){
+      text.push('Gamma Wall 距现价 '+signedPrice(gammaDiff)+' / '+signedPct(gammaDiff/(Number(g.spot_price||0)||Number(c.mark_price||0)))+'。');
+    }
+    items.push(analysisItem('期权压力',text.join(' '),cls((putCall||1)-1)));
+  }
+  document.getElementById('marketAnalysis').innerHTML=items.length?items.join(''):analysisItem('市场状态','暂无足够数据生成综合分析。','flat');
+}
+
+function analysisItem(a,b,color){
+  return '<div class="analysis-item"><div class="a">'+esc(a)+'</div><div class="b '+esc(color||'')+'">'+esc(b)+'</div></div>';
 }
 
 function renderWindows(rows){

@@ -30,6 +30,14 @@ type MarketInfoTakerPoint struct {
 
 type MarketInfoCurrent struct {
 	MarkPrice          float64  `json:"mark_price"`
+	PriceChangePct24h  float64  `json:"price_change_pct_24h,omitempty"`
+	QuoteVolume24h     float64  `json:"quote_volume_24h,omitempty"`
+	High24h            float64  `json:"high_24h,omitempty"`
+	Low24h             float64  `json:"low_24h,omitempty"`
+	BidPrice           float64  `json:"bid_price,omitempty"`
+	AskPrice           float64  `json:"ask_price,omitempty"`
+	BidAskSpread       float64  `json:"bid_ask_spread,omitempty"`
+	BidAskSpreadPct    float64  `json:"bid_ask_spread_pct,omitempty"`
 	OIQty              float64  `json:"oi_qty"`
 	OIValueUSD         float64  `json:"oi_value_usd"`
 	FundingRate        *float64 `json:"funding_rate,omitempty"`

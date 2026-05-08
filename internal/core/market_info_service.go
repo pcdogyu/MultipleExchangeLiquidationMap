@@ -51,9 +51,10 @@ func (a *App) MarketInfo(symbol, period string, limit int) (MarketInfoResponse, 
 		resp.Current.CurrentDataQuality = "db"
 	}
 
-	if current, err := a.fetchBinanceMarketInfoCurrent(symbol); err == nil {
+	if current, tickerWarnings, err := a.fetchBinanceMarketInfoCurrent(symbol); err == nil {
 		resp.Current = mergeMarketInfoCurrent(resp.Current, current)
 		resp.Current.CurrentDataQuality = "live"
+		resp.Warnings = append(resp.Warnings, tickerWarnings...)
 	} else {
 		resp.Warnings = append(resp.Warnings, "Binance 当前市场信息接口不可用，已使用本地缓存: "+err.Error())
 	}
@@ -243,7 +244,7 @@ func (a *App) loadBinanceOISnapshotHistory(symbol string, startTS int64) ([]Mark
 	return oi, ratios, rows.Err()
 }
 
-func (a *App) fetchBinanceMarketInfoCurrent(symbol string) (MarketInfoCurrent, error) {
+func (a *App) fetchBinanceMarketInfoCurrent(symbol string) (MarketInfoCurrent, []string, error) {
 	var premium struct {
 		MarkPrice            string `json:"markPrice"`
 		LastFundingRate      string `json:"lastFundingRate"`
@@ -255,11 +256,30 @@ func (a *App) fetchBinanceMarketInfoCurrent(symbol string) (MarketInfoCurrent, e
 		OpenInterest string `json:"openInterest"`
 		Time         int64  `json:"time"`
 	}
+	var ticker struct {
+		PriceChangePercent string `json:"priceChangePercent"`
+		HighPrice          string `json:"highPrice"`
+		LowPrice           string `json:"lowPrice"`
+		QuoteVolume        string `json:"quoteVolume"`
+		CloseTime          int64  `json:"closeTime"`
+	}
+	var book struct {
+		BidPrice string `json:"bidPrice"`
+		AskPrice string `json:"askPrice"`
+		Time     int64  `json:"time"`
+	}
 	if err := a.fetchJSON("https://fapi.binance.com/fapi/v1/premiumIndex?symbol="+url.QueryEscape(symbol), &premium); err != nil {
-		return MarketInfoCurrent{}, err
+		return MarketInfoCurrent{}, nil, err
 	}
 	if err := a.fetchJSON("https://fapi.binance.com/fapi/v1/openInterest?symbol="+url.QueryEscape(symbol), &oi); err != nil {
-		return MarketInfoCurrent{}, err
+		return MarketInfoCurrent{}, nil, err
+	}
+	warnings := make([]string, 0, 2)
+	if err := a.fetchJSON("https://fapi.binance.com/fapi/v1/ticker/24hr?symbol="+url.QueryEscape(symbol), &ticker); err != nil {
+		warnings = append(warnings, "Binance 24h 行情接口不可用: "+err.Error())
+	}
+	if err := a.fetchJSON("https://fapi.binance.com/fapi/v1/bookTicker?symbol="+url.QueryEscape(symbol), &book); err != nil {
+		warnings = append(warnings, "Binance 盘口价差接口不可用: "+err.Error())
 	}
 	mark := parseFloat(premium.MarkPrice)
 	oiQty := parseFloat(oi.OpenInterest)
@@ -277,7 +297,26 @@ func (a *App) fetchBinanceMarketInfoCurrent(symbol string) (MarketInfoCurrent, e
 		NextFundingTime: premium.NextFundingTime,
 		EstimatedSettle: parseFloat(premium.EstimatedSettlePrice),
 	}
-	return current, nil
+	current.PriceChangePct24h = parseFloat(ticker.PriceChangePercent) / 100
+	current.QuoteVolume24h = parseFloat(ticker.QuoteVolume)
+	current.High24h = parseFloat(ticker.HighPrice)
+	current.Low24h = parseFloat(ticker.LowPrice)
+	current.BidPrice = parseFloat(book.BidPrice)
+	current.AskPrice = parseFloat(book.AskPrice)
+	if current.BidPrice > 0 && current.AskPrice > 0 {
+		current.BidAskSpread = current.AskPrice - current.BidPrice
+		mid := (current.BidPrice + current.AskPrice) / 2
+		if mid > 0 {
+			current.BidAskSpreadPct = current.BidAskSpread / mid
+		}
+	}
+	if ticker.CloseTime > current.UpdatedTS {
+		current.UpdatedTS = ticker.CloseTime
+	}
+	if book.Time > current.UpdatedTS {
+		current.UpdatedTS = book.Time
+	}
+	return current, warnings, nil
 }
 
 func (a *App) fetchBinanceOIHistory(symbol, period string, limit int) ([]MarketInfoOIPoint, error) {
@@ -729,6 +768,30 @@ func marketInfoSharesFromRatio(ratio float64) (float64, float64) {
 func mergeMarketInfoCurrent(base, live MarketInfoCurrent) MarketInfoCurrent {
 	if live.MarkPrice > 0 {
 		base.MarkPrice = live.MarkPrice
+	}
+	if live.PriceChangePct24h != 0 {
+		base.PriceChangePct24h = live.PriceChangePct24h
+	}
+	if live.QuoteVolume24h > 0 {
+		base.QuoteVolume24h = live.QuoteVolume24h
+	}
+	if live.High24h > 0 {
+		base.High24h = live.High24h
+	}
+	if live.Low24h > 0 {
+		base.Low24h = live.Low24h
+	}
+	if live.BidPrice > 0 {
+		base.BidPrice = live.BidPrice
+	}
+	if live.AskPrice > 0 {
+		base.AskPrice = live.AskPrice
+	}
+	if live.BidAskSpread > 0 {
+		base.BidAskSpread = live.BidAskSpread
+	}
+	if live.BidAskSpreadPct > 0 {
+		base.BidAskSpreadPct = live.BidAskSpreadPct
 	}
 	if live.OIQty > 0 {
 		base.OIQty = live.OIQty

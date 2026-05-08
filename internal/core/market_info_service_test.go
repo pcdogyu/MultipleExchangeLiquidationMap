@@ -48,6 +48,35 @@ func TestMarketInfoSharesFromRatio(t *testing.T) {
 	}
 }
 
+func TestMergeMarketInfoCurrentAddsTickerAndSpreadFields(t *testing.T) {
+	base := MarketInfoCurrent{MarkPrice: 3000, OIQty: 100}
+	live := MarketInfoCurrent{
+		MarkPrice:         3010,
+		PriceChangePct24h: -0.0123,
+		QuoteVolume24h:    123_000_000,
+		High24h:           3100,
+		Low24h:            2950,
+		BidPrice:          3009.99,
+		AskPrice:          3010.01,
+		BidAskSpread:      0.02,
+		BidAskSpreadPct:   0.00000664,
+	}
+
+	got := mergeMarketInfoCurrent(base, live)
+	if got.MarkPrice != live.MarkPrice {
+		t.Fatalf("mark price = %v, want %v", got.MarkPrice, live.MarkPrice)
+	}
+	if got.PriceChangePct24h != live.PriceChangePct24h {
+		t.Fatalf("24h change = %v, want %v", got.PriceChangePct24h, live.PriceChangePct24h)
+	}
+	if got.QuoteVolume24h != live.QuoteVolume24h || got.High24h != live.High24h || got.Low24h != live.Low24h {
+		t.Fatalf("24h ticker fields not merged: %+v", got)
+	}
+	if got.BidPrice != live.BidPrice || got.AskPrice != live.AskPrice || got.BidAskSpread != live.BidAskSpread || got.BidAskSpreadPct != live.BidAskSpreadPct {
+		t.Fatalf("book ticker fields not merged: %+v", got)
+	}
+}
+
 func TestMarketInfoGammaExposureUSD(t *testing.T) {
 	got := marketInfoGammaExposureUSD(3000, 0.0005, 100, 1)
 	want := 4_500.0
