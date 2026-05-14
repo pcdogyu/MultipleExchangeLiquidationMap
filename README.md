@@ -86,7 +86,7 @@ liqmap_single_okx_fixed.py
 Optional generated database:
 
 ```bash
-liqmap.db
+data/liqmap.db
 ```
 
 ---
@@ -101,14 +101,14 @@ go run .
 Run with debug logging:
 
 ```bash
-DEBUG=1 DEBUG_LOG=server.log go run .
+DEBUG=1 DEBUG_LOG=log/server.log go run .
 ```
 
 Run with custom environment variables:
 
 ```bash
 SYMBOL=ETHUSDT \
-DB_PATH=liqmap.db \
+DB_PATH=data/liqmap.db \
 REPORT_INTERVAL=5 \
 RETENTION_MINUTES=240 \
 OKX_REST_BASE=https://www.okx.com \
@@ -121,9 +121,9 @@ Windows PowerShell example:
 
 ```powershell
 $env:SYMBOL="ETHUSDT"
-$env:DB_PATH="liqmap.db"
+$env:DB_PATH="data/liqmap.db"
 $env:DEBUG="1"
-$env:DEBUG_LOG="server.log"
+$env:DEBUG_LOG="log/server.log"
 $env:REPORT_INTERVAL="5"
 $env:RETENTION_MINUTES="240"
 $env:OKX_REST_BASE="https://www.okx.com"
@@ -138,14 +138,19 @@ go run .
 | Variable | Default | Description |
 |---|---|---|
 | `SYMBOL` | `ETHUSDT` | Symbol displayed in the dashboard |
-| `DB_PATH` | `liqmap.db` | SQLite database path |
+| `DB_PATH` | `data/liqmap.db` | SQLite database path |
 | `DEBUG` | unset | Set to `1` or `true` to enable debug logging |
-| `DEBUG_LOG` | `server.log` | Debug log output file when `DEBUG` is enabled |
+| `DEBUG_LOG` | `log/server.log` | Debug log output file when `DEBUG` is enabled |
 | `REPORT_INTERVAL` | `5` | Dashboard refresh interval in seconds |
 | `RETENTION_MINUTES` | `240` | Retention window for `liquidation_events` cleanup |
 | `OKX_REST_BASE` | `https://www.okx.com` | OKX REST base URL |
 | `OKX_WS_PUBLIC` | `wss://ws.okx.com:8443/ws/v5/public` | OKX public WebSocket URL |
 | `OKX_INST_ID` | `ETH-USDT-SWAP` | OKX instrument ID used for swap data |
+| `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | Optional reachable Telegram Bot API base URL or private reverse proxy |
+| `TELEGRAM_TEXT_TIMEOUT_SEC` | `20` | Optional Telegram text request timeout, in seconds |
+| `TELEGRAM_PHOTO_TIMEOUT_SEC` | `45` | Optional Telegram photo upload timeout, in seconds |
+| `TELEGRAM_REQUEST_ATTEMPTS` | `5` | Optional Telegram request attempts for transient network failures, capped at `10` |
+| `TELEGRAM_RETRY_DELAY_SEC` | `1.5` | Optional base retry delay. Backoff is `delay * attempt`; `TELEGRAM_RETRY_DELAY_MS` is also supported |
 
 ---
 
@@ -190,6 +195,9 @@ Check:
 #### 4. SQLite file grows over time
 This script only cleans old rows from `liquidation_events`.  
 If needed, you can manually clean or archive old rows from `band_reports` and `longest_bar_reports`.
+
+#### 5. Telegram request times out
+Telegram sends are retried automatically for transient network failures such as DNS lookup failures, timeouts, HTTP 429, and 5xx responses. If sending still fails with `context deadline exceeded` or `no such host`, the host may not be able to reach `api.telegram.org` reliably. Set `TELEGRAM_API_BASE_URL` or the dashboard field `telegram_api_base` to a reachable private Bot API / reverse proxy. For slow photo uploads, increase `TELEGRAM_PHOTO_TIMEOUT_SEC`, for example `120`. To tune retries, set `TELEGRAM_REQUEST_ATTEMPTS` and `TELEGRAM_RETRY_DELAY_SEC`.
 
 ---
 
@@ -289,7 +297,7 @@ liqmap_single_okx_fixed.py
 运行后可能生成数据库文件：
 
 ```bash
-liqmap.db
+data/liqmap.db
 ```
 
 ---
@@ -305,7 +313,7 @@ go run .
 
 ```bash
 SYMBOL=ETHUSDT \
-DB_PATH=liqmap.db \
+DB_PATH=data/liqmap.db \
 REPORT_INTERVAL=5 \
 RETENTION_MINUTES=240 \
 OKX_REST_BASE=https://www.okx.com \
@@ -318,7 +326,7 @@ Windows PowerShell 示例：
 
 ```powershell
 $env:SYMBOL="ETHUSDT"
-$env:DB_PATH="liqmap.db"
+$env:DB_PATH="data/liqmap.db"
 $env:REPORT_INTERVAL="5"
 $env:RETENTION_MINUTES="240"
 $env:OKX_REST_BASE="https://www.okx.com"
@@ -333,12 +341,17 @@ python .\liqmap_single_okx_fixed.py
 | 变量名 | 默认值 | 说明 |
 |---|---|---|
 | `SYMBOL` | `ETHUSDT` | 终端展示的交易对 |
-| `DB_PATH` | `liqmap.db` | SQLite 数据库路径 |
+| `DB_PATH` | `data/liqmap.db` | SQLite 数据库路径 |
 | `REPORT_INTERVAL` | `5` | 面板刷新间隔，单位秒 |
 | `RETENTION_MINUTES` | `240` | `liquidation_events` 清理保留时长，单位分钟 |
 | `OKX_REST_BASE` | `https://www.okx.com` | OKX REST 地址 |
 | `OKX_WS_PUBLIC` | `wss://ws.okx.com:8443/ws/v5/public` | OKX 公共 WebSocket 地址 |
 | `OKX_INST_ID` | `ETH-USDT-SWAP` | OKX 永续合约 ID |
+| `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | 可选 Telegram Bot API 地址或自建反向代理地址 |
+| `TELEGRAM_TEXT_TIMEOUT_SEC` | `20` | 可选 Telegram 文本请求超时，单位秒 |
+| `TELEGRAM_PHOTO_TIMEOUT_SEC` | `45` | 可选 Telegram 图片上传超时，单位秒 |
+| `TELEGRAM_REQUEST_ATTEMPTS` | `5` | 可选 Telegram 请求重试次数，用于临时网络失败，最高 `10` |
+| `TELEGRAM_RETRY_DELAY_SEC` | `1.5` | 可选基础重试等待时间，退避为 `等待 * 第几次重试`；也支持 `TELEGRAM_RETRY_DELAY_MS` |
 
 ---
 
@@ -383,6 +396,9 @@ python .\liqmap_single_okx_fixed.py
 #### 4. SQLite 文件越来越大
 当前脚本只会清理 `liquidation_events` 里的旧数据。  
 如果需要，你可以手动清理或归档 `band_reports` 和 `longest_bar_reports`。
+
+#### 5. Telegram 请求超时
+Telegram 发送会对 DNS 解析失败、超时、HTTP 429 和 5xx 这类临时网络失败自动重试。如果重试后仍出现 `context deadline exceeded` 或 `no such host`，通常是当前主机访问 `api.telegram.org` 不稳定或不可达。可以设置环境变量 `TELEGRAM_API_BASE_URL`，或在消息通道页面填写 `telegram_api_base` 为可访问的自建 Bot API / 反向代理地址。若只有图片发送较慢，可以把 `TELEGRAM_PHOTO_TIMEOUT_SEC` 调大，例如 `120`。需要调整重试强度时，设置 `TELEGRAM_REQUEST_ATTEMPTS` 和 `TELEGRAM_RETRY_DELAY_SEC`。
 
 ---
 

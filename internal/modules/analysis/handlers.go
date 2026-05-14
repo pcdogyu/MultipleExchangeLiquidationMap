@@ -1,0 +1,193 @@
+package analysis
+
+import (
+	"log"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"multipleexchangeliquidationmap/internal/platform/httpx"
+	"multipleexchangeliquidationmap/internal/platform/pageview"
+	"multipleexchangeliquidationmap/internal/shared/pages"
+)
+
+const analysisBacktestWindowHours = 24 * 14
+
+func parseAnalysisBacktestHours(r *http.Request) int {
+	hours := analysisBacktestWindowHours
+	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= analysisBacktestWindowHours {
+			hours = n
+		}
+	}
+	return hours
+}
+
+func (s *service) handlePage(w http.ResponseWriter, r *http.Request) {
+	pageview.Serve(w, r, pages.Analysis(), nil, pageview.Options{
+		NoStore: true,
+	})
+}
+
+func (s *service) handleBacktestPage(w http.ResponseWriter, r *http.Request) {
+	pageview.Serve(w, r, pages.AnalysisBacktest(), nil, pageview.Options{
+		NoStore: true,
+	})
+}
+
+func (s *service) handleBacktestLiquidationPage(w http.ResponseWriter, r *http.Request) {
+	pageview.Serve(w, r, pages.AnalysisBacktestLiquidation(), nil, pageview.Options{
+		NoStore: true,
+	})
+}
+
+func (s *service) handleBacktest2FAPage(w http.ResponseWriter, r *http.Request) {
+	pageview.Serve(w, r, pages.AnalysisBacktest2FA(), nil, pageview.Options{
+		NoStore: true,
+	})
+}
+
+func (s *service) handleAnalysis(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpx.MethodNotAllowed(w)
+		return
+	}
+
+	resp, err := s.core.AnalysisSnapshot()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (s *service) handleBacktest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpx.MethodNotAllowed(w)
+		return
+	}
+	hours := parseAnalysisBacktestHours(r)
+	interval := strings.TrimSpace(r.URL.Query().Get("interval"))
+	minConfidence := 0.0
+	if raw := strings.TrimSpace(r.URL.Query().Get("conf_min")); raw != "" {
+		if n, err := strconv.ParseFloat(raw, 64); err == nil && n >= 0 && n <= 100 {
+			minConfidence = n
+		}
+	}
+	qualityMode := strings.TrimSpace(r.URL.Query().Get("quality"))
+	noiseStrategy := strings.TrimSpace(r.URL.Query().Get("noise_strategy"))
+	resp, err := s.core.AnalysisBacktest(hours, interval, minConfidence, qualityMode, noiseStrategy)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (s *service) handleBacktestLiquidation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpx.MethodNotAllowed(w)
+		return
+	}
+	hours := parseAnalysisBacktestHours(r)
+	interval := strings.TrimSpace(r.URL.Query().Get("interval"))
+	minConfidence := 0.0
+	if raw := strings.TrimSpace(r.URL.Query().Get("conf_min")); raw != "" {
+		if n, err := strconv.ParseFloat(raw, 64); err == nil && n >= 0 && n <= 100 {
+			minConfidence = n
+		}
+	}
+	resp, err := s.core.AnalysisBacktestLiquidation(hours, interval, minConfidence)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (s *service) handleBacktestLiquidationSignalBackfill(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpx.MethodNotAllowed(w)
+		return
+	}
+	hours := parseAnalysisBacktestHours(r)
+	log.Printf("analysis liquidation backtest signal backfill start hours=%d", hours)
+	resp, err := s.core.AnalysisBacktestLiquidationSignalBackfill(hours)
+	if err != nil {
+		log.Printf("analysis liquidation backtest signal backfill failed hours=%d err=%v", hours, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	log.Printf("analysis liquidation backtest signal backfill done hours=%d inserted=%d updated=%d total=%d", hours, resp.Inserted, resp.Updated, resp.Total)
+	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (s *service) handleBacktestLiquidationSignalReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpx.MethodNotAllowed(w)
+		return
+	}
+	hours := parseAnalysisBacktestHours(r)
+	log.Printf("analysis liquidation backtest signal reset start hours=%d", hours)
+	resp, err := s.core.AnalysisBacktestLiquidationSignalReset(hours)
+	if err != nil {
+		log.Printf("analysis liquidation backtest signal reset failed hours=%d err=%v", hours, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	log.Printf("analysis liquidation backtest signal reset done hours=%d deleted=%d total=%d", hours, resp.Deleted, resp.Total)
+	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (s *service) handleBacktest2FA(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpx.MethodNotAllowed(w)
+		return
+	}
+	hours := analysisBacktestWindowHours
+	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= analysisBacktestWindowHours {
+			hours = n
+		}
+	}
+	interval := strings.TrimSpace(r.URL.Query().Get("interval"))
+	factor := strings.TrimSpace(r.URL.Query().Get("factor2"))
+	minConfidence := 0.0
+	if raw := strings.TrimSpace(r.URL.Query().Get("conf_min")); raw != "" {
+		if n, err := strconv.ParseFloat(raw, 64); err == nil && n >= 0 && n <= 100 {
+			minConfidence = n
+		}
+	}
+	strategy := strings.TrimSpace(r.URL.Query().Get("strategy"))
+	resp, err := s.core.AnalysisBacktest2FA(hours, interval, factor, minConfidence, strategy)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (s *service) handleBacktestHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpx.MethodNotAllowed(w)
+		return
+	}
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	page := 1
+	if raw := strings.TrimSpace(r.URL.Query().Get("page")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			page = n
+		}
+	}
+	resp, err := s.core.AnalysisBacktestHistory(limit, page)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
+}

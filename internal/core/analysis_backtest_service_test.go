@@ -1,0 +1,1261 @@
+package liqmap
+
+import (
+	"database/sql"
+	"fmt"
+	"io"
+	"math"
+	"net/http"
+	"reflect"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	dbpkg "multipleexchangeliquidationmap/internal/platform/db"
+
+	_ "modernc.org/sqlite"
+)
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestAnalysisBacktestHorizonsForSignalTrimmedByOppositeSignal(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	minutes := func(v int) int64 {
+		return int64(v) * int64(time.Minute/time.Millisecond)
+	}
+	record := func(id int64, offsetMin int, direction string) AnalysisSignalRecord {
+		return AnalysisSignalRecord{
+			ID:        id,
+			SignalTS:  baseTS + minutes(offsetMin),
+			Direction: direction,
+		}
+	}
+
+	tests := []struct {
+		name    string
+		records []AnalysisSignalRecord
+		want    []int
+	}{
+		{
+			name: "opposite at five minutes keeps minimum horizon",
+			records: []AnalysisSignalRecord{
+				record(1, 0, "up"),
+				record(2, 5, "down"),
+			},
+			want: []int{5},
+		},
+		{
+			name: "opposite at thirty minutes excludes thirty and sixty",
+			records: []AnalysisSignalRecord{
+				record(1, 0, "up"),
+				record(2, 30, "down"),
+			},
+			want: []int{5, 15},
+		},
+		{
+			name: "opposite at forty five minutes keeps completed horizons",
+			records: []AnalysisSignalRecord{
+				record(1, 0, "up"),
+				record(2, 45, "down"),
+			},
+			want: []int{5, 15, 30},
+		},
+		{
+			name: "same direction before opposite does not stop scan",
+			records: []AnalysisSignalRecord{
+				record(1, 0, "up"),
+				record(2, 5, "up"),
+				record(3, 20, "down"),
+			},
+			want: []int{5, 15},
+		},
+		{
+			name: "flat signal does not trim horizons",
+			records: []AnalysisSignalRecord{
+				record(1, 0, "up"),
+				record(2, 5, "flat"),
+				record(3, 70, "up"),
+			},
+			want: []int{5, 15, 30, 60},
+		},
+		{
+			name: "flat before opposite is ignored",
+			records: []AnalysisSignalRecord{
+				record(1, 0, "up"),
+				record(2, 5, "flat"),
+				record(3, 30, "down"),
+			},
+			want: []int{5, 15},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := analysisBacktestHorizonsForSignal(tt.records, 0)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("analysisBacktestHorizonsForSignal() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLiquidationBacktestHorizonsForSignalUsesLongHorizonSet(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	minutes := func(v int) int64 {
+		return int64(v) * int64(time.Minute/time.Millisecond)
+	}
+	records := []AnalysisSignalRecord{
+		{ID: 1, SignalTS: baseTS, Direction: "up"},
+		{ID: 2, SignalTS: baseTS + minutes(720), Direction: "down"},
+	}
+	got := analysisBacktestHorizonsForSignalWithHorizons(records, 0, analysisLiquidationBacktestHorizons)
+	want := []int{60, 240}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("liquidation horizons = %v, want %v", got, want)
+	}
+
+	records[1].SignalTS = baseTS + minutes(30)
+	got = analysisBacktestHorizonsForSignalWithHorizons(records, 0, analysisLiquidationBacktestHorizons)
+	want = []int{60}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("liquidation minimum horizon = %v, want %v", got, want)
+	}
+}
+
+func TestAnalysisBacktestHorizonStatsSkipTrimmedHorizons(t *testing.T) {
+	stats := buildAnalysisBacktestHorizonStats([]AnalysisSignalResult{
+		{
+			Horizons: []AnalysisSignalHorizonResult{
+				{HorizonMin: 5, Result: "correct"},
+				{HorizonMin: 15, Result: "wrong"},
+			},
+		},
+	})
+
+	totalByHorizon := map[int]int{}
+	for _, stat := range stats {
+		totalByHorizon[stat.HorizonMin] = stat.TotalSignals
+	}
+	want := map[int]int{5: 1, 15: 1, 30: 0, 60: 0}
+	if !reflect.DeepEqual(totalByHorizon, want) {
+		t.Fatalf("horizon totals = %v, want %v", totalByHorizon, want)
+	}
+}
+
+func TestAnalysisBacktestStatsUseConfidenceFilteredSignals(t *testing.T) {
+	results := []AnalysisSignalResult{
+		backtestSignalForTest(65, "correct", map[int]string{5: "correct", 15: "wrong"}),
+		backtestSignalForTest(70, "wrong", map[int]string{5: "wrong"}),
+		backtestSignalForTest(85, "wrong", map[int]string{5: "wrong", 15: "correct", 30: "correct"}),
+		backtestSignalForTest(91, "correct", map[int]string{5: "correct", 15: "correct", 30: "wrong", 60: "pending"}),
+	}
+
+	filtered := filterAnalysisSignalsByConfidence(results, 70)
+	summary := buildAnalysisBacktestSummary(filtered, 24)
+	if summary.TotalSignals != 2 || summary.CorrectCount != 1 || summary.WrongCount != 1 || summary.CorrectRate != 50 {
+		t.Fatalf("filtered summary = %+v, want total=2 correct=1 wrong=1 rate=50", summary)
+	}
+	if summary.VerifiedHorizonCount != 6 || summary.CorrectHorizonCount != 4 || summary.HorizonCorrectRate != 66.7 {
+		t.Fatalf("filtered horizon summary = %+v, want verified=6 correct=4 rate=66.7", summary)
+	}
+
+	stats := buildAnalysisBacktestHorizonStats(filtered)
+	totalByHorizon := map[int]int{}
+	rateByHorizon := map[int]float64{}
+	pendingByHorizon := map[int]int{}
+	for _, stat := range stats {
+		totalByHorizon[stat.HorizonMin] = stat.TotalSignals
+		rateByHorizon[stat.HorizonMin] = stat.CorrectRate
+		pendingByHorizon[stat.HorizonMin] = stat.PendingCount
+	}
+	if !reflect.DeepEqual(totalByHorizon, map[int]int{5: 2, 15: 2, 30: 2, 60: 1}) {
+		t.Fatalf("filtered horizon totals = %v", totalByHorizon)
+	}
+	if !reflect.DeepEqual(rateByHorizon, map[int]float64{5: 50, 15: 100, 30: 50, 60: 0}) {
+		t.Fatalf("filtered horizon rates = %v", rateByHorizon)
+	}
+	if pendingByHorizon[60] != 1 {
+		t.Fatalf("expected 1 pending 60m horizon, got %d", pendingByHorizon[60])
+	}
+
+	filtered = filterAnalysisSignalsByConfidence(results, 90)
+	summary = buildAnalysisBacktestSummary(filtered, 24)
+	if summary.TotalSignals != 1 || summary.CorrectCount != 1 || summary.CorrectRate != 100 {
+		t.Fatalf("90+ summary = %+v, want total=1 correct=1 rate=100", summary)
+	}
+}
+
+func TestAnalysisBacktestSignalLimitScalesWithHours(t *testing.T) {
+	tests := []struct {
+		hours int
+		want  int
+	}{
+		{hours: 0, want: 500},
+		{hours: 24, want: 500},
+		{hours: 168, want: 2016},
+		{hours: 720, want: 5000},
+	}
+	for _, tt := range tests {
+		if got := analysisBacktestSignalLimit(tt.hours); got != tt.want {
+			t.Fatalf("analysisBacktestSignalLimit(%d) = %d, want %d", tt.hours, got, tt.want)
+		}
+	}
+}
+
+func TestAnalysisSignalHighQualityFilter(t *testing.T) {
+	summary := func(scores ...float64) string {
+		parts := make([]string, 0, len(scores))
+		for i, score := range scores {
+			label := []string{"1D", "7D", "30D"}[i]
+			parts = append(parts, label+" 权重 33% / 分数 "+fmt.Sprintf("%+.1f", score)+" / 有效带 1")
+		}
+		return strings.Join(parts, " | ")
+	}
+	rows := []AnalysisSignalResult{
+		{Direction: "up", Confidence: 69.9, Summary: summary(80, 70)},
+		{Direction: "up", Confidence: 72, Summary: summary(90)},
+		{Direction: "down", Confidence: 72, Summary: summary(-90, -80)},
+		{Direction: "down", Confidence: 82, Summary: summary(-90)},
+		{Direction: "up", Confidence: 88, Summary: summary(95, 0)},
+		{Direction: "up", Confidence: 88, Summary: summary(95, 85)},
+		{Direction: "up", Confidence: 88, Summary: summary(95, 85, 75)},
+		{Direction: "down", Confidence: 90, Summary: summary(-90, 80, -85)},
+	}
+	filtered := filterAnalysisSignalsByQuality(rows, analysisBacktestQualityHigh)
+	if len(filtered) != 3 {
+		t.Fatalf("high quality filtered count = %d, want 3", len(filtered))
+	}
+	if filtered[0].Confidence != 72 || filtered[1].Confidence != 82 || filtered[2].Confidence != 88 {
+		t.Fatalf("unexpected high quality rows: %+v", filtered)
+	}
+
+	all := filterAnalysisSignalsByQuality(rows, analysisBacktestQualityAll)
+	if len(all) != len(rows) {
+		t.Fatalf("all quality count = %d, want %d", len(all), len(rows))
+	}
+}
+
+func TestHighQualityStatsUseFilteredSignals(t *testing.T) {
+	results := []AnalysisSignalResult{
+		{
+			Direction:  "up",
+			Confidence: 65,
+			Result:     "correct",
+			Summary:    "1D 权重 33% / 分数 +80.0 / 有效带 1 | 7D 权重 33% / 分数 +70.0 / 有效带 1",
+			Horizons: []AnalysisSignalHorizonResult{
+				{HorizonMin: 5, Result: "correct"},
+			},
+		},
+		{
+			Direction:  "up",
+			Confidence: 76,
+			Result:     "wrong",
+			Summary:    "1D 权重 33% / 分数 +80.0 / 有效带 1",
+			Horizons: []AnalysisSignalHorizonResult{
+				{HorizonMin: 5, Result: "wrong"},
+				{HorizonMin: 15, Result: "correct"},
+			},
+		},
+		{
+			Direction:  "up",
+			Confidence: 90,
+			Result:     "correct",
+			Summary:    "1D 权重 33% / 分数 +90.0 / 有效带 1",
+			Horizons: []AnalysisSignalHorizonResult{
+				{HorizonMin: 5, Result: "correct"},
+			},
+		},
+	}
+	filtered := filterAnalysisSignalsByQuality(results, analysisBacktestQualityHigh)
+	summary := buildAnalysisBacktestSummary(filtered, 24)
+	if summary.TotalSignals != 1 || summary.WrongCount != 1 {
+		t.Fatalf("high quality summary = %+v, want only the 70-85 signal", summary)
+	}
+	stats := buildAnalysisBacktestHorizonStats(filtered)
+	totalByHorizon := map[int]int{}
+	for _, stat := range stats {
+		totalByHorizon[stat.HorizonMin] = stat.TotalSignals
+	}
+	if !reflect.DeepEqual(totalByHorizon, map[int]int{5: 1, 15: 1, 30: 0, 60: 0}) {
+		t.Fatalf("high quality horizon totals = %v", totalByHorizon)
+	}
+}
+
+func TestParseAnalysisBacktestCandlesKeepsQuoteVolume(t *testing.T) {
+	candles := parseAnalysisBacktestCandles([][]any{
+		{int64(1000), "1", "2", "0.5", "1.5", "10", int64(1999), "12345.6"},
+		{"2000", "2", "3", "1.5", "2.5", "6789.1"},
+	})
+	if len(candles) != 2 {
+		t.Fatalf("parsed candle count = %d, want 2", len(candles))
+	}
+	if candles[0].QuoteVolume != 12345.6 {
+		t.Fatalf("binance quote volume = %v, want 12345.6", candles[0].QuoteVolume)
+	}
+	if candles[1].QuoteVolume != 6789.1 {
+		t.Fatalf("okx fallback quote volume = %v, want 6789.1", candles[1].QuoteVolume)
+	}
+}
+
+func TestFetchAnalysisBacktestCandleRangePaginatesPastExchangeLimit(t *testing.T) {
+	const step = int64(5 * time.Minute / time.Millisecond)
+	startTS := time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC).UnixMilli()
+	endTS := startTS + 2099*step
+	requests := 0
+	app := &App{
+		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			requests++
+			q := req.URL.Query()
+			limit, err := strconv.Atoi(q.Get("limit"))
+			if err != nil {
+				return nil, err
+			}
+			if limit > analysisBacktestKlinePageLimit {
+				return nil, fmt.Errorf("limit %d exceeds page limit", limit)
+			}
+			chunkStart, err := strconv.ParseInt(q.Get("startTime"), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			chunkEnd, err := strconv.ParseInt(q.Get("endTime"), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			var body strings.Builder
+			body.WriteByte('[')
+			count := 0
+			for ts := chunkStart; ts <= chunkEnd && count < limit; ts += step {
+				if count > 0 {
+					body.WriteByte(',')
+				}
+				fmt.Fprintf(&body, `[%d,"1","2","0.5","1.5","10"]`, ts)
+				count++
+			}
+			body.WriteByte(']')
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(body.String())),
+				Request:    req,
+			}, nil
+		})},
+	}
+
+	candles, source, err := app.fetchAnalysisBacktestCandleRange("5m", step, startTS, endTS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != "binance:5m" {
+		t.Fatalf("source = %q, want binance:5m", source)
+	}
+	if requests != 3 {
+		t.Fatalf("requests = %d, want 3", requests)
+	}
+	if len(candles) != 2100 {
+		t.Fatalf("candle count = %d, want 2100", len(candles))
+	}
+	if candles[0].TS != startTS || candles[len(candles)-1].TS != endTS {
+		t.Fatalf("range = %d..%d, want %d..%d", candles[0].TS, candles[len(candles)-1].TS, startTS, endTS)
+	}
+}
+
+func TestClassifyAnalysisSecondFactorUsesRelativeVolume(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	const step = int64(5 * time.Minute / time.Millisecond)
+	record := AnalysisSignalRecord{SignalTS: baseTS + 12*step}
+	candlesWithCurrent := func(currentVolume float64) []analysisBacktestCandle {
+		candles := make([]analysisBacktestCandle, 0, 13)
+		for i := 0; i < 12; i++ {
+			candles = append(candles, analysisBacktestCandle{TS: baseTS + int64(i)*step, C: 2200, QuoteVolume: 100})
+		}
+		candles = append(candles, analysisBacktestCandle{TS: record.SignalTS, C: 2200, QuoteVolume: currentVolume})
+		return candles
+	}
+
+	tests := []struct {
+		name          string
+		candles       []analysisBacktestCandle
+		signalTS      int64
+		wantFactorKey string
+	}{
+		{name: "spike at one point two times average", candles: candlesWithCurrent(120), wantFactorKey: analysisSecondFactorVolumeSpike},
+		{name: "normal includes point eight boundary", candles: candlesWithCurrent(80), wantFactorKey: analysisSecondFactorVolumeNormal},
+		{name: "normal includes one point nineteen boundary", candles: candlesWithCurrent(119), wantFactorKey: analysisSecondFactorVolumeNormal},
+		{name: "low below point eight average", candles: candlesWithCurrent(79.9), wantFactorKey: analysisSecondFactorVolumeLow},
+		{name: "missing current volume is insufficient", candles: candlesWithCurrent(0), wantFactorKey: analysisSecondFactorInsufficient},
+		{name: "short lookback is insufficient", candles: candlesWithCurrent(150)[:12], signalTS: baseTS + 11*step, wantFactorKey: analysisSecondFactorInsufficient},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item := record
+			if tt.signalTS > 0 {
+				item.SignalTS = tt.signalTS
+			}
+			got, _ := classifyAnalysisSecondFactor(item, tt.candles)
+			if got != tt.wantFactorKey {
+				t.Fatalf("factor key = %q, want %q", got, tt.wantFactorKey)
+			}
+		})
+	}
+}
+
+func TestLiquidationBandSyncSecondFactorRequiresBothBandsAligned(t *testing.T) {
+	record := AnalysisSignalRecord{Direction: "up"}
+	tests := []struct {
+		name    string
+		record  AnalysisSignalRecord
+		snap    analysisBandHistorySnapshot
+		wantKey string
+		wantOK  bool
+	}{
+		{
+			name:   "up signal keeps synchronized upward bands",
+			record: record,
+			snap: analysisBandHistorySnapshot{
+				UpByBand:   map[int]float64{20: 100, 50: 180},
+				DownByBand: map[int]float64{20: 10, 50: 20},
+			},
+			wantKey: analysisSecondFactorBand2050Up,
+			wantOK:  true,
+		},
+		{
+			name:   "down signal keeps synchronized downward bands",
+			record: AnalysisSignalRecord{Direction: "down"},
+			snap: analysisBandHistorySnapshot{
+				UpByBand:   map[int]float64{20: 10, 50: 20},
+				DownByBand: map[int]float64{20: 100, 50: 180},
+			},
+			wantKey: analysisSecondFactorBand2050Down,
+			wantOK:  true,
+		},
+		{
+			name:   "opposite direction is rejected",
+			record: record,
+			snap: analysisBandHistorySnapshot{
+				UpByBand:   map[int]float64{20: 10, 50: 20},
+				DownByBand: map[int]float64{20: 100, 50: 180},
+			},
+		},
+		{
+			name:   "neutral 20 point band is rejected",
+			record: record,
+			snap: analysisBandHistorySnapshot{
+				UpByBand:   map[int]float64{20: 100, 50: 180},
+				DownByBand: map[int]float64{20: 95, 50: 20},
+			},
+		},
+		{
+			name:   "20 and 50 point conflict is rejected",
+			record: record,
+			snap: analysisBandHistorySnapshot{
+				UpByBand:   map[int]float64{20: 100, 50: 20},
+				DownByBand: map[int]float64{20: 10, 50: 180},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotKey, gotLabel, gotOK := liquidationBandSyncSecondFactor(tt.record, tt.snap)
+			if gotOK != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", gotOK, tt.wantOK)
+			}
+			if gotKey != tt.wantKey {
+				t.Fatalf("key = %q, want %q", gotKey, tt.wantKey)
+			}
+			if gotOK && strings.TrimSpace(gotLabel) == "" {
+				t.Fatalf("expected label for accepted factor")
+			}
+		})
+	}
+}
+
+func newAnalysisBacktestMemoryDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := dbpkg.Configure(db); err != nil {
+		t.Fatalf("configure db: %v", err)
+	}
+	if err := dbpkg.Init(db); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	return db
+}
+
+func insertAnalysisBandSyncSnapshotForTest(t *testing.T, db *sql.DB, capturedAt int64, currentPrice float64, points []WebDataSourcePoint) {
+	t.Helper()
+	payload := fmt.Sprintf(`{"currentPrice":%.1f}`, currentPrice)
+	res, err := db.Exec(`INSERT INTO webdatasource_snapshots(symbol, window_days, captured_at, range_low, range_high, payload_json)
+		VALUES('ETH', 1, ?, ?, ?, ?)`, capturedAt, currentPrice-100, currentPrice+100, payload)
+	if err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	snapshotID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("snapshot id: %v", err)
+	}
+	for _, point := range points {
+		_, err = db.Exec(`INSERT INTO webdatasource_points(snapshot_id, symbol, window_days, side, exchange, price, liq_value, captured_at)
+			VALUES(?, 'ETH', 1, ?, ?, ?, ?, ?)`,
+			snapshotID, point.Side, point.Exchange, point.Price, point.LiqValue, capturedAt)
+		if err != nil {
+			t.Fatalf("insert point: %v", err)
+		}
+	}
+}
+
+func TestFilterLiquidationBacktestRecordsByBandSyncLoadsHistoricalSnapshots(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	minute := int64(time.Minute / time.Millisecond)
+	db := newAnalysisBacktestMemoryDB(t)
+	app := &App{db: db}
+
+	insertAnalysisBandSyncSnapshotForTest(t, db, baseTS-5*minute, 2300, []WebDataSourcePoint{
+		{Side: "short", Exchange: "test", Price: 2310, LiqValue: 100},
+		{Side: "short", Exchange: "test", Price: 2340, LiqValue: 80},
+		{Side: "long", Exchange: "test", Price: 2290, LiqValue: 10},
+		{Side: "long", Exchange: "test", Price: 2260, LiqValue: 10},
+	})
+	insertAnalysisBandSyncSnapshotForTest(t, db, baseTS+55*minute, 2300, []WebDataSourcePoint{
+		{Side: "short", Exchange: "test", Price: 2310, LiqValue: 10},
+		{Side: "short", Exchange: "test", Price: 2340, LiqValue: 10},
+		{Side: "long", Exchange: "test", Price: 2290, LiqValue: 100},
+		{Side: "long", Exchange: "test", Price: 2260, LiqValue: 80},
+	})
+	insertAnalysisBandSyncSnapshotForTest(t, db, baseTS+89*minute, 2300, []WebDataSourcePoint{
+		{Side: "short", Exchange: "test", Price: 2310, LiqValue: 100},
+		{Side: "short", Exchange: "test", Price: 2340, LiqValue: 80},
+	})
+
+	records := []AnalysisSignalRecord{
+		{ID: 1, SignalTS: baseTS, Symbol: defaultSymbol, Direction: "up"},
+		{ID: 2, SignalTS: baseTS + 60*minute, Symbol: defaultSymbol, Direction: "down"},
+		{ID: 3, SignalTS: baseTS + 120*minute, Symbol: defaultSymbol, Direction: "up"},
+	}
+	got := app.filterLiquidationBacktestRecordsByBandSync(records, baseTS, baseTS+120*minute)
+	if len(got) != 2 {
+		t.Fatalf("filtered count = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].ID != 1 || got[0].SecondFactorKey != analysisSecondFactorBand2050Up || got[0].SecondFactorLabel != "20/50 同步上推" {
+		t.Fatalf("first filtered record = %+v", got[0])
+	}
+	if got[1].ID != 2 || got[1].SecondFactorKey != analysisSecondFactorBand2050Down || got[1].SecondFactorLabel != "20/50 同步下压" {
+		t.Fatalf("second filtered record = %+v", got[1])
+	}
+}
+
+func TestLiquidationBacktestSignalCacheUpsertIsIdempotent(t *testing.T) {
+	db := newAnalysisBacktestMemoryDB(t)
+	app := &App{db: db}
+	baseTS := time.Now().Add(-time.Hour).UnixMilli()
+	records := []AnalysisSignalRecord{{
+		SignalTS:          baseTS,
+		Symbol:            defaultSymbol,
+		SourceGroup:       analysisLiquidationBacktestSourceGroup,
+		Direction:         "up",
+		Confidence:        72.5,
+		SignalPrice:       2300,
+		AnalysisGenerated: baseTS,
+		Headline:          "开多",
+		Summary:           "test",
+		VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+	}}
+
+	inserted, updated, err := app.upsertLiquidationBacktestCachedRecords(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted != 1 || updated != 0 {
+		t.Fatalf("first upsert inserted=%d updated=%d, want 1/0", inserted, updated)
+	}
+	inserted, updated, err = app.upsertLiquidationBacktestCachedRecords(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted != 0 || updated != 1 {
+		t.Fatalf("second upsert inserted=%d updated=%d, want 0/1", inserted, updated)
+	}
+	got, err := app.listLiquidationBacktestCachedRecords(baseTS - 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SignalAction != "open" || got[0].SignalSide != "long" || got[0].SecondFactorKey != "" {
+		t.Fatalf("cached records = %+v, want one single-factor long open record", got)
+	}
+}
+
+func TestLiquidationBacktestSignalCacheKeepsSameTimestampActions(t *testing.T) {
+	db := newAnalysisBacktestMemoryDB(t)
+	app := &App{db: db}
+	baseTS := time.Now().Add(-time.Hour).UnixMilli()
+	records := []AnalysisSignalRecord{
+		{
+			SignalTS:          baseTS,
+			Symbol:            defaultSymbol,
+			SourceGroup:       analysisLiquidationBacktestSourceGroup,
+			Direction:         "up",
+			Confidence:        70,
+			SignalPrice:       2300,
+			AnalysisGenerated: baseTS,
+			Headline:          "开多",
+			Summary:           "open",
+			VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+			SignalAction:      "open",
+			SignalSide:        "long",
+			SignalLabel:       "开多",
+		},
+		{
+			SignalTS:          baseTS,
+			Symbol:            defaultSymbol,
+			SourceGroup:       analysisLiquidationBacktestSourceGroup,
+			Direction:         "up",
+			Confidence:        82,
+			SignalPrice:       2300,
+			AnalysisGenerated: baseTS,
+			Headline:          "多头增仓",
+			Summary:           "add",
+			VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+			SignalAction:      "add",
+			SignalSide:        "long",
+			SignalLabel:       "多头增仓",
+		},
+	}
+
+	inserted, updated, err := app.upsertLiquidationBacktestCachedRecords(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted != 2 || updated != 0 {
+		t.Fatalf("first upsert inserted=%d updated=%d, want 2/0", inserted, updated)
+	}
+	inserted, updated, err = app.upsertLiquidationBacktestCachedRecords(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted != 0 || updated != 2 {
+		t.Fatalf("second upsert inserted=%d updated=%d, want 0/2", inserted, updated)
+	}
+	got, err := app.listLiquidationBacktestCachedRecords(baseTS - 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].SignalAction != "open" || got[1].SignalAction != "add" {
+		t.Fatalf("cached records = %+v, want open and add at same timestamp", got)
+	}
+}
+
+func TestAnalysisBacktestLiquidationUsesCachedRecords(t *testing.T) {
+	const step = int64(5 * time.Minute / time.Millisecond)
+	db := newAnalysisBacktestMemoryDB(t)
+	baseTS := floorToFiveMinute(time.Now().Add(-time.Hour).UnixMilli())
+	maxRequestedDuration := int64(0)
+	app := &App{
+		db: db,
+		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			q := req.URL.Query()
+			startTS, err := strconv.ParseInt(q.Get("startTime"), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			endTS, err := strconv.ParseInt(q.Get("endTime"), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			if duration := endTS - startTS; duration > maxRequestedDuration {
+				maxRequestedDuration = duration
+			}
+			limit, err := strconv.Atoi(q.Get("limit"))
+			if err != nil {
+				return nil, err
+			}
+			var body strings.Builder
+			body.WriteByte('[')
+			count := 0
+			for ts := startTS; ts <= endTS && count < limit; ts += step {
+				if count > 0 {
+					body.WriteByte(',')
+				}
+				fmt.Fprintf(&body, `[%d,"2300","2310","2290","2305","10"]`, ts)
+				count++
+			}
+			body.WriteByte(']')
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(body.String())),
+				Request:    req,
+			}, nil
+		})},
+	}
+	_, _, err := app.upsertLiquidationBacktestCachedRecords([]AnalysisSignalRecord{{
+		SignalTS:          baseTS,
+		Symbol:            defaultSymbol,
+		SourceGroup:       analysisLiquidationBacktestSourceGroup,
+		Direction:         "up",
+		Confidence:        71,
+		SignalPrice:       2300,
+		AnalysisGenerated: baseTS,
+		Headline:          "开多",
+		Summary:           "cached",
+		VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := app.AnalysisBacktestLiquidation(2, "5m", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Signals) != 1 {
+		t.Fatalf("signals = %d, want cached signal", len(resp.Signals))
+	}
+	if resp.Signals[0].SecondFactorKey != "" || resp.Signals[0].SignalAction != "open" || resp.Signals[0].SignalSide != "long" || resp.Signals[0].Summary != "cached" {
+		t.Fatalf("signal = %+v, want cached single-factor signal", resp.Signals[0])
+	}
+	gotHorizons := make([]int, 0, len(resp.Signals[0].Horizons))
+	for _, horizon := range resp.Signals[0].Horizons {
+		gotHorizons = append(gotHorizons, horizon.HorizonMin)
+	}
+	if !reflect.DeepEqual(gotHorizons, analysisLiquidationBacktestHorizons) {
+		t.Fatalf("liquidation signal horizons = %v, want %v", gotHorizons, analysisLiquidationBacktestHorizons)
+	}
+	gotStatLabels := make([]string, 0, len(resp.HorizonStats))
+	for _, stat := range resp.HorizonStats {
+		gotStatLabels = append(gotStatLabels, stat.Label)
+	}
+	if !reflect.DeepEqual(gotStatLabels, []string{"1h", "4h", "12h", "24h"}) {
+		t.Fatalf("liquidation horizon stat labels = %v", gotStatLabels)
+	}
+	if maxRequestedDuration < int64(24*time.Hour/time.Millisecond) {
+		t.Fatalf("max kline request duration = %d, want at least 24h", maxRequestedDuration)
+	}
+	if len(resp.Candles) == 0 {
+		t.Fatalf("expected chart candles")
+	}
+}
+
+func TestAnalysisBacktestLiquidationSignalResetDeletesCachedRecords(t *testing.T) {
+	db := newAnalysisBacktestMemoryDB(t)
+	app := &App{db: db}
+	baseTS := time.Now().Add(-time.Hour).UnixMilli()
+	_, _, err := app.upsertLiquidationBacktestCachedRecords([]AnalysisSignalRecord{{
+		SignalTS:          baseTS,
+		Symbol:            defaultSymbol,
+		SourceGroup:       analysisLiquidationBacktestSourceGroup,
+		Direction:         "down",
+		Confidence:        68,
+		SignalPrice:       2300,
+		AnalysisGenerated: baseTS,
+		Headline:          "开空",
+		Summary:           "cached",
+		VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := app.AnalysisBacktestLiquidationSignalReset(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Deleted != 1 || resp.Total != 0 {
+		t.Fatalf("reset response = %+v, want deleted=1 total=0", resp)
+	}
+	got, err := app.listLiquidationBacktestCachedRecords(baseTS - 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("cached records after reset = %+v, want none", got)
+	}
+	if state := app.getSetting(analysisLiquidationBacktestCacheStateKey); state != analysisLiquidationBacktestCacheStateEmpty {
+		t.Fatalf("cache state = %q, want %q", state, analysisLiquidationBacktestCacheStateEmpty)
+	}
+}
+
+func TestAnalysisBacktestLiquidationResetDeletesAllHistoricalCachedRecords(t *testing.T) {
+	db := newAnalysisBacktestMemoryDB(t)
+	app := &App{db: db}
+	now := time.Now()
+	oldTS := now.Add(-30 * 24 * time.Hour).UnixMilli()
+	recentTS := now.Add(-time.Hour).UnixMilli()
+	records := []AnalysisSignalRecord{
+		{
+			SignalTS:          oldTS,
+			Symbol:            defaultSymbol,
+			SourceGroup:       analysisLiquidationBacktestSourceGroup,
+			Direction:         "up",
+			Confidence:        70,
+			SignalPrice:       2300,
+			AnalysisGenerated: oldTS,
+			Headline:          "开多",
+			Summary:           "old",
+			VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+		},
+		{
+			SignalTS:          recentTS,
+			Symbol:            defaultSymbol,
+			SourceGroup:       analysisLiquidationBacktestSourceGroup,
+			Direction:         "down",
+			Confidence:        70,
+			SignalPrice:       2300,
+			AnalysisGenerated: recentTS,
+			Headline:          "开空",
+			Summary:           "recent",
+			VerifyHorizonMin:  analysisSignalVerifyHorizonMin,
+		},
+	}
+	if _, _, err := app.upsertLiquidationBacktestCachedRecords(records); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := app.AnalysisBacktestLiquidationSignalReset(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Deleted != 2 {
+		t.Fatalf("deleted = %d, want all 2 cached records", resp.Deleted)
+	}
+	got, err := app.listLiquidationBacktestCachedRecords(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("cached records after full reset = %+v, want none", got)
+	}
+}
+
+func TestAnalysisBacktestLiquidationResetPreventsFallbackSignals(t *testing.T) {
+	db := newAnalysisBacktestMemoryDB(t)
+	app := &App{db: db}
+	if err := app.setSetting(analysisLiquidationBacktestCacheStateKey, analysisLiquidationBacktestCacheStateEmpty); err != nil {
+		t.Fatal(err)
+	}
+
+	results, sinceTS, chartEndTS, err := app.buildLiquidationBacktestResults(2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("results = %+v, want no fallback signals after reset", results)
+	}
+	if sinceTS == 0 || chartEndTS == 0 {
+		t.Fatalf("expected chart range even without signals, got since=%d end=%d", sinceTS, chartEndTS)
+	}
+}
+
+func TestAnalysisPersistenceScorePassesAlignedVolumeSpikeTrend(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	item := AnalysisSignalResult{
+		SignalTS:          baseTS + 12*int64(5*time.Minute/time.Millisecond),
+		Direction:         "up",
+		Summary:           persistenceSummary(80, 70, 65),
+		SecondFactorKey:   analysisSecondFactorVolumeSpike,
+		SecondFactorLabel: analysisSecondFactorLabel(analysisSecondFactorVolumeSpike),
+	}
+	scored := scoreAnalysisSignalPersistence(item, persistenceTrendCandles(baseTS, 1))
+	if scored.PersistenceScore < 65 {
+		t.Fatalf("persistence score = %.1f, want pass >= 65 (%s)", scored.PersistenceScore, scored.PersistenceReason)
+	}
+	if scored.PersistenceLabel != "长周期延续" {
+		t.Fatalf("persistence label = %q", scored.PersistenceLabel)
+	}
+}
+
+func TestAnalysisPersistenceScoreRejectsLowVolumeChopNoise(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	item := AnalysisSignalResult{
+		SignalTS:        baseTS + 12*int64(5*time.Minute/time.Millisecond),
+		Direction:       "up",
+		Summary:         persistenceSummary(80, 70, 65),
+		SecondFactorKey: analysisSecondFactorVolumeLow,
+	}
+	scored := scoreAnalysisSignalPersistence(item, persistenceChopCandles(baseTS))
+	if scored.PersistenceScore >= 65 {
+		t.Fatalf("persistence score = %.1f, want rejected below 65 (%s)", scored.PersistenceScore, scored.PersistenceReason)
+	}
+}
+
+func TestAnalysisPersistenceScoreRejectsConflictWindow(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	item := AnalysisSignalResult{
+		SignalTS:        baseTS + 12*int64(5*time.Minute/time.Millisecond),
+		Direction:       "up",
+		Summary:         persistenceSummary(80, -70, 65),
+		SecondFactorKey: analysisSecondFactorVolumeSpike,
+	}
+	scored := scoreAnalysisSignalPersistence(item, persistenceTrendCandles(baseTS, 1))
+	if scored.PersistenceScore >= 65 {
+		t.Fatalf("persistence score = %.1f, want rejected below 65 (%s)", scored.PersistenceScore, scored.PersistenceReason)
+	}
+}
+
+func TestAnalysisPersistenceCooldownKeepsBestDuplicateSignals(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	minute := int64(time.Minute / time.Millisecond)
+	rows := []AnalysisSignalResult{
+		{ID: 1, SignalTS: baseTS, Direction: "up", PersistenceScore: 70},
+		{ID: 2, SignalTS: baseTS + 5*minute, Direction: "up", PersistenceScore: 82},
+		{ID: 3, SignalTS: baseTS + 21*minute, Direction: "up", PersistenceScore: 75},
+	}
+	filtered := applyAnalysisPersistenceCooldown(rows)
+	if len(filtered) != 2 || filtered[0].ID != 2 || filtered[1].ID != 3 {
+		t.Fatalf("cooldown rows = %+v, want IDs 2 and 3", filtered)
+	}
+}
+
+func TestAnalysisPersistenceCooldownKeepsBestOppositeConflict(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	minute := int64(time.Minute / time.Millisecond)
+	rows := []AnalysisSignalResult{
+		{ID: 1, SignalTS: baseTS, Direction: "up", PersistenceScore: 83},
+		{ID: 2, SignalTS: baseTS + 8*minute, Direction: "down", PersistenceScore: 72},
+		{ID: 3, SignalTS: baseTS + 25*minute, Direction: "down", PersistenceScore: 78},
+	}
+	filtered := applyAnalysisPersistenceCooldown(rows)
+	if len(filtered) != 2 || filtered[0].ID != 1 || filtered[1].ID != 3 {
+		t.Fatalf("opposite cooldown rows = %+v, want IDs 1 and 3", filtered)
+	}
+}
+
+func TestBuildLiquidationBacktestSignalRecordsUsesStateLifecycleActions(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	signals := []TradeSignal{
+		{TS: baseTS - 1, Side: "long", Action: "open", Price: 2200, Strength: 45, Reason: "before window"},
+		{TS: baseTS, Side: "long", Action: "open", Price: 2210, Strength: 55, Reason: "1h/4h 同时变为多同步，多单开仓。"},
+		{TS: baseTS + 1, Side: "long", Action: "add", Price: 2220, Strength: 65, Reason: "12h/24h 同时确认多头趋势，多单增仓。"},
+		{TS: baseTS + 2, Side: "long", Action: "close", Price: 2190, Strength: 75, Reason: "多单平仓。"},
+		{TS: baseTS + 3, Side: "short", Action: "open", Price: 2180, Strength: 85, Reason: "1h/4h 同时变为空同步，空单开仓。"},
+		{TS: baseTS + 4, Side: "short", Action: "add", Price: 2170, Strength: 88, Reason: "12h/24h 同时确认空头趋势，空单增仓。"},
+		{TS: baseTS + 5, Side: "short", Action: "tp", Price: 2160, Strength: 78, Reason: "空单TP。"},
+	}
+
+	records := buildLiquidationBacktestSignalRecords(signals, baseTS, 0)
+	if len(records) != 6 {
+		t.Fatalf("record count = %d, want 6: %+v", len(records), records)
+	}
+	want := []struct {
+		direction string
+		action    string
+		side      string
+		headline  string
+	}{
+		{"up", "open", "long", "开多"},
+		{"up", "add", "long", "多头增仓"},
+		{"down", "close", "long", "平多"},
+		{"down", "open", "short", "开空"},
+		{"down", "add", "short", "空头增仓"},
+		{"up", "tp", "short", "空单TP"},
+	}
+	for i, expected := range want {
+		got := records[i]
+		if got.Direction != expected.direction || got.SignalAction != expected.action || got.SignalSide != expected.side || got.Headline != expected.headline {
+			t.Fatalf("record[%d] = %+v, want %+v", i, got, expected)
+		}
+	}
+}
+
+func TestAnalysisPersistenceNoiseStrategyFiltersLowScores(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	step := int64(5 * time.Minute / time.Millisecond)
+	rows := []AnalysisSignalResult{
+		{ID: 1, SignalTS: baseTS + 12*step, Direction: "up", Summary: persistenceSummary(80, 70, 65), SecondFactorKey: analysisSecondFactorVolumeSpike},
+		{ID: 2, SignalTS: baseTS + 20*step, Direction: "up", Summary: persistenceSummary(80, -70, 65), SecondFactorKey: analysisSecondFactorVolumeLow},
+	}
+	all := filterAnalysisSignalsByNoiseStrategy(rows, persistenceTrendCandles(baseTS, 1), analysisBacktestNoiseNone)
+	if len(all) != len(rows) {
+		t.Fatalf("none strategy returned %d rows, want %d", len(all), len(rows))
+	}
+	filtered := filterAnalysisSignalsByNoiseStrategy(rows, persistenceTrendCandles(baseTS, 1), analysisBacktestNoisePersistence)
+	if len(filtered) != 1 || filtered[0].ID != 1 {
+		t.Fatalf("persistence filtered rows = %+v, want only ID 1", filtered)
+	}
+}
+
+func TestAnalysisPersistenceFilterCanImproveLongHorizonStats(t *testing.T) {
+	baseTS := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC).UnixMilli()
+	step := int64(5 * time.Minute / time.Millisecond)
+	kept := backtestSignalForTest(88, "correct", map[int]string{5: "correct", 15: "correct", 30: "correct", 60: "correct"})
+	kept.ID = 1
+	kept.SignalTS = baseTS + 12*step
+	kept.Direction = "up"
+	kept.Summary = persistenceSummary(80, 70, 65)
+	kept.SecondFactorKey = analysisSecondFactorVolumeSpike
+	rejected := backtestSignalForTest(88, "correct", map[int]string{5: "correct", 15: "wrong", 30: "wrong", 60: "wrong"})
+	rejected.ID = 2
+	rejected.SignalTS = baseTS + 20*step
+	rejected.Direction = "up"
+	rejected.Summary = persistenceSummary(80, -70, 65)
+	rejected.SecondFactorKey = analysisSecondFactorVolumeLow
+
+	rows := []AnalysisSignalResult{kept, rejected}
+	before15m, beforeCount := analysisBacktestHorizonCorrectRate(rows, 15)
+	filtered := filterAnalysisSignalsByNoiseStrategy(rows, persistenceTrendCandles(baseTS, 1), analysisBacktestNoisePersistence)
+	after15m, afterCount := analysisBacktestHorizonCorrectRate(filtered, 15)
+	if before15m != 50 || beforeCount != 2 {
+		t.Fatalf("before 15m = %.1f/%d, want 50/2", before15m, beforeCount)
+	}
+	if after15m != 100 || afterCount != 1 {
+		t.Fatalf("after 15m = %.1f/%d, want 100/1", after15m, afterCount)
+	}
+}
+
+func TestAnalysisBacktest2FAStatsUseConfidenceFilteredSignals(t *testing.T) {
+	base := []AnalysisSignalResult{
+		backtestSignalForTest(65, "correct", map[int]string{5: "correct", 15: "correct"}),
+		backtestSignalForTest(60, "wrong", map[int]string{5: "wrong"}),
+		backtestSignalForTest(95, "correct", map[int]string{5: "correct"}),
+	}
+	base[0].SecondFactorKey = analysisSecondFactorVolumeSpike
+	base[0].SecondFactorLabel = analysisSecondFactorLabel(analysisSecondFactorVolumeSpike)
+	base[1].SecondFactorKey = analysisSecondFactorVolumeSpike
+	base[1].SecondFactorLabel = analysisSecondFactorLabel(analysisSecondFactorVolumeSpike)
+	base[2].SecondFactorKey = analysisSecondFactorVolumeLow
+	base[2].SecondFactorLabel = analysisSecondFactorLabel(analysisSecondFactorVolumeLow)
+
+	candidates := make([]AnalysisSignalResult, 0, len(base))
+	for _, item := range base {
+		candidate, ok := buildAnalysisDualFactorCandidate(item)
+		if ok {
+			candidates = append(candidates, candidate)
+		}
+	}
+	filtered := filterAnalysisSignalsBySecondFactor(filterAnalysisSignalsByConfidence(candidates, 70), analysisSecondFactorVolumeSpike)
+	summary := buildAnalysisBacktestSummary(filtered, 24)
+	if summary.TotalSignals != 1 || summary.CorrectCount != 1 || summary.CorrectRate != 100 {
+		t.Fatalf("2FA filtered summary = %+v, want only volume spike signal above 70", summary)
+	}
+	stats := buildAnalysisBacktestHorizonStats(filtered)
+	for _, stat := range stats {
+		if stat.HorizonMin == 15 && stat.TotalSignals != 1 {
+			t.Fatalf("2FA 15m total = %d, want 1", stat.TotalSignals)
+		}
+	}
+}
+
+func TestDefaultAnalysisSecondFactorSelectionUsesAll(t *testing.T) {
+	if got := defaultAnalysisSecondFactorSelection(""); got != analysisSecondFactorAll {
+		t.Fatalf("empty second factor default = %q, want %q", got, analysisSecondFactorAll)
+	}
+	if got := defaultAnalysisSecondFactorSelection("aligned"); got != analysisSecondFactorAll {
+		t.Fatalf("legacy second factor = %q, want %q", got, analysisSecondFactorAll)
+	}
+	if got := defaultAnalysisSecondFactorSelection(analysisSecondFactorVolumeSpike); got != analysisSecondFactorVolumeSpike {
+		t.Fatalf("explicit second factor = %q, want %q", got, analysisSecondFactorVolumeSpike)
+	}
+}
+
+func TestLegacyAnalysisSecondFactorFilterFallsBackToAll(t *testing.T) {
+	items := []AnalysisSignalResult{
+		{SecondFactorKey: analysisSecondFactorVolumeSpike},
+		{SecondFactorKey: analysisSecondFactorVolumeLow},
+	}
+	filtered := filterAnalysisSignalsBySecondFactor(items, "counter")
+	if len(filtered) != len(items) {
+		t.Fatalf("legacy factor filter returned %d rows, want %d", len(filtered), len(items))
+	}
+}
+
+func TestAnalysisBacktestConfidenceFactorBuckets(t *testing.T) {
+	results := []AnalysisSignalResult{
+		{Confidence: 65, Result: "correct", SecondFactorKey: analysisSecondFactorVolumeSpike},
+		{Confidence: 65, Result: "wrong", SecondFactorKey: analysisSecondFactorVolumeSpike},
+		{Confidence: 72, Result: "correct", SecondFactorKey: analysisSecondFactorVolumeNormal},
+		{Confidence: 92, Result: "pending", SecondFactorKey: analysisSecondFactorVolumeLow},
+	}
+	buckets := buildAnalysisBacktestConfidenceFactorBuckets(results)
+	if len(buckets) != 15 {
+		t.Fatalf("confidence factor bucket count = %d, want 15", len(buckets))
+	}
+	find := func(label, factor string) AnalysisBacktestConfidenceFactorBucket {
+		for _, bucket := range buckets {
+			if bucket.Label == label && bucket.FactorKey == factor {
+				return bucket
+			}
+		}
+		t.Fatalf("missing bucket %s/%s", label, factor)
+		return AnalysisBacktestConfidenceFactorBucket{}
+	}
+	spikeLowConf := find("<70", analysisSecondFactorVolumeSpike)
+	if spikeLowConf.TotalSignals != 2 || spikeLowConf.CorrectCount != 1 || spikeLowConf.WrongCount != 1 || spikeLowConf.CorrectRate != 50 {
+		t.Fatalf("<70 spike bucket = %+v, want total=2 correct=1 wrong=1 rate=50", spikeLowConf)
+	}
+	normalMidConf := find("70-80", analysisSecondFactorVolumeNormal)
+	if normalMidConf.TotalSignals != 1 || normalMidConf.CorrectRate != 100 {
+		t.Fatalf("70-80 normal bucket = %+v, want total=1 rate=100", normalMidConf)
+	}
+	lowHighConf := find("90+", analysisSecondFactorVolumeLow)
+	if lowHighConf.TotalSignals != 1 || lowHighConf.PendingCount != 1 || lowHighConf.CorrectRate != 0 {
+		t.Fatalf("90+ low bucket = %+v, want one pending and no verified rate", lowHighConf)
+	}
+}
+
+func TestAnalysisBacktestStrategyGroups(t *testing.T) {
+	makeRows := func(confidence float64, factor string, fiveResults []string, fifteenResults []string) []AnalysisSignalResult {
+		out := make([]AnalysisSignalResult, 0, len(fiveResults))
+		for i, result := range fiveResults {
+			horizons := map[int]string{5: result}
+			if i < len(fifteenResults) {
+				horizons[15] = fifteenResults[i]
+			}
+			row := backtestSignalForTest(confidence, result, horizons)
+			row.SecondFactorKey = factor
+			row.SecondFactorLabel = analysisSecondFactorLabel(factor)
+			out = append(out, row)
+		}
+		return out
+	}
+	find := func(groups []AnalysisBacktestStrategyGroup, factor, label string) AnalysisBacktestStrategyGroup {
+		for _, group := range groups {
+			if group.FactorKey == factor && group.Label == label {
+				return group
+			}
+		}
+		t.Fatalf("missing strategy group %s/%s", factor, label)
+		return AnalysisBacktestStrategyGroup{}
+	}
+
+	lowSample := find(buildAnalysisBacktestStrategyGroups(makeRows(65, analysisSecondFactorVolumeSpike, []string{"correct", "correct", "correct", "correct"}, nil)), analysisSecondFactorVolumeSpike, "<70")
+	if lowSample.Selected || lowSample.SampleCount != 4 {
+		t.Fatalf("low sample group = %+v, want not selected with 4 samples", lowSample)
+	}
+
+	lowFiveMinute := find(buildAnalysisBacktestStrategyGroups(makeRows(65, analysisSecondFactorVolumeSpike, []string{"correct", "correct", "wrong", "wrong", "wrong"}, nil)), analysisSecondFactorVolumeSpike, "<70")
+	if lowFiveMinute.Selected || lowFiveMinute.FiveMinuteCorrectRate != 40 {
+		t.Fatalf("low 5m group = %+v, want not selected with 40%% 5m rate", lowFiveMinute)
+	}
+
+	lowComposite := find(buildAnalysisBacktestStrategyGroups(makeRows(72, analysisSecondFactorVolumeNormal, []string{"correct", "correct", "correct", "wrong", "wrong"}, []string{"correct", "correct", "wrong", "wrong", "wrong"})), analysisSecondFactorVolumeNormal, "70-80")
+	if lowComposite.Selected || lowComposite.CompositeScore >= 52 {
+		t.Fatalf("low composite group = %+v, want not selected below 52 composite", lowComposite)
+	}
+
+	weakHorizon := find(buildAnalysisBacktestStrategyGroups(makeRows(92, analysisSecondFactorVolumeLow, []string{"correct", "correct", "correct", "correct", "correct"}, []string{"correct", "wrong", "wrong", "wrong", "wrong"})), analysisSecondFactorVolumeLow, "90+")
+	if weakHorizon.Selected {
+		t.Fatalf("weak horizon group selected unexpectedly: %+v", weakHorizon)
+	}
+
+	selected := find(buildAnalysisBacktestStrategyGroups(makeRows(92, analysisSecondFactorVolumeSpike, []string{"correct", "correct", "correct", "wrong", "wrong"}, []string{"correct", "correct", "correct", "wrong", "wrong"})), analysisSecondFactorVolumeSpike, "90+")
+	if !selected.Selected || selected.CompositeScore != 60 {
+		t.Fatalf("selected group = %+v, want selected with 60 composite", selected)
+	}
+}
+
+func TestFilterAnalysisSignalsByPreferredStrategyGroups(t *testing.T) {
+	selected := backtestSignalForTest(92, "correct", map[int]string{5: "correct", 15: "correct"})
+	selected.SecondFactorKey = analysisSecondFactorVolumeSpike
+	rejected := backtestSignalForTest(65, "wrong", map[int]string{5: "wrong", 15: "wrong"})
+	rejected.SecondFactorKey = analysisSecondFactorVolumeLow
+
+	rows := []AnalysisSignalResult{selected, rejected}
+	groups := []AnalysisBacktestStrategyGroup{
+		{FactorKey: analysisSecondFactorVolumeSpike, Label: "90+", Selected: true},
+		{FactorKey: analysisSecondFactorVolumeLow, Label: "<70", Selected: false},
+	}
+	filtered, active := filterAnalysisSignalsByStrategyGroups(rows, groups, analysisBacktestStrategyPreferred)
+	if !active || len(filtered) != 1 || filtered[0].SecondFactorKey != analysisSecondFactorVolumeSpike {
+		t.Fatalf("preferred filter = active %v rows %+v, want one selected spike row", active, filtered)
+	}
+
+	fallback, active := filterAnalysisSignalsByStrategyGroups(rows, []AnalysisBacktestStrategyGroup{{FactorKey: analysisSecondFactorVolumeSpike, Label: "90+"}}, analysisBacktestStrategyPreferred)
+	if active || len(fallback) != len(rows) {
+		t.Fatalf("fallback filter = active %v len %d, want inactive full result", active, len(fallback))
+	}
+}
+
+func TestNormalizeAnalysisBacktestStrategyDefaultsToAll(t *testing.T) {
+	if got := normalizeAnalysisBacktestStrategy(""); got != analysisBacktestStrategyAll {
+		t.Fatalf("empty strategy = %q, want %q", got, analysisBacktestStrategyAll)
+	}
+	if got := normalizeAnalysisBacktestStrategy("preferred"); got != analysisBacktestStrategyPreferred {
+		t.Fatalf("preferred strategy = %q, want %q", got, analysisBacktestStrategyPreferred)
+	}
+	if got := normalizeAnalysisBacktestStrategy("unknown"); got != analysisBacktestStrategyAll {
+		t.Fatalf("unknown strategy = %q, want %q", got, analysisBacktestStrategyAll)
+	}
+}
+
+func backtestSignalForTest(confidence float64, result string, horizons map[int]string) AnalysisSignalResult {
+	out := AnalysisSignalResult{
+		Confidence: confidence,
+		Result:     result,
+	}
+	for _, horizonMin := range analysisBacktestHorizons {
+		horizonResult, ok := horizons[horizonMin]
+		if !ok {
+			continue
+		}
+		out.Horizons = append(out.Horizons, AnalysisSignalHorizonResult{
+			HorizonMin: horizonMin,
+			Result:     horizonResult,
+		})
+	}
+	return out
+}
+
+func persistenceSummary(scores ...float64) string {
+	parts := make([]string, 0, len(scores))
+	for i, score := range scores {
+		label := []string{"1D", "7D", "30D"}[i]
+		parts = append(parts, label+" 权重 33% / 分数 "+fmt.Sprintf("%+.1f", score)+" / 有效带 1")
+	}
+	return strings.Join(parts, " | ")
+}
+
+func persistenceTrendCandles(baseTS int64, direction float64) []analysisBacktestCandle {
+	const step = int64(5 * time.Minute / time.Millisecond)
+	out := make([]analysisBacktestCandle, 0, 24)
+	price := 2200.0
+	for i := 0; i < 24; i++ {
+		open := price
+		closePrice := price + direction*2
+		out = append(out, analysisBacktestCandle{
+			TS:          baseTS + int64(i)*step,
+			O:           open,
+			H:           math.Max(open, closePrice) + 1,
+			L:           math.Min(open, closePrice) - 1,
+			C:           closePrice,
+			QuoteVolume: 100,
+		})
+		price = closePrice
+	}
+	return out
+}
+
+func persistenceChopCandles(baseTS int64) []analysisBacktestCandle {
+	const step = int64(5 * time.Minute / time.Millisecond)
+	out := make([]analysisBacktestCandle, 0, 13)
+	for i := 0; i < 13; i++ {
+		open := 2200.0
+		closePrice := 2200.0
+		if i%2 == 0 {
+			closePrice = 2201
+		} else {
+			closePrice = 2199
+		}
+		if i == 12 {
+			open = 2200
+			closePrice = 2200.5
+		}
+		out = append(out, analysisBacktestCandle{
+			TS:          baseTS + int64(i)*step,
+			O:           open,
+			H:           2210,
+			L:           2190,
+			C:           closePrice,
+			QuoteVolume: 100,
+		})
+	}
+	return out
+}
