@@ -35,7 +35,7 @@ import (
 const (
 	defaultDBPath       = "data/liqmap.db"
 	defaultSymbol       = "ETHUSDT"
-	defaultServerAddr   = ":8888"
+	defaultServerAddr   = ":80"
 	defaultWindowDays   = 1
 	windowIntraday      = 0
 	defaultLookbackMin  = 1440
@@ -1145,7 +1145,7 @@ func (a *App) buildMonitorBundleCaption(windowDays int, dash Dashboard, report H
 	return strings.Join([]string{
 		fmt.Sprintf("<b>%s 1/3</b>", label),
 		"<b>/monitor heat report</b>",
-		fmt.Sprintf("<code>http://127.0.0.1:8888/monitor</code> | %d day window", windowDays),
+		fmt.Sprintf("<code>http://127.0.0.1:80/monitor</code> | %d day window", windowDays),
 		fmt.Sprintf("Price $%.1f | Updated %s", dash.CurrentPrice, time.UnixMilli(dash.GeneratedAt).Format("2006-01-02 15:04:05")),
 		fmt.Sprintf("Within 20pt: upper %s yi / lower %s yi", formatYi2(b20.UpNotionalUSD), formatYi2(b20.DownNotionalUSD)),
 	}, "\n")
@@ -1156,7 +1156,7 @@ func (a *App) buildWebDataSourceBundleCaption(windowDays int, m WebDataSourceMap
 	return strings.Join([]string{
 		fmt.Sprintf("<b>%s 2/3</b>", label),
 		"<b>/webdatasource ETH web datasource map</b>",
-		fmt.Sprintf("<code>http://127.0.0.1:8888/webdatasource</code> | %d day window", windowDays),
+		fmt.Sprintf("<code>http://127.0.0.1:80/webdatasource</code> | %d day window", windowDays),
 		fmt.Sprintf("Range $%.1f - $%.1f | Updated %s", m.RangeLow, m.RangeHigh, time.UnixMilli(m.GeneratedAt).Format("2006-01-02 15:04:05")),
 		fmt.Sprintf("Web longs %s yi | Web shorts %s yi", formatYi2(m.LongTotal), formatYi2(m.ShortTotal)),
 	}, "\n")

@@ -340,7 +340,7 @@ function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms));}
 async function parseOperationError(r,path){
   const body=await r.text().catch(()=>'');
   if(r.status===404){
-    return '后端接口未加载：'+path+' 返回 404，请重启 8888 服务后再试';
+    return '后端接口未加载：'+path+' 返回 404，请重启 80 服务后再试';
   }
   return (body&&body.trim())||('HTTP '+r.status);
 }

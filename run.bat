@@ -3,7 +3,7 @@ setlocal
 
 set "DEBUG=1"
 set "DEBUG_LOG=log/server.log"
-set "APP_PORT=8888"
+set "APP_PORT=80"
 set "TELEGRAM_PHOTO_TIMEOUT_SEC=120"
 rem If this host cannot reach api.telegram.org directly, point this to a private Bot API or reverse proxy.
 rem set "TELEGRAM_API_BASE_URL=https://your-telegram-bot-api.example.com"
