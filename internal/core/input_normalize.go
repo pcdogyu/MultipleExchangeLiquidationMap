@@ -10,6 +10,8 @@ func normalizeQuotedInput(raw string) string {
 	if s == "" {
 		return ""
 	}
+	// Common case: backslashes were persisted literally.
+	s = strings.ReplaceAll(s, "\\\"", "\"")
 	// Try to undo accidental quoting/escaping like "\"value\"".
 	for i := 0; i < 2; i++ {
 		if unq, err := strconv.Unquote(s); err == nil {
@@ -25,8 +27,6 @@ func normalizeQuotedInput(raw string) string {
 		}
 		break
 	}
-	// Common case: backslashes were persisted literally.
-	s = strings.ReplaceAll(s, "\\\"", "\"")
 	return strings.TrimSpace(s)
 }
 

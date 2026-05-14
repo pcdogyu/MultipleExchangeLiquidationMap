@@ -81,7 +81,7 @@ func (m *WebDataSourceManager) getSettingBool(key string, fallback bool) bool {
 func (m *WebDataSourceManager) loadSettings() WebDataSourceSettings {
 	wd, _ := os.Getwd()
 	profileDir := filepath.Join(wd, "coinglass_profile")
-	rawProfile := strings.TrimSpace(m.getSetting("profile_dir"))
+	rawProfile := normalizeQuotedInput(m.getSetting("profile_dir"))
 	if rawProfile != "" {
 		profileDir = rawProfile
 	}
@@ -97,7 +97,7 @@ func (m *WebDataSourceManager) loadSettings() WebDataSourceSettings {
 		Enabled:            m.getSettingBool("enabled", true),
 		IntervalMin:        intervalMin,
 		TimeoutSec:         timeoutSec,
-		ChromePath:         strings.TrimSpace(m.getSetting("chrome_path")),
+		ChromePath:         normalizeQuotedInput(m.getSetting("chrome_path")),
 		ProfileDir:         profileDir,
 		LastError:          strings.TrimSpace(m.getSetting("last_error")),
 		LastSuccessTS:      m.getSettingInt64("last_success_ts", 0),

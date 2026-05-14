@@ -720,6 +720,7 @@ func webDataSourceChromeOptions(chromePath, profileDir string, startMinimized bo
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
 		chromedp.UserDataDir(profileDir),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("window-position", "80,80"),
 		chromedp.WindowSize(1440, 900),
 	)
 	if startMinimized {
@@ -2602,11 +2603,7 @@ func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePa
 		},
 	}
 
-	if err := minimizeBrowserWindow(session.taskCtx); err != nil {
-		m.appendStepLog("Minimize Chrome Window", "info", fmt.Sprintf("best effort skipped: %v", err))
-	} else {
-		m.appendStepLog("Minimize Chrome Window", "success", "browser launched in minimized mode")
-	}
+	m.appendStepLog("Launch Chrome Window", "success", "browser launched in visible mode")
 
 	findTargetPanelJS := webDataSourceFindTargetPanelJS()
 	findPeriodRootJS := webDataSourceFindPeriodRootJS(findTargetPanelJS)

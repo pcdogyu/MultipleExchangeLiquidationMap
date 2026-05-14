@@ -3,7 +3,6 @@ package liqmap
 import (
 	"context"
 	"strconv"
-	"strings"
 )
 
 func (a *App) WebDataSourceStatus() WebDataSourceStatus {
@@ -36,9 +35,9 @@ func (a *App) UpdateWebDataSourceSettings(enabled *bool, intervalMin, timeoutSec
 	if timeoutSec > 0 {
 		_ = a.webds.setSetting("timeout_sec", strconv.Itoa(timeoutSec))
 	}
-	_ = a.webds.setSetting("chrome_path", strings.TrimSpace(chromePath))
-	if strings.TrimSpace(profileDir) != "" {
-		_ = a.webds.setSetting("profile_dir", strings.TrimSpace(profileDir))
+	_ = a.webds.setSetting("chrome_path", normalizeQuotedInput(chromePath))
+	if normalizeQuotedInput(profileDir) != "" {
+		_ = a.webds.setSetting("profile_dir", normalizeQuotedInput(profileDir))
 	}
 	return a.webds.loadStatus()
 }
