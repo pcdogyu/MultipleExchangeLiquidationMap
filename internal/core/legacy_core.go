@@ -359,10 +359,7 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 
 	if settings.Group1Enabled {
 		if !webMap.HasData || len(webMap.Points) == 0 {
-			errText := strings.TrimSpace(webMap.LastError)
-			if errText == "" {
-				errText = "no 30-day webdatasource snapshot available"
-			}
+			errText := webDataSourceNoDataMessage("30d", webMap.LastError)
 			msg := fmt.Sprintf("数据缺失: %s", errText)
 			a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
 			errs = append(errs, msg)
