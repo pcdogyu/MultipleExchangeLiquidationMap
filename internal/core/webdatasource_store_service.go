@@ -86,9 +86,7 @@ func (m *WebDataSourceManager) loadSettings() WebDataSourceSettings {
 		profileDir = rawProfile
 	}
 	intervalMin := m.getSettingInt("interval_min", defaultWebDataSourceIntervalMin)
-	if intervalMin <= 0 {
-		intervalMin = defaultWebDataSourceIntervalMin
-	}
+	intervalMin = normalizeWebDataSourceIntervalMin(intervalMin)
 	timeoutSec := m.getSettingInt("timeout_sec", defaultWebDataSourceTimeoutSec)
 	if timeoutSec <= 0 {
 		timeoutSec = defaultWebDataSourceTimeoutSec

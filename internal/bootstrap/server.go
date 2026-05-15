@@ -30,6 +30,7 @@ func Run() {
 
 	dbPath := liqmap.Getenv("DB_PATH", liqmap.DefaultDBPath)
 	addr := serverAddrFromEnv()
+	log.Printf("version info: branch=%s commit=%s commit_time=%s", versionEnv("VERSION_BRANCH"), versionEnv("VERSION_COMMIT"), versionEnv("VERSION_COMMIT_TIME"))
 	if debug {
 		log.Printf("debug enabled: db_path=%s addr=%s symbol=%s", dbPath, addr, liqmap.DefaultSymbol)
 	}
@@ -99,4 +100,11 @@ func serverAddrFromEnv() string {
 		}
 	}
 	return liqmap.DefaultServerAddr
+}
+
+func versionEnv(key string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return "-"
 }

@@ -2,6 +2,7 @@ package liqmap
 
 import (
 	"sort"
+	"strconv"
 	"time"
 )
 
@@ -13,8 +14,9 @@ func buildChannelPlannedPushDetail(previewOnly bool) string {
 	return detail
 }
 
-func buildWebDataSourceImmediatePushDetail(previewOnly bool) string {
-	detail := "webdatasource 按每 5 分钟抓取一次，成功后立即推送 Telegram。"
+func buildWebDataSourceImmediatePushDetail(intervalMin int, previewOnly bool) string {
+	intervalMin = normalizeWebDataSourceIntervalMin(intervalMin)
+	detail := "webdatasource 按每 " + strconv.Itoa(intervalMin) + " 分钟抓取一次，成功后立即推送 Telegram。"
 	if previewOnly {
 		detail += " 当前为预览排程，自动通知尚未开启。"
 	}
@@ -55,10 +57,14 @@ func (a *App) listChannelPlannedPushesUTF8(hours int) []ChannelPlannedPushRow {
 		cursor = pushAt.Add(time.Minute)
 	}
 
-	webDetail := buildWebDataSourceImmediatePushDetail(previewOnly)
+	webIntervalMin := defaultWebDataSourceIntervalMin
+	if a.webds != nil {
+		webIntervalMin = a.webds.loadSettings().IntervalMin
+	}
+	webDetail := buildWebDataSourceImmediatePushDetail(webIntervalMin, previewOnly)
 	cursor = now
 	for !cursor.After(limit) {
-		captureTS := nextScheduledWebDataSourceCaptureTS(cursor)
+		captureTS := nextScheduledWebDataSourceCaptureTS(cursor, webIntervalMin)
 		captureAt := time.UnixMilli(captureTS)
 		if captureAt.After(limit) {
 			break
@@ -67,7 +73,7 @@ func (a *App) listChannelPlannedPushesUTF8(hours int) []ChannelPlannedPushRow {
 			PushTS:      captureTS,
 			CaptureTS:   captureTS,
 			Period:      "webdatasource-immediate",
-			IntervalMin: 5,
+			IntervalMin: normalizeWebDataSourceIntervalMin(webIntervalMin),
 			Detail:      webDetail,
 		})
 		cursor = captureAt.Add(time.Minute)
