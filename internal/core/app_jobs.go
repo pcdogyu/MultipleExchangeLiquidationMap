@@ -7,6 +7,7 @@ func (a *App) StartBackgroundJobs(ctx context.Context) {
 	a.startOrderBookSync(ctx)
 	a.startLiquidationSync(ctx)
 	a.startTelegramNotifier(ctx)
+	a.startTelegramCommandPoller(ctx)
 	a.startModelMapSnapshotter(ctx)
 	if a.webds != nil {
 		a.webds.start(ctx)

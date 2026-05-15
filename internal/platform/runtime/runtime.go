@@ -9,6 +9,12 @@ import (
 	"multipleexchangeliquidationmap/internal/platform/httpx"
 )
 
+var (
+	versionBranch     = ""
+	versionCommitID   = ""
+	versionCommitTime = ""
+)
+
 type Manager struct {
 	debug bool
 	run   func(name string, args ...string) ([]byte, error)
@@ -39,14 +45,36 @@ func (m *Manager) HandleVersion(w http.ResponseWriter, r *http.Request) {
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	branchOut, _ := m.run("bash", "-lc", "git rev-parse --abbrev-ref HEAD 2>/dev/null || true")
-	commitOut, _ := m.run("bash", "-lc", "git rev-parse --short HEAD 2>/dev/null || true")
-	timeOut, _ := m.run("bash", "-lc", "git show -s --format=%ci HEAD 2>/dev/null || true")
+	branch, commitID, commitTime := m.buildVersionInfo()
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"branch":      strings.TrimSpace(string(branchOut)),
-		"commit_id":   strings.TrimSpace(string(commitOut)),
-		"commit_time": strings.TrimSpace(string(timeOut)),
+		"branch":      branch,
+		"commit_id":   commitID,
+		"commit_time": commitTime,
 	})
+}
+
+func (m *Manager) buildVersionInfo() (string, string, string) {
+	branch := strings.TrimSpace(versionBranch)
+	commitID := strings.TrimSpace(versionCommitID)
+	commitTime := strings.TrimSpace(versionCommitTime)
+	if branch == "" {
+		branch = m.gitOutput("rev-parse", "--abbrev-ref", "HEAD")
+	}
+	if commitID == "" {
+		commitID = m.gitOutput("rev-parse", "--short", "HEAD")
+	}
+	if commitTime == "" {
+		commitTime = m.gitOutput("show", "-s", "--format=%ci", "HEAD")
+	}
+	return branch, commitID, commitTime
+}
+
+func (m *Manager) gitOutput(args ...string) string {
+	out, err := m.run("git", args...)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func (m *Manager) HandleUpgradePull(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +90,7 @@ func (m *Manager) HandleUpgradePull(w http.ResponseWriter, r *http.Request) {
 		f.Flush()
 	}
 	m.async(func() {
-		_, _ = m.run("bash", "-lc", "rm -f /tmp/liqmap-upgrade.exit /tmp/liqmap-upgrade.pid /tmp/liqmap-upgrade.unit; : >/tmp/liqmap-upgrade.log; unit=liqmap-upgrade.scope; echo \"$unit\" > /tmp/liqmap-upgrade.unit; systemd-run --scope --collect --no-block --unit=liqmap-upgrade /bin/bash -lc 'cd /opt/MultipleExchangeLiquidationMap && echo [git fetch] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git fetch --all --prune\" && git fetch --all --prune && echo [git reset] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git reset --hard origin/golang\" && git reset --hard origin/golang && echo [go build] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# go build -o multipleexchangeliquidationmap.exe ./cmd/server\" && go build -o multipleexchangeliquidationmap.exe ./cmd/server && echo [restart service] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl restart liqmap.service\" && systemctl restart liqmap.service && echo [service status] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl status liqmap.service --no-pager\" && systemctl status liqmap.service --no-pager; ec=$?; echo $ec >/tmp/liqmap-upgrade.exit' >>/tmp/liqmap-upgrade.log 2>&1")
+		_, _ = m.run("bash", "-lc", "rm -f /tmp/liqmap-upgrade.exit /tmp/liqmap-upgrade.pid /tmp/liqmap-upgrade.unit; : >/tmp/liqmap-upgrade.log; unit=liqmap-upgrade.scope; echo \"$unit\" > /tmp/liqmap-upgrade.unit; systemd-run --scope --collect --no-block --unit=liqmap-upgrade /bin/bash -lc 'cd /opt/MultipleExchangeLiquidationMap && echo [git fetch] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git fetch --all --prune\" && git fetch --all --prune && echo [git reset] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# git reset --hard origin/golangv2\" && git reset --hard origin/golangv2 && echo [go build] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# go build -o multipleexchangeliquidationmap.exe ./cmd/server\" && go build -o multipleexchangeliquidationmap.exe ./cmd/server && echo [restart service] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl restart liqmap.service\" && systemctl restart liqmap.service && echo [service status] && echo \"root@jiansu-openvpn-japan:/opt/MultipleExchangeLiquidationMap# systemctl status liqmap.service --no-pager\" && systemctl status liqmap.service --no-pager; ec=$?; echo $ec >/tmp/liqmap-upgrade.exit' >>/tmp/liqmap-upgrade.log 2>&1")
 	})
 }
 

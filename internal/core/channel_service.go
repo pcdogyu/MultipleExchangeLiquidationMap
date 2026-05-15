@@ -226,9 +226,17 @@ func (a *App) sendTelegramText(text string) error {
 	if token == "" || channel == "" {
 		return fmt.Errorf("telegram bot token or channel is empty")
 	}
+	return a.sendTelegramTextToChat(channel, text)
+}
 
-	payload := map[string]string{
-		"chat_id":    channel,
+func (a *App) sendTelegramTextToChat(chatID any, text string) error {
+	token := normalizeQuotedInput(a.getSetting("telegram_bot_token"))
+	if token == "" || chatID == nil || strings.TrimSpace(fmt.Sprint(chatID)) == "" {
+		return fmt.Errorf("telegram bot token or chat id is empty")
+	}
+
+	payload := map[string]any{
+		"chat_id":    chatID,
 		"text":       text,
 		"parse_mode": "HTML",
 	}
@@ -245,13 +253,21 @@ func (a *App) sendTelegramPhoto(caption string, image []byte) error {
 	if token == "" || channel == "" {
 		return fmt.Errorf("telegram bot token or channel is empty")
 	}
+	return a.sendTelegramPhotoToChat(channel, caption, image)
+}
+
+func (a *App) sendTelegramPhotoToChat(chatID any, caption string, image []byte) error {
+	token := normalizeQuotedInput(a.getSetting("telegram_bot_token"))
+	if token == "" || chatID == nil || strings.TrimSpace(fmt.Sprint(chatID)) == "" {
+		return fmt.Errorf("telegram bot token or chat id is empty")
+	}
 	if len(image) == 0 {
 		return fmt.Errorf("telegram photo image is empty")
 	}
 
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
-	_ = mw.WriteField("chat_id", channel)
+	_ = mw.WriteField("chat_id", fmt.Sprint(chatID))
 	if strings.TrimSpace(caption) != "" {
 		_ = mw.WriteField("caption", caption)
 		_ = mw.WriteField("parse_mode", "HTML")
