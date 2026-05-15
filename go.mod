@@ -2,6 +2,8 @@ module multipleexchangeliquidationmap
 
 go 1.26
 
+toolchain go1.26.3
+
 require (
 	github.com/gorilla/websocket v1.5.3
 	modernc.org/sqlite v1.30.2
