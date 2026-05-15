@@ -4,6 +4,7 @@ setlocal
 set "DEBUG=1"
 set "DEBUG_LOG=log/server.log"
 set "APP_PORT=80"
+set "DB_PATH=liqmap.db"
 set "TELEGRAM_PHOTO_TIMEOUT_SEC=120"
 set "EXE=multipleexchangeliquidationmap.exe"
 set "NEW_EXE=multipleexchangeliquidationmap.new.exe"

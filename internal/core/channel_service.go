@@ -49,9 +49,6 @@ func normalizeWebDataSourceIntervalMin(intervalMin int) int {
 	if intervalMin <= 0 {
 		return defaultWebDataSourceIntervalMin
 	}
-	if intervalMin > defaultWebDataSourceIntervalMin {
-		return defaultWebDataSourceIntervalMin
-	}
 	return intervalMin
 }
 

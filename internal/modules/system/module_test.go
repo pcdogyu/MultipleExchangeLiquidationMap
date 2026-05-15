@@ -13,6 +13,7 @@ func TestMountRegistersSystemRoutes(t *testing.T) {
 		"/api/upgrade/pull",
 		"/api/upgrade/progress",
 		"/api/version",
+		"/api/logs",
 	}
 	for _, path := range paths {
 		req, err := http.NewRequest(http.MethodGet, path, nil)

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -167,6 +169,44 @@ func TestHandleUpgradePullQueuesWork(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "upgrade queued") {
 		t.Fatalf("expected queued response, got %q", rec.Body.String())
+	}
+}
+
+func TestHandleLogsFiltersAndPaginates(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "server.log")
+	content := strings.Join([]string{
+		"2026/05/15 10:00:00 dashboard listening on http://127.0.0.1:80",
+		"2026/05/15 10:01:00 telegram request retry 2/5 for sendMessage",
+		"2026/05/15 10:02:00 telegram command polling failed: timeout",
+		"2026/05/15 10:03:00 heartbeat: server alive addr=:80",
+	}, "\n")
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	t.Setenv("DEBUG_LOG", logPath)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/logs?level=error&q=telegram&page=1&limit=20", nil)
+	rec := httptest.NewRecorder()
+	New(false).HandleLogs(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var body struct {
+		Total int `json:"total"`
+		Rows  []struct {
+			Level   string `json:"level"`
+			Message string `json:"message"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if body.Total != 1 || len(body.Rows) != 1 {
+		t.Fatalf("expected one filtered row, got total=%d rows=%d", body.Total, len(body.Rows))
+	}
+	if body.Rows[0].Level != "error" || !strings.Contains(body.Rows[0].Message, "polling failed") {
+		t.Fatalf("unexpected row: %+v", body.Rows[0])
 	}
 }
 

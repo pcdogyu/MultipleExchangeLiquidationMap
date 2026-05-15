@@ -171,6 +171,10 @@ func (a *App) handleTelegramMessage(ctx context.Context, token string, msg Teleg
 		_ = a.sendTelegramTextToChat(msg.Chat.ID, a.buildTelegramCommandStatusText())
 		return
 	}
+	if isTelegramPullAllCommand(text) {
+		a.startTelegramCommandPullAll(ctx, msg.Chat.ID)
+		return
+	}
 	if days, ok := parseTelegramPullWindow(text); ok {
 		a.startTelegramCommandPull(ctx, msg.Chat.ID, days)
 	}
@@ -191,6 +195,10 @@ func (a *App) handleTelegramCallback(ctx context.Context, token string, cb Teleg
 	data := strings.TrimSpace(cb.Data)
 	if data == "status" {
 		_ = a.sendTelegramTextToChat(chat.ID, a.buildTelegramCommandStatusText())
+		return
+	}
+	if data == "pull:all" {
+		a.startTelegramCommandPullAll(ctx, chat.ID)
 		return
 	}
 	if strings.HasPrefix(data, "pull:") {
@@ -221,6 +229,7 @@ func (a *App) sendTelegramCommandMenu(ctx context.Context, token string, chatID 
 					{"text": "抓取 7d", "callback_data": "pull:7"},
 					{"text": "抓取 30d", "callback_data": "pull:30"},
 				},
+				{{"text": "抓取全部并发送 8 组", "callback_data": "pull:all"}},
 				{{"text": "状态", "callback_data": "status"}},
 			},
 		},
@@ -252,6 +261,32 @@ func (a *App) startTelegramCommandPull(ctx context.Context, chatID int64, window
 			return
 		}
 		_ = a.sendTelegramTextToChat(chatID, fmt.Sprintf("%s 报告发送完成", windowLabel))
+	}()
+}
+
+func (a *App) startTelegramCommandPullAll(ctx context.Context, chatID int64) {
+	go func() {
+		_ = a.sendTelegramTextToChat(chatID, "已收到，开始抓取 1d / 7d / 30d")
+		if !a.beginTelegramBundleSend() {
+			_ = a.sendTelegramTextToChat(chatID, "已有抓取或报告发送任务进行中，请稍后再试")
+			return
+		}
+		defer a.endTelegramBundleSend()
+
+		if err := a.webds.runSync(ctx, nil); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "already in progress") {
+				_ = a.sendTelegramTextToChat(chatID, "已有抓取任务进行中，请稍后再试")
+				return
+			}
+			_ = a.sendTelegramTextToChat(chatID, fmt.Sprintf("抓取全部周期失败：%s", template.HTMLEscapeString(shortErrorText(err))))
+			return
+		}
+		_ = a.sendTelegramTextToChat(chatID, "1d / 7d / 30d 抓取完成，开始发送 8 组内容")
+		if err := a.sendTelegramAllGroupsDemandBundleLocked(chatID); err != nil {
+			_ = a.sendTelegramTextToChat(chatID, fmt.Sprintf("发送 8 组内容失败：%s", template.HTMLEscapeString(shortErrorText(err))))
+			return
+		}
+		_ = a.sendTelegramTextToChat(chatID, "8 组内容发送完成")
 	}()
 }
 
@@ -323,6 +358,178 @@ func (a *App) sendTelegramWindowDemandBundleLocked(windowDays int, chatID any) e
 	return nil
 }
 
+func (a *App) sendTelegramAllGroupsDemandBundleLocked(chatID any) error {
+	const windowDays = 30
+	const sendMode = "command"
+	settings := a.loadSettings()
+
+	webMap := a.webds.loadLatestMap("30d")
+	displayPrice := a.resolveUnifiedDisplayPrice(webMap, 0)
+	monitorReport, modelBands, err := a.buildModelHeatReportBundleForWindow(windowDays, displayPrice)
+	if err != nil {
+		return fmt.Errorf("build 30-day monitor report: %w", err)
+	}
+	monitorBands := buildMonitorHeatBandsFromWebMapAtPrice(webMap, displayPrice)
+	if len(monitorBands) == 0 {
+		monitorBands = modelBands
+	}
+
+	var errs []string
+	var analysisSnapshot AnalysisSnapshot
+	var analysisSnapshotLoaded bool
+	loadAnalysisSnapshot := func() (AnalysisSnapshot, error) {
+		if analysisSnapshotLoaded {
+			return analysisSnapshot, nil
+		}
+		snapshot, err := a.BuildAnalysisSnapshot()
+		if err != nil {
+			return AnalysisSnapshot{}, err
+		}
+		analysisSnapshot = snapshot
+		analysisSnapshotLoaded = true
+		return analysisSnapshot, nil
+	}
+
+	if settings.Group1Enabled {
+		if !webMap.HasData || len(webMap.Points) == 0 {
+			errText := webDataSourceNoDataMessage("30d", webMap.LastError)
+			msg := fmt.Sprintf("数据缺失: %s", errText)
+			a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			webImage, err := a.captureWebDataSourceScreenshotJPEG("30d")
+			if err != nil {
+				msg := fmt.Sprintf("截图失败: %v", err)
+				a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
+				errs = append(errs, msg)
+			} else if err := a.sendTelegramPhotoToChat(chatID, "", webImage); err != nil {
+				msg := fmt.Sprintf("发送失败: %v", err)
+				a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "failed", msg)
+				errs = append(errs, msg)
+			} else {
+				a.recordTelegramSendHistory(sendMode, 1, "webdatasource-30d-image", "success", "")
+			}
+		}
+	}
+
+	if settings.Group2Enabled {
+		monitorImage, err := a.captureMonitorScreenshotJPEG(windowDays)
+		if err != nil {
+			msg := fmt.Sprintf("截图失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "failed", msg)
+			errs = append(errs, msg)
+		} else if err := a.sendTelegramPhotoToChat(chatID, "", monitorImage); err != nil {
+			msg := fmt.Sprintf("发送失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 2, "monitor-30d-image", "success", "")
+		}
+	}
+
+	if settings.Group3Enabled {
+		text := a.buildTelegramThirtyDayTextSafe(monitorReport, monitorBands, webMap)
+		if err := a.sendTelegramTextToChat(chatID, text); err != nil {
+			msg := fmt.Sprintf("发送失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 3, "monitor-30d-text", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 3, "monitor-30d-text", "success", "")
+		}
+	}
+
+	if settings.Group4Enabled {
+		analysisImage, err := a.captureAnalysisScreenshotJPEG()
+		if err != nil {
+			msg := fmt.Sprintf("截图失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 4, "analysis-image", "failed", msg)
+			errs = append(errs, msg)
+		} else if err := a.sendTelegramPhotoToChat(chatID, "", analysisImage); err != nil {
+			msg := fmt.Sprintf("发送失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 4, "analysis-image", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 4, "analysis-image", "success", "")
+		}
+	}
+
+	if settings.Group5Enabled {
+		snapshot, err := loadAnalysisSnapshot()
+		if err != nil {
+			msg := fmt.Sprintf("生成日内分析失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 5, "analysis-text", "failed", msg)
+			errs = append(errs, msg)
+		} else if err := a.sendTelegramTextToChat(chatID, a.buildAnalysisTelegramTextSafe(snapshot)); err != nil {
+			msg := fmt.Sprintf("发送失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 5, "analysis-text", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 5, "analysis-text", "success", "")
+		}
+	}
+
+	if settings.Group6Enabled {
+		structureImage, err := a.captureLiquidationsStructureScreenshotJPEG()
+		if err != nil {
+			msg := fmt.Sprintf("截图失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 6, "liquidations-structure-image", "failed", msg)
+			errs = append(errs, msg)
+		} else if err := a.sendTelegramPhotoToChat(chatID, "", structureImage); err != nil {
+			msg := fmt.Sprintf("发送失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 6, "liquidations-structure-image", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 6, "liquidations-structure-image", "success", "")
+		}
+		if err := a.sendTelegramTextToChat(chatID, a.buildLiquidationPatternQuestionAttachment()); err != nil {
+			msg := fmt.Sprintf("发送失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 6, "liquidations-pattern-text", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 6, "liquidations-pattern-text", "success", "")
+		}
+	}
+
+	if settings.Group7Enabled {
+		bubblesImage, err := a.captureBubblesScreenshotJPEG()
+		if err != nil {
+			msg := fmt.Sprintf("截图失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 7, "bubbles-5m-24h-image", "failed", msg)
+			errs = append(errs, msg)
+		} else if err := a.sendTelegramPhotoToChat(chatID, "", bubblesImage); err != nil {
+			msg := fmt.Sprintf("发送失败: %v", err)
+			a.recordTelegramSendHistory(sendMode, 7, "bubbles-5m-24h-image", "failed", msg)
+			errs = append(errs, msg)
+		} else {
+			a.recordTelegramSendHistory(sendMode, 7, "bubbles-5m-24h-image", "success", "")
+		}
+	}
+
+	if settings.Group8Enabled {
+		if err := a.sendLiquidationSyncAlertDemandToChat(sendMode, chatID); err != nil {
+			errs = append(errs, fmt.Sprintf("liquidations sync alert: %v", err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, " | "))
+	}
+	return nil
+}
+
+func (a *App) sendLiquidationSyncAlertDemandToChat(sendMode string, chatID any) error {
+	summary := a.LiquidationPeriodSummary(LiquidationListOptions{Symbol: defaultSymbol})
+	prev := a.loadLiquidationSyncAlertState()
+	curr := buildLiquidationSyncAlertState(summary)
+	text := a.buildLiquidationSyncAlertText(summary, prev, curr, false)
+	if err := a.sendTelegramTextToChat(chatID, text); err != nil {
+		a.recordTelegramSendHistory(sendMode, 8, "liquidations-sync-alert", "failed", err.Error())
+		return err
+	}
+	a.recordTelegramSendHistory(sendMode, 8, "liquidations-sync-alert", "success", "")
+	return nil
+}
+
 func (a *App) buildTelegramCommandStatusText() string {
 	status := a.webds.loadStatus()
 	lines := []string{
@@ -379,6 +586,11 @@ func isTelegramMenuCommand(text string) bool {
 func isTelegramStatusCommand(text string) bool {
 	cmd, _ := splitTelegramCommand(text)
 	return cmd == "/status"
+}
+
+func isTelegramPullAllCommand(text string) bool {
+	cmd, _ := splitTelegramCommand(text)
+	return cmd == "/pullall"
 }
 
 func parseTelegramPullWindow(text string) (int, bool) {

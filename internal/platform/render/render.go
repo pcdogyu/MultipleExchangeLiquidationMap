@@ -6,31 +6,16 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	texttemplate "text/template"
 
 	sharedtypes "multipleexchangeliquidationmap/internal/shared/types"
 )
 
-type navItem struct {
-	Href  string
-	Label string
-}
-
-var sharedNavItems = []navItem{
-	{Href: "/market-info", Label: "市场信息"},
-	{Href: "/monitor", Label: "雷区监控"},
-	{Href: "/map", Label: "盘口汇总"},
-	{Href: "/liquidations", Label: "强平清算"},
-	{Href: "/bubbles", Label: "气泡图"},
-	{Href: "/webdatasource", Label: "页面数据源"},
-	{Href: "/channel", Label: "消息通道"},
-	{Href: "/analysis", Label: "日内分析"},
-	{Href: "/analysis-backtest", Label: "单因子回测"},
-	{Href: "/analysis-backtest-2fa", Label: "双因子回测"},
-	{Href: "/analysis-backtest-liquidation", Label: "多多空空"},
-}
+const sharedNavTemplateFile = "internal/shared/pages/files/nav.html"
 
 var templateActivePath = map[string]string{
 	"monitor":                       "/monitor",
@@ -52,20 +37,19 @@ var legacyGlobalFooterVersionLoaders = []*regexp.Regexp{
 	regexp.MustCompile(`(?m)^\s*async function loadFooter\(\)\{[^\n]*globalFooter[^\n]*\}\s*$\n?`),
 }
 
-const sharedTopNavStyle = `<style id="shared-top-nav-style">
-#shared-top-nav.nav{height:58px;background:var(--nav, #101827);border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:200}
+const fallbackSharedTopNavTemplate = `<style id="shared-top-nav-style">
+#shared-top-nav.nav{height:58px;background:var(--nav,#101827);border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:200}
 #shared-top-nav .nav-left,#shared-top-nav .nav-right{display:flex;align-items:center;gap:20px}
 #shared-top-nav .nav-left{min-width:0;flex:1}
 #shared-top-nav .nav-right{flex:0 0 auto}
-#shared-top-nav .brand{font-size:18px;font-weight:700;color:var(--navInk, #f6f7fb)}
+#shared-top-nav .brand{font-size:18px;font-weight:700;color:var(--navInk,#f6f7fb);white-space:nowrap}
 #shared-top-nav .menu{min-width:0;flex:1;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
 #shared-top-nav .menu::-webkit-scrollbar{display:none}
 #shared-top-nav .menu a{color:#cdd5e4;text-decoration:none;font-size:15px;margin-right:16px}
 #shared-top-nav .menu a.active{color:#fff;font-weight:700}
-#shared-top-nav .nav-right a,#shared-top-nav .nav-right button.shared-upgrade-button{color:#fff;text-decoration:none;font-size:14px;padding:8px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.18)}
-#shared-top-nav .nav-right button.shared-upgrade-button{background:transparent;font-family:inherit;line-height:1;cursor:pointer}
+#shared-top-nav .nav-right button.shared-upgrade-button{color:#fff;text-decoration:none;font-size:14px;padding:8px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.18);background:transparent;font-family:inherit;line-height:1;cursor:pointer;white-space:nowrap}
 #shared-top-nav .theme-toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px}
-#shared-top-nav .theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,.45);background:transparent;color:var(--navInk, #f6f7fb);cursor:pointer}
+#shared-top-nav .theme-toggle button{height:30px;padding:0 10px;border-radius:999px;border:1px solid rgba(148,163,184,.45);background:transparent;color:var(--navInk,#f6f7fb);cursor:pointer}
 #shared-top-nav .theme-toggle button.label{cursor:default;opacity:.92}
 #shared-top-nav .theme-toggle button.active{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.18);color:#fff}
 .shared-upgrade-modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(15,23,42,.62);z-index:1000;padding:18px}
@@ -76,7 +60,14 @@ const sharedTopNavStyle = `<style id="shared-top-nav-style">
 .shared-upgrade-log{margin:0;padding:14px 16px;min-height:260px;max-height:58vh;overflow:auto;background:rgba(15,23,42,.95);color:#dbeafe;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap}
 .shared-upgrade-foot{padding:10px 16px;border-top:1px solid rgba(148,163,184,.25);font-size:13px;color:var(--muted,#64748b)}
 @media (max-width:980px){#shared-top-nav .menu{display:none}}
-</style>`
+</style>
+<div id="shared-top-nav" class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu"><a href="/market-info"{{if eq .ActivePath "/market-info"}} class="active"{{end}}>市场信息</a><a href="/monitor"{{if eq .ActivePath "/monitor"}} class="active"{{end}}>雷区监控</a><a href="/map"{{if eq .ActivePath "/map"}} class="active"{{end}}>盘口汇总</a><a href="/liquidations"{{if eq .ActivePath "/liquidations"}} class="active"{{end}}>强平清算</a><a href="/bubbles"{{if eq .ActivePath "/bubbles"}} class="active"{{end}}>气泡图</a><a href="/webdatasource"{{if eq .ActivePath "/webdatasource"}} class="active"{{end}}>页面数据源</a><a href="/channel"{{if eq .ActivePath "/channel"}} class="active"{{end}}>消息通道</a><a href="/analysis"{{if eq .ActivePath "/analysis"}} class="active"{{end}}>日内分析</a><a href="/analysis-backtest"{{if eq .ActivePath "/analysis-backtest"}} class="active"{{end}}>单因子回测</a><a href="/analysis-backtest-2fa"{{if eq .ActivePath "/analysis-backtest-2fa"}} class="active"{{end}}>双因子回测</a><a href="/analysis-backtest-liquidation"{{if eq .ActivePath "/analysis-backtest-liquidation"}} class="active"{{end}}>多多空空</a></div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" type="button" onclick="if(window.setTheme)window.setTheme('dark')">深色</button><button id="themeLight" type="button" onclick="if(window.setTheme)window.setTheme('light')">浅色</button></div><button type="button" class="upgrade shared-upgrade-button" onclick="return sharedDoUpgrade(event)">升级</button></div></div>
+<div id="sharedUpgradeModal" class="shared-upgrade-modal" aria-hidden="true"><div class="shared-upgrade-panel" role="dialog" aria-modal="true" aria-labelledby="sharedUpgradeTitle"><div class="shared-upgrade-head"><span id="sharedUpgradeTitle">系统升级</span><button type="button" onclick="sharedCloseUpgradeModal()" aria-label="关闭">&times;</button></div><pre id="sharedUpgradeLog" class="shared-upgrade-log"></pre><div id="sharedUpgradeFoot" class="shared-upgrade-foot">等待触发</div></div></div>
+<script id="shared-upgrade-script">
+async function sharedOpenUpgradeModal(){const modal=document.getElementById('sharedUpgradeModal');const logEl=document.getElementById('sharedUpgradeLog');const foot=document.getElementById('sharedUpgradeFoot');if(!modal||!logEl||!foot)return;modal.classList.add('show');modal.setAttribute('aria-hidden','false');logEl.textContent='';foot.textContent='正在触发升级...';let data={};try{const r=await fetch('/api/upgrade/pull',{method:'POST'});data=await r.json().catch(()=>({}));if(!r.ok||data.error){logEl.textContent=String(data.output||'');foot.textContent='触发失败: '+String(data.error||('HTTP '+r.status));return;}}catch(err){foot.textContent='触发失败: '+String(err&&err.message?err.message:err);return;}foot.textContent='已触发，正在执行...';let stable=0;for(let i=0;i<180;i++){await new Promise(resolve=>setTimeout(resolve,1000));const progress=await fetch('/api/upgrade/progress').then(r=>r.json()).catch(()=>null);if(!progress)continue;logEl.textContent=String(progress.log||'');logEl.scrollTop=logEl.scrollHeight;if(progress.done){foot.textContent=String(progress.exit_code||'')==='0'?'升级完成并已重启':'升级完成，退出码 '+String(progress.exit_code||'?');return;}if(!progress.running)stable++;else stable=0;if(stable>=3){foot.textContent='升级进程已结束，但状态未知，请检查日志';return;}}foot.textContent='升级仍在进行，请稍后再看';}
+function sharedCloseUpgradeModal(){const modal=document.getElementById('sharedUpgradeModal');if(!modal)return;modal.classList.remove('show');modal.setAttribute('aria-hidden','true');}
+function sharedDoUpgrade(event){if(event)event.preventDefault();sharedOpenUpgradeModal();return false;}
+</script>`
 
 const sharedGlobalFooterStyle = `<style id="shared-global-footer-style">
 #shared-global-footer.footer{margin:18px auto 0 auto;max-width:1200px;padding:10px 12px;font-size:12px;color:var(--muted, #64748b);text-align:center}
@@ -104,24 +95,44 @@ func sharedGlobalFooter() string {
 }
 
 func sharedTopNav(templateName string) string {
-	activePath := templateActivePath[templateName]
-	var menu strings.Builder
-	for _, item := range sharedNavItems {
-		active := ""
-		if item.Href == activePath {
-			active = ` class="active"`
-		}
-		menu.WriteString(`<a href="`)
-		menu.WriteString(template.HTMLEscapeString(item.Href))
-		menu.WriteString(`"`)
-		menu.WriteString(active)
-		menu.WriteString(`>`)
-		menu.WriteString(template.HTMLEscapeString(item.Label))
-		menu.WriteString(`</a>`)
+	body := readSharedNavTemplate()
+	if rendered, ok := renderSharedNavTemplate(body, templateName); ok {
+		return rendered
 	}
-	return sharedTopNavStyle + `<div id="shared-top-nav" class="nav"><div class="nav-left"><div class="brand">ETH Liquidation Map</div><div class="menu">` +
-		menu.String() +
-		`</div></div><div class="nav-right"><div class="theme-toggle"><button class="label" type="button">主题</button><button id="themeDark" type="button" onclick="if(window.setTheme)window.setTheme('dark')">深色</button><button id="themeLight" type="button" onclick="if(window.setTheme)window.setTheme('light')">浅色</button></div><button type="button" class="upgrade shared-upgrade-button" onclick="return sharedDoUpgrade(event)">升级</button></div></div>`
+	rendered, _ := renderSharedNavTemplate(fallbackSharedTopNavTemplate, templateName)
+	return rendered
+}
+
+func readSharedNavTemplate() string {
+	for _, filename := range []string{sharedNavTemplateFile, sharedNavTemplateSourcePath()} {
+		if strings.TrimSpace(filename) == "" {
+			continue
+		}
+		if raw, err := os.ReadFile(filename); err == nil {
+			return string(raw)
+		}
+	}
+	return fallbackSharedTopNavTemplate
+}
+
+func sharedNavTemplateSourcePath() string {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		return ""
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", "shared", "pages", "files", "nav.html"))
+}
+
+func renderSharedNavTemplate(body, templateName string) (string, bool) {
+	tpl, err := template.New("shared_nav").Parse(body)
+	if err != nil {
+		return "", false
+	}
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, map[string]string{"ActivePath": templateActivePath[templateName]}); err != nil {
+		return "", false
+	}
+	return buf.String(), true
 }
 
 const sharedUpgradeModal = `<div id="sharedUpgradeModal" class="shared-upgrade-modal" aria-hidden="true"><div class="shared-upgrade-panel" role="dialog" aria-modal="true" aria-labelledby="sharedUpgradeTitle"><div class="shared-upgrade-head"><span id="sharedUpgradeTitle">系统升级</span><button type="button" onclick="sharedCloseUpgradeModal()" aria-label="关闭">&times;</button></div><pre id="sharedUpgradeLog" class="shared-upgrade-log"></pre><div id="sharedUpgradeFoot" class="shared-upgrade-foot">等待触发</div></div></div>`

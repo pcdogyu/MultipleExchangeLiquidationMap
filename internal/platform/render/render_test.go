@@ -66,6 +66,12 @@ func TestHTMLPageUsesSharedChrome(t *testing.T) {
 	if strings.Count(got, `id="sharedUpgradeModal"`) != 1 {
 		t.Fatalf("expected one shared upgrade modal, got %q", got)
 	}
+	if !strings.Contains(got, `onclick="return sharedDoOpenLogs(event)"`) || !strings.Contains(got, `/api/logs`) {
+		t.Fatalf("expected shared log control to load runtime logs, got %q", got)
+	}
+	if strings.Count(got, `id="sharedLogModal"`) != 1 {
+		t.Fatalf("expected one shared log modal, got %q", got)
+	}
 }
 
 func TestHTMLPageRemovesLegacyLoadFooterWithoutBreakingPageLoad(t *testing.T) {

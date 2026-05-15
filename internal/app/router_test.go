@@ -92,6 +92,7 @@ func TestNewRouterRegistersCompatibilityAPIs(t *testing.T) {
 		{http.MethodGet, "/api/channel/history"},
 		{http.MethodGet, "/api/webdatasource/status"},
 		{http.MethodGet, "/api/version"},
+		{http.MethodGet, "/api/logs"},
 	}
 
 	for _, tc := range cases {

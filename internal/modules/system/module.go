@@ -11,4 +11,5 @@ func Mount(mux *http.ServeMux, debug bool) {
 	mux.HandleFunc("/api/upgrade/pull", rt.HandleUpgradePull)
 	mux.HandleFunc("/api/upgrade/progress", rt.HandleUpgradeProgress)
 	mux.HandleFunc("/api/version", rt.HandleVersion)
+	mux.HandleFunc("/api/logs", rt.HandleLogs)
 }
