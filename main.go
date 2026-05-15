@@ -56,6 +56,12 @@ const (
 	modelAlgoRev int64 = 3
 )
 
+var (
+	versionBranch     = ""
+	versionCommitID   = ""
+	versionCommitTime = ""
+)
+
 var bandSizes = []int{10, 20, 30, 40, 50, 60, 80, 100, 125, 150, 175, 200, 250, 300, 350, 400}
 
 type MarketState struct {
@@ -2319,14 +2325,36 @@ func (a *App) handleVersion(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	branchOut, _ := exec.Command("bash", "-lc", "git rev-parse --abbrev-ref HEAD 2>/dev/null || true").CombinedOutput()
-	commitOut, _ := exec.Command("bash", "-lc", "git rev-parse --short HEAD 2>/dev/null || true").CombinedOutput()
-	timeOut, _ := exec.Command("bash", "-lc", "git show -s --format=%ci HEAD 2>/dev/null || true").CombinedOutput()
+	branch, commitID, commitTime := buildVersionInfo()
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"branch":      strings.TrimSpace(string(branchOut)),
-		"commit_id":   strings.TrimSpace(string(commitOut)),
-		"commit_time": strings.TrimSpace(string(timeOut)),
+		"branch":      branch,
+		"commit_id":   commitID,
+		"commit_time": commitTime,
 	})
+}
+
+func buildVersionInfo() (string, string, string) {
+	branch := strings.TrimSpace(versionBranch)
+	commitID := strings.TrimSpace(versionCommitID)
+	commitTime := strings.TrimSpace(versionCommitTime)
+	if branch == "" {
+		branch = gitOutput("rev-parse", "--abbrev-ref", "HEAD")
+	}
+	if commitID == "" {
+		commitID = gitOutput("rev-parse", "--short", "HEAD")
+	}
+	if commitTime == "" {
+		commitTime = gitOutput("show", "-s", "--format=%ci", "HEAD")
+	}
+	return branch, commitID, commitTime
+}
+
+func gitOutput(args ...string) string {
+	out, err := exec.Command("git", args...).CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func (a *App) handlePriceEvents(w http.ResponseWriter, r *http.Request) {
