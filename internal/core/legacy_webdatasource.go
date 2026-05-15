@@ -234,33 +234,53 @@ func (m *WebDataSourceManager) nextAutoRunTS(cfg WebDataSourceSettings, now time
 }
 
 func (m *WebDataSourceManager) triggerRun(parent context.Context, windowDays *int) (bool, error) {
-	m.mu.Lock()
-	if m.running {
-		m.mu.Unlock()
-		return false, errors.New("webdatasource run already in progress")
+	if err := m.beginRun(); err != nil {
+		return false, err
 	}
-	m.cleanupStaleRunningRuns("run interrupted before completion")
-	m.running = true
-	m.mu.Unlock()
-
 	go func() {
-		defer func() {
-			m.mu.Lock()
-			m.running = false
-			m.mu.Unlock()
-		}()
-		cfg := m.loadSettings()
-		timeout := time.Duration(cfg.TimeoutSec) * time.Second
-		if timeout <= 0 {
-			timeout = defaultWebDataSourceTimeoutSec * time.Second
-		}
-		ctx, cancel := context.WithTimeout(parent, timeout)
-		defer cancel()
-		if err := m.runOnce(ctx, windowDays); err != nil {
+		defer m.endRun()
+		if err := m.runAfterStart(parent, windowDays); err != nil {
 			log.Printf("webdatasource run failed: %v", err)
 		}
 	}()
 	return true, nil
+}
+
+func (m *WebDataSourceManager) runSync(parent context.Context, windowDays *int) error {
+	if err := m.beginRun(); err != nil {
+		return err
+	}
+	defer m.endRun()
+	return m.runAfterStart(parent, windowDays)
+}
+
+func (m *WebDataSourceManager) beginRun() error {
+	m.mu.Lock()
+	if m.running {
+		m.mu.Unlock()
+		return errors.New("webdatasource run already in progress")
+	}
+	m.cleanupStaleRunningRuns("run interrupted before completion")
+	m.running = true
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *WebDataSourceManager) endRun() {
+	m.mu.Lock()
+	m.running = false
+	m.mu.Unlock()
+}
+
+func (m *WebDataSourceManager) runAfterStart(parent context.Context, windowDays *int) error {
+	cfg := m.loadSettings()
+	timeout := time.Duration(cfg.TimeoutSec) * time.Second
+	if timeout <= 0 {
+		timeout = defaultWebDataSourceTimeoutSec * time.Second
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	return m.runOnce(ctx, windowDays)
 }
 
 func (m *WebDataSourceManager) triggerInit(parent context.Context) (bool, error) {
