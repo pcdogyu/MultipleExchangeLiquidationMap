@@ -12,6 +12,7 @@ rem If this host cannot reach api.telegram.org directly, point this to a private
 rem set "TELEGRAM_API_BASE_URL=https://your-telegram-bot-api.example.com"
 rem Set BUILD=1 to run tests before launching.
 
+call :pullLatestCode
 call :loadVersionInfo
 
 echo Checking port %APP_PORT%...
@@ -62,6 +63,17 @@ echo [4/4] Starting in debug mode: DEBUG=%DEBUG% DEBUG_LOG=%DEBUG_LOG%
 "%EXE%"
 if errorlevel 1 goto fail
 
+exit /b 0
+
+:pullLatestCode
+where git >nul 2>nul
+if errorlevel 1 (
+  echo Git was not found in PATH; cannot pull latest code.
+  goto fail
+)
+echo [0/4] Pulling latest code with git pull...
+git pull --ff-only
+if errorlevel 1 goto fail
 exit /b 0
 
 :loadVersionInfo
