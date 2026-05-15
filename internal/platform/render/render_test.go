@@ -57,6 +57,15 @@ func TestHTMLPageUsesSharedChrome(t *testing.T) {
 	if !strings.Contains(got, `<a href="/analysis-backtest" class="active">单因子回测</a>`) {
 		t.Fatalf("expected active analysis backtest nav item, got %q", got)
 	}
+	if strings.Contains(got, `href="/config" class="upgrade"`) {
+		t.Fatalf("expected upgrade control to avoid config navigation, got %q", got)
+	}
+	if !strings.Contains(got, `onclick="return sharedDoUpgrade(event)"`) || !strings.Contains(got, `/api/upgrade/pull`) {
+		t.Fatalf("expected shared upgrade control to trigger upgrade API, got %q", got)
+	}
+	if strings.Count(got, `id="sharedUpgradeModal"`) != 1 {
+		t.Fatalf("expected one shared upgrade modal, got %q", got)
+	}
 }
 
 func TestHTMLPageRemovesLegacyLoadFooterWithoutBreakingPageLoad(t *testing.T) {
