@@ -2,11 +2,13 @@ package runtime
 
 import (
 	"bufio"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	stdruntime "runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -173,6 +175,16 @@ func (m *Manager) HandleUpgradePull(w http.ResponseWriter, r *http.Request) {
 		httpx.MethodNotAllowed(w)
 		return
 	}
+	if stdruntime.GOOS == "windows" {
+		if err := m.queueWindowsUpgrade(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"output": "upgrade queued; running run.bat",
+		})
+		return
+	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"output": "upgrade queued; will restart liqmap.service",
 	})
@@ -190,6 +202,10 @@ func (m *Manager) HandleUpgradeProgress(w http.ResponseWriter, r *http.Request) 
 		httpx.MethodNotAllowed(w)
 		return
 	}
+	if stdruntime.GOOS == "windows" {
+		m.handleWindowsUpgradeProgress(w)
+		return
+	}
 	logOut, _ := m.run("bash", "-lc", "tail -n 260 /tmp/liqmap-upgrade.log 2>/dev/null || true")
 	runningOut, _ := m.run("bash", "-lc", "unit=$(cat /tmp/liqmap-upgrade.unit 2>/dev/null || true); if [ -n \"$unit\" ] && systemctl is-active --quiet \"$unit\"; then echo 1; else echo 0; fi")
 	exitOut, _ := m.run("bash", "-lc", "cat /tmp/liqmap-upgrade.exit 2>/dev/null || true")
@@ -201,6 +217,100 @@ func (m *Manager) HandleUpgradeProgress(w http.ResponseWriter, r *http.Request) 
 		"exit_code": exitCode,
 		"log":       string(logOut),
 	})
+}
+
+func (m *Manager) queueWindowsUpgrade() error {
+	logPath := upgradeStatePath("liqmap-upgrade.log")
+	exitPath := upgradeStatePath("liqmap-upgrade.exit")
+	wrapperPath := upgradeStatePath("liqmap-upgrade-run.bat")
+	repoDir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return err
+	}
+	_ = os.Remove(exitPath)
+	_ = os.Remove(logPath)
+	if err := os.WriteFile(logPath, []byte("[upgrade queued]\n"), 0o644); err != nil {
+		return err
+	}
+	script := strings.Join([]string{
+		"@echo off",
+		"setlocal",
+		"cd /d " + quoteBatchArg(repoDir),
+		"echo [upgrade start] %date% %time% > " + quoteBatchArg(logPath),
+		"echo [working dir] %CD% >> " + quoteBatchArg(logPath),
+		"echo [run.bat] call run.bat >> " + quoteBatchArg(logPath),
+		"call run.bat >> " + quoteBatchArg(logPath) + " 2>&1",
+		"set \"EC=%ERRORLEVEL%\"",
+		"echo [upgrade exit] %EC% >> " + quoteBatchArg(logPath),
+		"echo %EC% > " + quoteBatchArg(exitPath),
+		"exit /b %EC%",
+		"",
+	}, "\r\n")
+	if err := os.WriteFile(wrapperPath, []byte(script), 0o644); err != nil {
+		return err
+	}
+	_, err = m.run("cmd", "/d", "/s", "/c", "start", "\"\"", "/min", wrapperPath)
+	return err
+}
+
+func (m *Manager) handleWindowsUpgradeProgress(w http.ResponseWriter) {
+	logPath := upgradeStatePath("liqmap-upgrade.log")
+	exitPath := upgradeStatePath("liqmap-upgrade.exit")
+	logOut := tailTextFile(logPath, 260)
+	exitOut := strings.TrimSpace(readTextFile(exitPath))
+	_, logErr := os.Stat(logPath)
+	_, exitErr := os.Stat(exitPath)
+	running := logErr == nil && os.IsNotExist(exitErr)
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"running":   running,
+		"done":      exitOut != "",
+		"exit_code": exitOut,
+		"log":       logOut,
+	})
+}
+
+func upgradeStatePath(name string) string {
+	return filepath.Join(os.TempDir(), name)
+}
+
+func quoteBatchArg(value string) string {
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+}
+
+func readTextFile(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func tailTextFile(path string, maxLines int) string {
+	if maxLines <= 0 {
+		maxLines = 260
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+		if len(lines) > maxLines {
+			copy(lines, lines[len(lines)-maxLines:])
+			lines = lines[:maxLines]
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Sprintf("read upgrade log failed: %v", err)
+	}
+	return strings.Join(lines, "\n")
 }
 
 type runtimeLogRow struct {
