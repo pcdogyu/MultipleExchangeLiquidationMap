@@ -50,6 +50,50 @@ func TestHandleVersionReturnsGitMetadata(t *testing.T) {
 	}
 }
 
+func TestHandleVersionFallsBackToGitC(t *testing.T) {
+	var sawGitC bool
+	m := &Manager{
+		run: func(name string, args ...string) ([]byte, error) {
+			cmd := strings.Join(append([]string{name}, args...), " ")
+			if strings.Contains(cmd, "git -C ") {
+				sawGitC = true
+			}
+			switch {
+			case !strings.Contains(cmd, "git -C "):
+				return nil, assertAnError{}
+			case strings.Contains(cmd, "abbrev-ref HEAD"):
+				return []byte("golangv2\n"), nil
+			case strings.Contains(cmd, "rev-parse --short HEAD"):
+				return []byte("def4567\n"), nil
+			case strings.Contains(cmd, "show -s --format=%ci HEAD"):
+				return []byte("2026-05-15 11:19:14 +0800\n"), nil
+			default:
+				t.Fatalf("unexpected command: %s", cmd)
+				return nil, nil
+			}
+		},
+		async: func(fn func()) { fn() },
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/version", nil)
+	rec := httptest.NewRecorder()
+	m.HandleVersion(rec, req)
+	if !sawGitC {
+		t.Fatal("expected git -C fallback to be used")
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if got := body["commit_id"]; got != "def4567" {
+		t.Fatalf("expected commit_id def4567, got %v", got)
+	}
+}
+
+type assertAnError struct{}
+
+func (assertAnError) Error() string { return "expected error" }
+
 func TestHandleUpgradeProgressBuildsResponse(t *testing.T) {
 	m := &Manager{
 		run: func(name string, args ...string) ([]byte, error) {
