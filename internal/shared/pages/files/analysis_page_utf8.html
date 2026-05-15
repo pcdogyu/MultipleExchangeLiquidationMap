@@ -119,7 +119,7 @@ h1{margin:10px 0 10px;font-size:34px;line-height:1.15}
       <button id="themeDark" type="button" onclick="setTheme('dark')">深色</button>
       <button id="themeLight" type="button" onclick="setTheme('light')">浅色</button>
     </div>
-    <a href="/config">升级</a>
+    <a href="#" class="upgrade" onclick="return doUpgrade(event)">升级</a>
   </div>
 </div>
 <div class="wrap" id="analysisCapture">
@@ -398,6 +398,28 @@ async function load(){
     ['±100 命中率', fmtPct((Number(b.hit_100_rate||0))*100)],
     ['平均最大偏移', fmtPrice(b.avg_max_move)]
   ].map(it=>'<div class="rate"><div class="k">'+it[0]+'</div><div class="v">'+it[1]+'</div></div>').join('');
+}
+
+async function doUpgrade(event){
+  if(event)event.preventDefault();
+  const link=event&&event.currentTarget?event.currentTarget:null;
+  const oldText=link?link.textContent:'';
+  if(link)link.textContent='升级中...';
+  try{
+    const r=await fetch('/api/upgrade/pull',{method:'POST'});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||d.error){
+      alert('触发失败: '+String(d.error||('HTTP '+r.status)));
+      return false;
+    }
+    alert('已触发升级，请稍后刷新页面查看版本信息');
+    return false;
+  }catch(err){
+    alert('触发失败: '+String(err&&err.message?err.message:err));
+    return false;
+  }finally{
+    if(link)link.textContent=oldText||'升级';
+  }
 }
 
 initTheme();

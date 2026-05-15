@@ -67,7 +67,7 @@ th{color:var(--muted);font-weight:600}
       <button id="themeDark" type="button" onclick="setTheme('dark')">深色</button>
       <button id="themeLight" type="button" onclick="setTheme('light')">浅色</button>
     </div>
-    <a href="/config" class="nav-upgrade">升级</a>
+    <a href="#" class="nav-upgrade upgrade" onclick="return doUpgrade(event)">升级</a>
     <a href="/config">调整参数</a>
   </div>
 </div>
@@ -325,6 +325,7 @@ async function save(){
   msg.textContent='保存失败: '+await r.text();
 }
 async function testTelegram(){const msg=document.getElementById('msg');msg.textContent='正在触发测试发送...';const r=await fetch('/api/channel/test',{method:'POST'});const text=String(await r.text().catch(()=>'' )||'').trim();if(r.ok){msg.textContent=text==='already running'?'已有测试发送进行中，请稍后查看下方历史':'测试发送已触发，约 30-60 秒后查看下方历史';await loadHistory();setTimeout(loadHistory,5000);setTimeout(loadHistory,20000);return;}msg.textContent='测试发送失败: '+(text||('HTTP '+r.status));}
+async function doUpgrade(event){if(event)event.preventDefault();const link=event&&event.currentTarget?event.currentTarget:null;const oldText=link?link.textContent:'';if(link)link.textContent='升级中...';try{const r=await fetch('/api/upgrade/pull',{method:'POST'});const d=await r.json().catch(()=>({}));if(!r.ok||d.error){alert('触发失败: '+String(d.error||('HTTP '+r.status)));return false;}alert('已触发升级，请稍后刷新页面查看版本信息');return false;}catch(err){alert('触发失败: '+String(err&&err.message?err.message:err));return false;}finally{if(link)link.textContent=oldText||'升级';}}
 async function saveLegacy(){
   const msg=document.getElementById('msg');
   msg.textContent='Saving...';

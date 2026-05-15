@@ -108,7 +108,7 @@ th{color:var(--muted);font-weight:600}
       <button id="themeDark" type="button" onclick="setTheme('dark')">&#28145;&#33394;</button>
       <button id="themeLight" type="button" onclick="setTheme('light')">&#27973;&#33394;</button>
     </div>
-    <a href="/config">&#21319;&#32423;</a>
+    <a href="#" class="upgrade" onclick="return doUpgrade(event)">&#21319;&#32423;</a>
   </div>
 </div>
 
@@ -949,6 +949,28 @@ function bindChartInteractions(){
     updateChartMeta();
     draw();
   });
+}
+
+async function doUpgrade(event){
+  if(event)event.preventDefault();
+  const link=event&&event.currentTarget?event.currentTarget:null;
+  const oldText=link?link.textContent:'';
+  if(link)link.textContent='升级中...';
+  try{
+    const r=await fetch('/api/upgrade/pull',{method:'POST'});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||d.error){
+      alert('触发失败: '+String(d.error||('HTTP '+r.status)));
+      return false;
+    }
+    alert('已触发升级，请稍后刷新页面查看版本信息');
+    return false;
+  }catch(err){
+    alert('触发失败: '+String(err&&err.message?err.message:err));
+    return false;
+  }finally{
+    if(link)link.textContent=oldText||'升级';
+  }
 }
 
 initTheme();
