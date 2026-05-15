@@ -2,6 +2,8 @@ package liqmap
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strconv"
 )
 
@@ -35,13 +37,28 @@ func (a *App) UpdateWebDataSourceSettings(enabled *bool, intervalMin, timeoutSec
 	if timeoutSec > 0 {
 		_ = a.webds.setSetting("timeout_sec", strconv.Itoa(timeoutSec))
 	}
-	_ = a.webds.setSetting("chrome_path", normalizeQuotedInput(chromePath))
-	if normalizeQuotedInput(profileDir) != "" {
-		_ = a.webds.setSetting("profile_dir", normalizeQuotedInput(profileDir))
+	_ = a.webds.setSetting("chrome_path", normalizePathInput(chromePath, false))
+	normalizedProfile := normalizePathInput(profileDir, true)
+	if normalizedProfile != "" {
+		_ = os.MkdirAll(normalizedProfile, 0o755)
 	}
+	_ = a.webds.setSetting("profile_dir", normalizedProfile)
 	return a.webds.loadStatus()
 }
 
 func (a *App) WebDataSourceMap(window string) WebDataSourceMapResponse {
 	return a.webds.loadLatestMap(window)
+}
+
+func normalizePathInput(raw string, makeAbs bool) string {
+	path := normalizeQuotedInput(raw)
+	if path == "" {
+		return ""
+	}
+	if makeAbs && !filepath.IsAbs(path) {
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
+	}
+	return filepath.Clean(path)
 }
