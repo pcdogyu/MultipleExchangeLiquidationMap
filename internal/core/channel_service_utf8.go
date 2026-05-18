@@ -64,7 +64,7 @@ func (a *App) listChannelPlannedPushesUTF8(hours int) []ChannelPlannedPushRow {
 	webDetail := buildWebDataSourceImmediatePushDetail(webIntervalMin, previewOnly)
 	cursor = now
 	for !cursor.After(limit) {
-		captureTS := nextScheduledWebDataSourceCaptureTS(cursor, webIntervalMin)
+		captureTS := nextScheduledWebDataSourceCaptureTSForInterval(cursor, webIntervalMin)
 		captureAt := time.UnixMilli(captureTS)
 		if captureAt.After(limit) {
 			break

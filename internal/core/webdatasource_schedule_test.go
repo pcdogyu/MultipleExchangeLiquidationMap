@@ -9,8 +9,8 @@ import (
 func TestWebDataSourceScheduleUsesConfiguredFiveMinuteSlots(t *testing.T) {
 	now := time.Date(2026, 5, 15, 13, 33, 20, 0, time.Local)
 
-	latest := time.UnixMilli(latestScheduledWebDataSourceCaptureTS(now, 5))
-	next := time.UnixMilli(nextScheduledWebDataSourceCaptureTS(now, 5))
+	latest := time.UnixMilli(latestScheduledWebDataSourceCaptureTSForInterval(now, 5))
+	next := time.UnixMilli(nextScheduledWebDataSourceCaptureTSForInterval(now, 5))
 
 	if latest.Format("15:04:05") != "13:30:00" {
 		t.Fatalf("expected latest 13:30:00, got %s", latest.Format("15:04:05"))
@@ -23,8 +23,8 @@ func TestWebDataSourceScheduleUsesConfiguredFiveMinuteSlots(t *testing.T) {
 func TestWebDataSourceScheduleUsesConfiguredInterval(t *testing.T) {
 	now := time.Date(2026, 5, 15, 13, 33, 20, 0, time.Local)
 
-	latest := time.UnixMilli(latestScheduledWebDataSourceCaptureTS(now, 15))
-	next := time.UnixMilli(nextScheduledWebDataSourceCaptureTS(now, 15))
+	latest := time.UnixMilli(latestScheduledWebDataSourceCaptureTSForInterval(now, 15))
+	next := time.UnixMilli(nextScheduledWebDataSourceCaptureTSForInterval(now, 15))
 
 	if latest.Format("15:04:05") != "13:30:00" {
 		t.Fatalf("expected latest 13:30:00, got %s", latest.Format("15:04:05"))
@@ -34,21 +34,21 @@ func TestWebDataSourceScheduleUsesConfiguredInterval(t *testing.T) {
 	}
 }
 
-func TestWebDataSourceScheduleDefaultsToFiveMinutes(t *testing.T) {
+func TestWebDataSourceScheduleDefaultsToSixtyMinutes(t *testing.T) {
 	now := time.Date(2026, 5, 15, 13, 31, 0, 0, time.Local)
 
-	next := time.UnixMilli(nextScheduledWebDataSourceCaptureTS(now, 0))
+	next := time.UnixMilli(nextScheduledWebDataSourceCaptureTSForInterval(now, 0))
 
-	if next.Format("15:04:05") != "13:35:00" {
-		t.Fatalf("expected default next 13:35:00, got %s", next.Format("15:04:05"))
+	if next.Format("15:04:05") != "14:00:00" {
+		t.Fatalf("expected default next 14:00:00, got %s", next.Format("15:04:05"))
 	}
 }
 
 func TestWebDataSourceScheduleUsesConfiguredTenMinuteSlots(t *testing.T) {
 	now := time.Date(2026, 5, 15, 13, 55, 36, 0, time.Local)
 
-	latest := time.UnixMilli(latestScheduledWebDataSourceCaptureTS(now, 10))
-	next := time.UnixMilli(nextScheduledWebDataSourceCaptureTS(now, 10))
+	latest := time.UnixMilli(latestScheduledWebDataSourceCaptureTSForInterval(now, 10))
+	next := time.UnixMilli(nextScheduledWebDataSourceCaptureTSForInterval(now, 10))
 
 	if latest.Format("15:04:05") != "13:50:00" {
 		t.Fatalf("expected latest 13:50:00, got %s", latest.Format("15:04:05"))

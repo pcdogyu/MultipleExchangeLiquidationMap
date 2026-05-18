@@ -26,6 +26,13 @@ const (
 	telegramRetryDelay        = 1500 * time.Millisecond
 )
 
+func normalizeWebDataSourceIntervalMin(intervalMin int) int {
+	if intervalMin <= 0 {
+		return defaultWebDataSourceIntervalMin
+	}
+	return intervalMin
+}
+
 func (a *App) nextTelegramAutoNotifyTS(now time.Time) (int64, bool) {
 	settings := a.loadSettings()
 	if !settings.NotifyEnabled {
@@ -45,48 +52,39 @@ func (a *App) nextTelegramAutoNotifyTS(now time.Time) (int64, bool) {
 	return baseTS + int64(intervalMin)*60*1000, true
 }
 
-func normalizeWebDataSourceIntervalMin(intervalMin int) int {
-	if intervalMin <= 0 {
-		return defaultWebDataSourceIntervalMin
-	}
-	return intervalMin
+func latestScheduledWebDataSourceCaptureTS(now time.Time) int64 {
+	return latestScheduledWebDataSourceCaptureTSForInterval(now, defaultWebDataSourceIntervalMin)
 }
 
-func latestScheduledWebDataSourceCaptureTS(now time.Time, intervalMin int) int64 {
-	intervalMin = normalizeWebDataSourceIntervalMin(intervalMin)
-	slot := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, now.Location())
-	minute := now.Minute()
-	if intervalMin < 60 {
-		return slot.Add(time.Duration((minute/intervalMin)*intervalMin) * time.Minute).UnixMilli()
+func latestScheduledWebDataSourceCaptureTSForInterval(now time.Time, intervalMin int) int64 {
+	interval := time.Duration(normalizeWebDataSourceIntervalMin(intervalMin)) * time.Minute
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	elapsed := now.Sub(dayStart)
+	if elapsed < 0 {
+		return dayStart.UnixMilli()
 	}
-	interval := time.Duration(intervalMin) * time.Minute
-	return now.Truncate(interval).UnixMilli()
+	return dayStart.Add(elapsed / interval * interval).UnixMilli()
 }
 
-func nextScheduledWebDataSourceCaptureTS(now time.Time, intervalMin int) int64 {
-	intervalMin = normalizeWebDataSourceIntervalMin(intervalMin)
-	slot := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, now.Location())
-	minute := now.Minute()
-	second := now.Second()
-	nano := now.Nanosecond()
-	if intervalMin < 60 {
-		for m := 0; m < 60; m += intervalMin {
-			if minute < m || (minute == m && second == 0 && nano == 0) {
-				return slot.Add(time.Duration(m) * time.Minute).UnixMilli()
-			}
-		}
-		return slot.Add(time.Hour).UnixMilli()
-	}
-	interval := time.Duration(intervalMin) * time.Minute
-	current := now.Truncate(interval)
-	if now.Equal(current) {
-		return current.UnixMilli()
-	}
-	return current.Add(interval).UnixMilli()
+func nextScheduledWebDataSourceCaptureTS(now time.Time) int64 {
+	return nextScheduledWebDataSourceCaptureTSForInterval(now, defaultWebDataSourceIntervalMin)
 }
 
-func (a *App) nextWebDataSourceCaptureTS(now time.Time, intervalMin int) (int64, bool) {
-	return nextScheduledWebDataSourceCaptureTS(now, intervalMin), true
+func nextScheduledWebDataSourceCaptureTSForInterval(now time.Time, intervalMin int) int64 {
+	interval := time.Duration(normalizeWebDataSourceIntervalMin(intervalMin)) * time.Minute
+	latest := time.UnixMilli(latestScheduledWebDataSourceCaptureTSForInterval(now, intervalMin))
+	if !now.After(latest) {
+		return latest.UnixMilli()
+	}
+	return latest.Add(interval).UnixMilli()
+}
+
+func (a *App) nextWebDataSourceCaptureTS(now time.Time) (int64, bool) {
+	intervalMin := defaultWebDataSourceIntervalMin
+	if a.webds != nil {
+		intervalMin = a.webds.loadSettings().IntervalMin
+	}
+	return nextScheduledWebDataSourceCaptureTSForInterval(now, intervalMin), true
 }
 
 func (a *App) loadSettings() ChannelSettings {
