@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	db, err := sql.Open("sqlite", "liqmap.db")
+	db, err := sql.Open("sqlite", "data/liqmap.db")
 	if err != nil {
 		log.Fatal(err)
 	}

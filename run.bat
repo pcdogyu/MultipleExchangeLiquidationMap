@@ -1,10 +1,12 @@
 @echo off
 setlocal
 
+if /I "%~1"=="prune" goto prune
+
 set "DEBUG=1"
 set "DEBUG_LOG=log/server.log"
 set "APP_PORT=80"
-set "DB_PATH=liqmap.db"
+set "DB_PATH=data\liqmap.db"
 set "TELEGRAM_PHOTO_TIMEOUT_SEC=120"
 set "EXE=multipleexchangeliquidationmap.exe"
 set "NEW_EXE=multipleexchangeliquidationmap.new.exe"
@@ -89,6 +91,17 @@ for /f "usebackq delims=" %%A in (`git show -s --format^=%%ci HEAD 2^>nul`) do s
 if "%VERSION_BRANCH%"=="" set "VERSION_BRANCH=-"
 if "%VERSION_COMMIT%"=="" set "VERSION_COMMIT=-"
 if "%VERSION_COMMIT_TIME%"=="" set "VERSION_COMMIT_TIME=-"
+exit /b 0
+
+:prune
+set "PRUNE_SCRIPT=%~dp0data\prune-liqmap-retention.ps1"
+if not exist "%PRUNE_SCRIPT%" (
+  echo Prune script not found: %PRUNE_SCRIPT%
+  goto fail
+)
+echo Running database prune script...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PRUNE_SCRIPT%"
+if errorlevel 1 goto fail
 exit /b 0
 
 :fail

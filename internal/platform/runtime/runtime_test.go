@@ -10,6 +10,15 @@ import (
 	"testing"
 )
 
+func withRuntimeGOOS(t *testing.T, value string) {
+	t.Helper()
+	prev := runtimeGOOS
+	runtimeGOOS = value
+	t.Cleanup(func() {
+		runtimeGOOS = prev
+	})
+}
+
 func TestHandleVersionReturnsGitMetadata(t *testing.T) {
 	m := &Manager{
 		run: func(name string, args ...string) ([]byte, error) {
@@ -97,6 +106,7 @@ type assertAnError struct{}
 func (assertAnError) Error() string { return "expected error" }
 
 func TestHandleUpgradeProgressBuildsResponse(t *testing.T) {
+	withRuntimeGOOS(t, "linux")
 	m := &Manager{
 		run: func(name string, args ...string) ([]byte, error) {
 			cmd := strings.Join(append([]string{name}, args...), " ")
@@ -142,6 +152,7 @@ func TestHandleUpgradeProgressBuildsResponse(t *testing.T) {
 }
 
 func TestHandleUpgradePullQueuesWork(t *testing.T) {
+	withRuntimeGOOS(t, "linux")
 	var ran bool
 	m := &Manager{
 		run: func(name string, args ...string) ([]byte, error) {

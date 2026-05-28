@@ -9,6 +9,7 @@ func (a *App) StartBackgroundJobs(ctx context.Context) {
 	a.startTelegramNotifier(ctx)
 	a.startTelegramCommandPoller(ctx)
 	a.startModelMapSnapshotter(ctx)
+	a.startDataRetention(ctx)
 	if a.webds != nil {
 		a.webds.start(ctx)
 	}

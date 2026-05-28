@@ -20,6 +20,7 @@ var (
 	versionBranch     = ""
 	versionCommitID   = ""
 	versionCommitTime = ""
+	runtimeGOOS       = stdruntime.GOOS
 )
 
 type Manager struct {
@@ -175,7 +176,7 @@ func (m *Manager) HandleUpgradePull(w http.ResponseWriter, r *http.Request) {
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	if stdruntime.GOOS == "windows" {
+	if runtimeGOOS == "windows" {
 		if err := m.queueWindowsUpgrade(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -202,7 +203,7 @@ func (m *Manager) HandleUpgradeProgress(w http.ResponseWriter, r *http.Request) 
 		httpx.MethodNotAllowed(w)
 		return
 	}
-	if stdruntime.GOOS == "windows" {
+	if runtimeGOOS == "windows" {
 		m.handleWindowsUpgradeProgress(w)
 		return
 	}
