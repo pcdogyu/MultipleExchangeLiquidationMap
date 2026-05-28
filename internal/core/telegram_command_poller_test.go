@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 )
@@ -52,6 +53,41 @@ func TestIsTelegramGetUpdatesConflict(t *testing.T) {
 	}
 	if isTelegramGetUpdatesConflict(assertErr("timeout")) {
 		t.Fatal("did not expect generic timeout to be treated as getUpdates conflict")
+	}
+}
+
+func TestTelegramCommandPollerEnabled(t *testing.T) {
+	unset := os.Getenv("TELEGRAM_COMMAND_POLLER_ENABLED")
+	t.Cleanup(func() {
+		if unset == "" {
+			_ = os.Unsetenv("TELEGRAM_COMMAND_POLLER_ENABLED")
+			return
+		}
+		_ = os.Setenv("TELEGRAM_COMMAND_POLLER_ENABLED", unset)
+	})
+
+	cases := []struct {
+		value string
+		want  bool
+	}{
+		{"", true},
+		{"1", true},
+		{"true", true},
+		{"on", true},
+		{"0", false},
+		{"false", false},
+		{"off", false},
+		{"bad", true},
+	}
+	for _, tc := range cases {
+		if tc.value == "" {
+			_ = os.Unsetenv("TELEGRAM_COMMAND_POLLER_ENABLED")
+		} else {
+			_ = os.Setenv("TELEGRAM_COMMAND_POLLER_ENABLED", tc.value)
+		}
+		if got := telegramCommandPollerEnabled(); got != tc.want {
+			t.Fatalf("value=%q want=%v got=%v", tc.value, tc.want, got)
+		}
 	}
 }
 

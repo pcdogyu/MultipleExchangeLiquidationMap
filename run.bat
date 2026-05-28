@@ -86,11 +86,13 @@ set "APP_PORT=80"
 set "DB_PATH=data\liqmap.db"
 set "DB_FILE="
 set "DB_DIR="
+set "TELEGRAM_COMMAND_POLLER_ENABLED=0"
 set "TELEGRAM_PHOTO_TIMEOUT_SEC=120"
 set "EXE=multipleexchangeliquidationmap.exe"
 set "NEW_EXE=multipleexchangeliquidationmap.new.exe"
 rem If this host cannot reach api.telegram.org directly, point this to a private Bot API or reverse proxy.
 rem set "TELEGRAM_API_BASE_URL=https://your-telegram-bot-api.example.com"
+rem Set TELEGRAM_COMMAND_POLLER_ENABLED=1 only on the single host that should consume bot commands via getUpdates.
 rem Set BUILD=1 to run tests before launching.
 exit /b 0
 

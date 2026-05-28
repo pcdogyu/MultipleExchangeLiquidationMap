@@ -44,6 +44,12 @@ type TelegramCallbackQuery struct {
 }
 
 func (a *App) startTelegramCommandPoller(ctx context.Context) {
+	if !telegramCommandPollerEnabled() {
+		if a.debug {
+			log.Printf("telegram command poller disabled by TELEGRAM_COMMAND_POLLER_ENABLED")
+		}
+		return
+	}
 	go func() {
 		conflictLogged := false
 		for {
@@ -164,6 +170,18 @@ func isTelegramGetUpdatesConflict(err error) bool {
 		return false
 	}
 	return strings.Contains(msg, "409 conflict") || strings.Contains(msg, "terminated by other getupdates request")
+}
+
+func telegramCommandPollerEnabled() bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("TELEGRAM_COMMAND_POLLER_ENABLED")))
+	switch raw {
+	case "", "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func (a *App) dispatchTelegramUpdate(ctx context.Context, token string, upd TelegramUpdate) {
