@@ -42,3 +42,19 @@ func TestTelegramCommandMenuIncludesPullAll(t *testing.T) {
 		t.Fatalf("expected menu to include pullall label, got %s", body)
 	}
 }
+
+func TestIsTelegramGetUpdatesConflict(t *testing.T) {
+	if !isTelegramGetUpdatesConflict(assertErr("telegram api returned 409 Conflict: terminated by other getUpdates request")) {
+		t.Fatal("expected getUpdates conflict to be detected")
+	}
+	if isTelegramGetUpdatesConflict(assertErr("telegram api sendMessage returned 409 Conflict")) {
+		t.Fatal("did not expect sendMessage conflict to be treated as getUpdates conflict")
+	}
+	if isTelegramGetUpdatesConflict(assertErr("timeout")) {
+		t.Fatal("did not expect generic timeout to be treated as getUpdates conflict")
+	}
+}
+
+type assertErr string
+
+func (e assertErr) Error() string { return string(e) }

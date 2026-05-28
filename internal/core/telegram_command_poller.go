@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+const telegramPollerConflictBackoff = 5 * time.Minute
+
 type TelegramUpdate struct {
 	UpdateID      int64                  `json:"update_id"`
 	Message       *TelegramMessage       `json:"message,omitempty"`
@@ -43,6 +45,7 @@ type TelegramCallbackQuery struct {
 
 func (a *App) startTelegramCommandPoller(ctx context.Context) {
 	go func() {
+		conflictLogged := false
 		for {
 			select {
 			case <-ctx.Done():
@@ -66,12 +69,22 @@ func (a *App) startTelegramCommandPoller(ctx context.Context) {
 			offset := a.getSettingInt64("telegram_update_offset", 0)
 			updates, err := a.getTelegramUpdates(ctx, token, offset, 20, 25)
 			if err != nil {
+				if isTelegramGetUpdatesConflict(err) {
+					if !conflictLogged {
+						log.Printf("telegram command poller paused for %s: another bot instance is already using getUpdates (%v)", telegramPollerConflictBackoff, err)
+						conflictLogged = true
+					}
+					_ = sleepWithContext(ctx, telegramPollerConflictBackoff)
+					continue
+				}
+				conflictLogged = false
 				if a.debug {
 					log.Printf("telegram command polling failed: %v", err)
 				}
 				_ = sleepWithContext(ctx, 5*time.Second)
 				continue
 			}
+			conflictLogged = false
 			for _, upd := range updates {
 				a.dispatchTelegramUpdate(ctx, token, upd)
 				_ = a.setSetting("telegram_update_offset", strconv.FormatInt(upd.UpdateID+1, 10))
@@ -140,6 +153,17 @@ func (a *App) callTelegramAPI(ctx context.Context, token, method string, payload
 		return json.Unmarshal(env.Result, out)
 	}
 	return nil
+}
+
+func isTelegramGetUpdatesConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if !strings.Contains(msg, "getupdates") {
+		return false
+	}
+	return strings.Contains(msg, "409 conflict") || strings.Contains(msg, "terminated by other getupdates request")
 }
 
 func (a *App) dispatchTelegramUpdate(ctx context.Context, token string, upd TelegramUpdate) {
