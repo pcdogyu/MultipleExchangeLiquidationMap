@@ -2,28 +2,25 @@
 setlocal
 
 if /I "%~1"=="prune" goto prune
-
-set "DEBUG=1"
-set "DEBUG_LOG=log/server.log"
-set "APP_PORT=80"
-set "DB_PATH=data\liqmap.db"
-set "DB_FILE="
-set "DB_DIR="
-set "TELEGRAM_PHOTO_TIMEOUT_SEC=120"
-set "EXE=multipleexchangeliquidationmap.exe"
-set "NEW_EXE=multipleexchangeliquidationmap.new.exe"
-rem If this host cannot reach api.telegram.org directly, point this to a private Bot API or reverse proxy.
-rem set "TELEGRAM_API_BASE_URL=https://your-telegram-bot-api.example.com"
-rem Set BUILD=1 to run tests before launching.
-
+if /I "%~1"=="_bootstrap" goto bootstrap
 if /I "%~1"=="_after_pull" goto afterPull
 
+call :initVars
+set "BOOTSTRAP_SCRIPT=%TEMP%\multipleexchangeliquidationmap-run-bootstrap.bat"
+copy /y "%~f0" "%BOOTSTRAP_SCRIPT%" >nul
+if errorlevel 1 goto fail
+call "%BOOTSTRAP_SCRIPT%" _bootstrap "%~f0"
+exit /b %errorlevel%
+
+:bootstrap
+call :initVars
 call :pullLatestCode
 echo Reloading run.bat after git pull...
-call "%~f0" _after_pull
+call "%~2" _after_pull
 exit /b %errorlevel%
 
 :afterPull
+call :initVars
 call :loadVersionInfo
 call :resolvePaths
 
@@ -80,6 +77,21 @@ echo [4/4] Starting in debug mode: DEBUG=%DEBUG% DEBUG_LOG=%DEBUG_LOG%
 "%EXE%"
 if errorlevel 1 goto fail
 
+exit /b 0
+
+:initVars
+set "DEBUG=1"
+set "DEBUG_LOG=log/server.log"
+set "APP_PORT=80"
+set "DB_PATH=data\liqmap.db"
+set "DB_FILE="
+set "DB_DIR="
+set "TELEGRAM_PHOTO_TIMEOUT_SEC=120"
+set "EXE=multipleexchangeliquidationmap.exe"
+set "NEW_EXE=multipleexchangeliquidationmap.new.exe"
+rem If this host cannot reach api.telegram.org directly, point this to a private Bot API or reverse proxy.
+rem set "TELEGRAM_API_BASE_URL=https://your-telegram-bot-api.example.com"
+rem Set BUILD=1 to run tests before launching.
 exit /b 0
 
 :pullLatestCode
