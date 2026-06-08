@@ -48,6 +48,7 @@ func TestHandleSettingsPersistsAndReturnsSettings(t *testing.T) {
 	postReq := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(`{
 		"telegram_bot_token":"bot-token",
 		"telegram_channel":"channel-id",
+		"telegram_allowed_chat_ids":"channel-id,123456",
 		"notify_work_interval_min":30,
 		"notify_off_interval_min":45,
 		"work_time_expr":"09:00-18:00",
@@ -68,7 +69,7 @@ func TestHandleSettingsPersistsAndReturnsSettings(t *testing.T) {
 	}
 
 	body := getRec.Body.String()
-	for _, want := range []string{`"telegram_bot_token":"bot-token"`, `"telegram_channel":"channel-id"`, `"notify_work_interval_min":30`, `"notify_off_interval_min":45`, `"notify_enabled":true`} {
+	for _, want := range []string{`"telegram_bot_token":"bot-token"`, `"telegram_channel":"channel-id"`, `"telegram_allowed_chat_ids":"channel-id,123456"`, `"notify_work_interval_min":30`, `"notify_off_interval_min":45`, `"notify_enabled":true`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected response to contain %s, got %s", want, body)
 		}

@@ -1,22 +1,23 @@
 package liqmap
 
 type ChannelSettings struct {
-	TelegramBotToken      string `json:"telegram_bot_token"`
-	TelegramChannel       string `json:"telegram_channel"`
-	TelegramAPIBase       string `json:"telegram_api_base"`
-	NotifyIntervalMin     int    `json:"notify_interval_min"`
-	NotifyWorkIntervalMin int    `json:"notify_work_interval_min"`
-	NotifyOffIntervalMin  int    `json:"notify_off_interval_min"`
-	WorkTimeExpr          string `json:"work_time_expr"`
-	NotifyEnabled         bool   `json:"notify_enabled"`
-	Group1Enabled         bool   `json:"group1_enabled"`
-	Group2Enabled         bool   `json:"group2_enabled"`
-	Group3Enabled         bool   `json:"group3_enabled"`
-	Group4Enabled         bool   `json:"group4_enabled"`
-	Group5Enabled         bool   `json:"group5_enabled"`
-	Group6Enabled         bool   `json:"group6_enabled"`
-	Group7Enabled         bool   `json:"group7_enabled"`
-	Group8Enabled         bool   `json:"group8_enabled"`
+	TelegramBotToken       string `json:"telegram_bot_token"`
+	TelegramChannel        string `json:"telegram_channel"`
+	TelegramAllowedChatIDs string `json:"telegram_allowed_chat_ids"`
+	TelegramAPIBase        string `json:"telegram_api_base"`
+	NotifyIntervalMin      int    `json:"notify_interval_min"`
+	NotifyWorkIntervalMin  int    `json:"notify_work_interval_min"`
+	NotifyOffIntervalMin   int    `json:"notify_off_interval_min"`
+	WorkTimeExpr           string `json:"work_time_expr"`
+	NotifyEnabled          bool   `json:"notify_enabled"`
+	Group1Enabled          bool   `json:"group1_enabled"`
+	Group2Enabled          bool   `json:"group2_enabled"`
+	Group3Enabled          bool   `json:"group3_enabled"`
+	Group4Enabled          bool   `json:"group4_enabled"`
+	Group5Enabled          bool   `json:"group5_enabled"`
+	Group6Enabled          bool   `json:"group6_enabled"`
+	Group7Enabled          bool   `json:"group7_enabled"`
+	Group8Enabled          bool   `json:"group8_enabled"`
 }
 
 type TelegramSendHistoryRow struct {

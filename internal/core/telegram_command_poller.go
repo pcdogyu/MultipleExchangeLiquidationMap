@@ -200,7 +200,7 @@ func (a *App) handleTelegramMessage(ctx context.Context, token string, msg Teleg
 		return
 	}
 	if !a.telegramCommandAllowed(msg.Chat) {
-		_ = a.sendTelegramTextToChat(msg.Chat.ID, "无权限执行该命令")
+		_ = a.sendTelegramTextToChat(msg.Chat.ID, a.telegramCommandDeniedText(msg.Chat))
 		return
 	}
 	if isTelegramMenuCommand(text) {
@@ -231,7 +231,7 @@ func (a *App) handleTelegramCallback(ctx context.Context, token string, cb Teleg
 	}
 	chat := cb.Message.Chat
 	if !a.telegramCommandAllowed(chat) {
-		_ = a.sendTelegramTextToChat(chat.ID, "无权限执行该操作")
+		_ = a.sendTelegramTextToChat(chat.ID, a.telegramCommandDeniedText(chat))
 		return
 	}
 	data := strings.TrimSpace(cb.Data)
@@ -704,4 +704,14 @@ func telegramChatMatches(chat TelegramChat, configured string) bool {
 	username := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(chat.Username)), "@")
 	confUsername := strings.TrimPrefix(strings.ToLower(configured), "@")
 	return username != "" && confUsername != "" && username == confUsername
+}
+
+func (a *App) telegramCommandDeniedText(chat TelegramChat) string {
+	parts := []string{"无权限执行该命令"}
+	parts = append(parts, fmt.Sprintf("当前 chat_id=%d", chat.ID))
+	if username := strings.TrimSpace(chat.Username); username != "" {
+		parts = append(parts, fmt.Sprintf("当前 username=@%s", strings.TrimPrefix(username, "@")))
+	}
+	parts = append(parts, "请在消息通道配置中把该 chat_id 加入 telegram_allowed_chat_ids")
+	return strings.Join(parts, "\n")
 }

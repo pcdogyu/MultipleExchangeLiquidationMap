@@ -92,22 +92,23 @@ func (a *App) loadSettings() ChannelSettings {
 	workInterval := parsePositiveIntSetting(a.getSetting("notify_work_interval_min"), legacyInterval)
 	offInterval := parsePositiveIntSetting(a.getSetting("notify_off_interval_min"), legacyInterval)
 	return ChannelSettings{
-		TelegramBotToken:      normalizeQuotedInput(a.getSetting("telegram_bot_token")),
-		TelegramChannel:       normalizeQuotedInput(a.getSetting("telegram_channel")),
-		TelegramAPIBase:       normalizeTelegramAPIBaseSetting(a.getSetting("telegram_api_base")),
-		NotifyIntervalMin:     workInterval,
-		NotifyWorkIntervalMin: workInterval,
-		NotifyOffIntervalMin:  offInterval,
-		WorkTimeExpr:          normalizeQuotedInput(a.getSetting("notify_work_time_expr")),
-		NotifyEnabled:         parseBoolSetting(a.getSetting("notify_enabled"), false),
-		Group1Enabled:         parseBoolSetting(a.getSetting("notify_group_1_enabled"), true),
-		Group2Enabled:         parseBoolSetting(a.getSetting("notify_group_2_enabled"), true),
-		Group3Enabled:         parseBoolSetting(a.getSetting("notify_group_3_enabled"), true),
-		Group4Enabled:         parseBoolSetting(a.getSetting("notify_group_4_enabled"), true),
-		Group5Enabled:         parseBoolSetting(a.getSetting("notify_group_5_enabled"), true),
-		Group6Enabled:         parseBoolSetting(a.getSetting("notify_group_6_enabled"), true),
-		Group7Enabled:         parseBoolSetting(a.getSetting("notify_group_7_enabled"), true),
-		Group8Enabled:         parseBoolSetting(a.getSetting("notify_group_8_enabled"), true),
+		TelegramBotToken:       normalizeQuotedInput(a.getSetting("telegram_bot_token")),
+		TelegramChannel:        normalizeQuotedInput(a.getSetting("telegram_channel")),
+		TelegramAllowedChatIDs: normalizeQuotedInput(a.getSetting("telegram_allowed_chat_ids")),
+		TelegramAPIBase:        normalizeTelegramAPIBaseSetting(a.getSetting("telegram_api_base")),
+		NotifyIntervalMin:      workInterval,
+		NotifyWorkIntervalMin:  workInterval,
+		NotifyOffIntervalMin:   offInterval,
+		WorkTimeExpr:           normalizeQuotedInput(a.getSetting("notify_work_time_expr")),
+		NotifyEnabled:          parseBoolSetting(a.getSetting("notify_enabled"), false),
+		Group1Enabled:          parseBoolSetting(a.getSetting("notify_group_1_enabled"), true),
+		Group2Enabled:          parseBoolSetting(a.getSetting("notify_group_2_enabled"), true),
+		Group3Enabled:          parseBoolSetting(a.getSetting("notify_group_3_enabled"), true),
+		Group4Enabled:          parseBoolSetting(a.getSetting("notify_group_4_enabled"), true),
+		Group5Enabled:          parseBoolSetting(a.getSetting("notify_group_5_enabled"), true),
+		Group6Enabled:          parseBoolSetting(a.getSetting("notify_group_6_enabled"), true),
+		Group7Enabled:          parseBoolSetting(a.getSetting("notify_group_7_enabled"), true),
+		Group8Enabled:          parseBoolSetting(a.getSetting("notify_group_8_enabled"), true),
 	}
 }
 
@@ -118,6 +119,9 @@ func (a *App) saveSettings(req ChannelSettings) error {
 		return err
 	}
 	if err := a.setSetting("telegram_channel", channel); err != nil {
+		return err
+	}
+	if err := a.setSetting("telegram_allowed_chat_ids", normalizeQuotedInput(req.TelegramAllowedChatIDs)); err != nil {
 		return err
 	}
 	apiBase := normalizeTelegramAPIBaseSetting(req.TelegramAPIBase)
