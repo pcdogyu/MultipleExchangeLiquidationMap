@@ -196,7 +196,8 @@ func (a *App) dispatchTelegramUpdate(ctx context.Context, token string, upd Tele
 
 func (a *App) handleTelegramMessage(ctx context.Context, token string, msg TelegramMessage) {
 	text := strings.TrimSpace(msg.Text)
-	if text == "" || !strings.HasPrefix(text, "/") {
+	cmd, _ := splitTelegramCommand(text)
+	if cmd == "" {
 		return
 	}
 	if !a.telegramCommandAllowed(msg.Chat) {
@@ -207,6 +208,10 @@ func (a *App) handleTelegramMessage(ctx context.Context, token string, msg Teleg
 		if err := a.sendTelegramCommandMenu(ctx, token, msg.Chat.ID); err != nil && a.debug {
 			log.Printf("send telegram command menu failed: %v", err)
 		}
+		return
+	}
+	if isTelegramHelpCommand(text) {
+		_ = a.sendTelegramTextToChat(msg.Chat.ID, a.buildTelegramCommandHelpText())
 		return
 	}
 	if isTelegramStatusCommand(text) {
@@ -262,7 +267,7 @@ func (a *App) answerTelegramCallback(ctx context.Context, token, callbackID, tex
 func (a *App) sendTelegramCommandMenu(ctx context.Context, token string, chatID int64) error {
 	return a.callTelegramAPI(ctx, token, "sendMessage", map[string]any{
 		"chat_id":    chatID,
-		"text":       "请选择要抓取的周期：",
+		"text":       a.buildTelegramCommandHelpText(),
 		"parse_mode": "HTML",
 		"reply_markup": map[string]any{
 			"inline_keyboard": [][]map[string]string{
@@ -608,6 +613,18 @@ func yesNoCN(v bool) string {
 	return "否"
 }
 
+func (a *App) buildTelegramCommandHelpText() string {
+	return strings.Join([]string{
+		"<b>可用命令</b>",
+		"/pullall - 拉取全部",
+		"/pull1d - 拉取1天",
+		"/pull7d - 拉取7天",
+		"/pull30d - 拉取30天",
+		"",
+		"在 TG 聊天窗口里发送以上命令，可获取对应周期的清算金额图。",
+	}, "\n")
+}
+
 func shortErrorText(err error) string {
 	if err == nil {
 		return ""
@@ -623,6 +640,11 @@ func shortErrorText(err error) string {
 func isTelegramMenuCommand(text string) bool {
 	cmd, _ := splitTelegramCommand(text)
 	return cmd == "/menu" || cmd == "/start"
+}
+
+func isTelegramHelpCommand(text string) bool {
+	cmd, _ := splitTelegramCommand(text)
+	return cmd == "/help"
 }
 
 func isTelegramStatusCommand(text string) bool {
@@ -667,6 +689,14 @@ func splitTelegramCommand(text string) (string, string) {
 		return "", ""
 	}
 	cmd := strings.ToLower(parts[0])
+	if !strings.HasPrefix(cmd, "/") {
+		switch cmd {
+		case "start", "menu", "help", "status", "pullall", "pull1d", "pull7d", "pull30d", "pull":
+			cmd = "/" + cmd
+		default:
+			return "", ""
+		}
+	}
 	if at := strings.Index(cmd, "@"); at >= 0 {
 		cmd = cmd[:at]
 	}

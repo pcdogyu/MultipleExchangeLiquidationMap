@@ -10,7 +10,7 @@ import (
 )
 
 func TestTelegramPullAllCommandParsing(t *testing.T) {
-	for _, text := range []string{"/pullall", "/pullall@HY_claw_2026_bot", " /pullall now "} {
+	for _, text := range []string{"/pullall", "/pullall@HY_claw_2026_bot", " /pullall now ", "pullall", " pullall now "} {
 		if !isTelegramPullAllCommand(text) {
 			t.Fatalf("expected %q to be recognized as pullall command", text)
 		}
@@ -41,6 +41,24 @@ func TestTelegramCommandMenuIncludesPullAll(t *testing.T) {
 	}
 	if !strings.Contains(body, "抓取全部并发送 8 组") {
 		t.Fatalf("expected menu to include pullall label, got %s", body)
+	}
+	if !strings.Contains(body, "/pull30d - 拉取30天") {
+		t.Fatalf("expected menu to include help text, got %s", body)
+	}
+}
+
+func TestTelegramHelpCommandParsing(t *testing.T) {
+	for _, text := range []string{"/help", "/help@HY_claw_2026_bot", "help"} {
+		if !isTelegramHelpCommand(text) {
+			t.Fatalf("expected %q to be recognized as help command", text)
+		}
+	}
+}
+
+func TestSplitTelegramCommandRejectsUnknownPlainText(t *testing.T) {
+	cmd, args := splitTelegramCommand("hello world")
+	if cmd != "" || args != "" {
+		t.Fatalf("expected unknown plain text to be ignored, got cmd=%q args=%q", cmd, args)
 	}
 }
 
