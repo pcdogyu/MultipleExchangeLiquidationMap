@@ -16,11 +16,13 @@ if (!(Test-Path -LiteralPath $DbPath)) {
 
 $pythonCommand = $null
 $pythonArgs = @()
-foreach ($candidate in @(
+$candidateLaunchers = @(
     @{ Name = "python"; Args = @() },
     @{ Name = "py"; Args = @("-3") },
     @{ Name = "python3"; Args = @() }
-)) {
+)
+
+foreach ($candidate in $candidateLaunchers) {
     $cmd = Get-Command $candidate.Name -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($cmd) {
         $pythonCommand = $cmd.Source
@@ -28,6 +30,39 @@ foreach ($candidate in @(
         break
     }
 }
+
+if (-not $pythonCommand) {
+    $pathCandidates = @(
+        @{ Path = "C:\WINDOWS\py.exe"; Args = @("-3") },
+        @{ Path = "C:\Python312\python.exe"; Args = @() },
+        @{ Path = "C:\Python311\python.exe"; Args = @() },
+        @{ Path = "C:\Program Files\Python312\python.exe"; Args = @() },
+        @{ Path = "C:\Program Files\Python311\python.exe"; Args = @() },
+        @{ Path = "D:\Program Files\Python312\python.exe"; Args = @() },
+        @{ Path = "D:\Program Files\Python311\python.exe"; Args = @() }
+    )
+
+    foreach ($pattern in @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python*\python.exe"),
+        (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\python.exe"),
+        (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\python3.exe")
+    )) {
+        Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending |
+            ForEach-Object {
+                $pathCandidates += @{ Path = $_.FullName; Args = @() }
+            }
+    }
+
+    foreach ($candidate in $pathCandidates) {
+        if (Test-Path -LiteralPath $candidate.Path) {
+            $pythonCommand = $candidate.Path
+            $pythonArgs = $candidate.Args
+            break
+        }
+    }
+}
+
 if (-not $pythonCommand) {
     throw "No usable Python launcher was found. Tried: python, py -3, python3. This script uses Python's built-in sqlite3 module."
 }

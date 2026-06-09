@@ -103,6 +103,17 @@ func CleanupExpiredData(db *sql.DB, now time.Time, retention time.Duration) (Cle
 	return summary, nil
 }
 
+func VacuumAndCheckpoint(db *sql.DB) error {
+	if err := execWithBusyRetry(db, `PRAGMA journal_mode=DELETE;`); err != nil {
+		return err
+	}
+	if err := execWithBusyRetry(db, `VACUUM;`); err != nil {
+		return err
+	}
+	_ = execWithBusyRetry(db, `PRAGMA wal_checkpoint(PASSIVE);`)
+	return nil
+}
+
 func isMissingSQLiteObject(err error) bool {
 	if err == nil {
 		return false

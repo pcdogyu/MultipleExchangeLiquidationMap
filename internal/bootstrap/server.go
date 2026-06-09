@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -21,6 +23,13 @@ import (
 )
 
 func Run() {
+	if handled, err := maybeRunPruneCommand(os.Args[1:]); handled {
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	debug := liqmap.Getenv("DEBUG", "") != ""
 	cleanupLogging, err := liqmap.SetupLogging(debug)
 	if err != nil {
@@ -107,4 +116,74 @@ func versionEnv(key string) string {
 		return value
 	}
 	return "-"
+}
+
+func maybeRunPruneCommand(args []string) (bool, error) {
+	if len(args) == 0 {
+		return false, nil
+	}
+	if strings.ToLower(strings.TrimSpace(args[0])) != "prune" {
+		return false, nil
+	}
+
+	fs := flag.NewFlagSet("prune", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	retentionDays := fs.Int("retention-days", 14, "retain the most recent N days of data")
+	skipVacuum := fs.Bool("skip-vacuum", false, "skip VACUUM after pruning")
+	dbPath := fs.String("db-path", liqmap.Getenv("DB_PATH", liqmap.DefaultDBPath), "sqlite database path")
+	if err := fs.Parse(args[1:]); err != nil {
+		return true, err
+	}
+	if *retentionDays <= 0 {
+		return true, fmt.Errorf("retention-days must be greater than 0")
+	}
+	if dir := filepath.Dir(*dbPath); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return true, err
+		}
+	}
+
+	db, err := sql.Open("sqlite", *dbPath)
+	if err != nil {
+		return true, err
+	}
+	defer db.Close()
+
+	if err := dbplatform.Configure(db); err != nil {
+		return true, err
+	}
+	if err := dbplatform.Init(db); err != nil {
+		return true, err
+	}
+
+	beforeInfo, err := os.Stat(*dbPath)
+	if err != nil {
+		return true, err
+	}
+	retention := time.Duration(*retentionDays) * 24 * time.Hour
+	summary, err := dbplatform.CleanupExpiredData(db, time.Now(), retention)
+	if err != nil {
+		return true, err
+	}
+	if !*skipVacuum {
+		if err := dbplatform.VacuumAndCheckpoint(db); err != nil {
+			return true, err
+		}
+	}
+	afterInfo, err := os.Stat(*dbPath)
+	if err != nil {
+		return true, err
+	}
+
+	fmt.Printf("db_path=%s\n", *dbPath)
+	fmt.Printf("retention_days=%d\n", *retentionDays)
+	fmt.Printf("cutoff_ms=%d\n", summary.CutoffMS)
+	fmt.Printf("deleted_total=%d\n", summary.DeletedRows)
+	if details := summary.DetailString(); details != "" {
+		fmt.Printf("details=%s\n", details)
+	}
+	fmt.Printf("size_before_bytes=%d\n", beforeInfo.Size())
+	fmt.Printf("size_after_bytes=%d\n", afterInfo.Size())
+	fmt.Printf("vacuum=%t\n", !*skipVacuum)
+	return true, nil
 }

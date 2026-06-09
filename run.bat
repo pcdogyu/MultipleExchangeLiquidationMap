@@ -131,13 +131,22 @@ for %%I in ("%DB_FILE%") do set "DB_DIR=%%~dpI"
 exit /b 0
 
 :prune
-set "PRUNE_SCRIPT=%~dp0data\prune-liqmap-retention.ps1"
-if not exist "%PRUNE_SCRIPT%" (
-  echo Prune script not found: %PRUNE_SCRIPT%
+call :initVars
+call :resolvePaths
+set "PRUNE_ARGS=%~2 %~3 %~4 %~5 %~6 %~7 %~8 %~9"
+echo Running database prune command...
+where go >nul 2>nul
+if errorlevel 1 (
+  if exist "%EXE%" (
+    "%EXE%" prune %PRUNE_ARGS%
+    if errorlevel 1 goto fail
+    exit /b 0
+  )
+  echo Go was not found in PATH and %EXE% does not exist.
+  echo Install Go 1.21+ or place a prebuilt %EXE% in this directory, then run this script again.
   goto fail
 )
-echo Running database prune script...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PRUNE_SCRIPT%"
+go run . prune %PRUNE_ARGS%
 if errorlevel 1 goto fail
 exit /b 0
 

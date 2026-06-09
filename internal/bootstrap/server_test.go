@@ -1,6 +1,9 @@
 package bootstrap
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRunEntryPointExists(t *testing.T) {
 	run := Run
@@ -24,5 +27,25 @@ func TestServerAddrFromEnvPrefersAppAddr(t *testing.T) {
 
 	if got := serverAddrFromEnv(); got != "127.0.0.1:8891" {
 		t.Fatalf("expected app addr, got %q", got)
+	}
+}
+
+func TestMaybeRunPruneCommandIgnoresNonPruneArgs(t *testing.T) {
+	handled, err := maybeRunPruneCommand([]string{"serve"})
+	if handled {
+		t.Fatal("expected non-prune args to be ignored")
+	}
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+}
+
+func TestMaybeRunPruneCommandRejectsInvalidRetentionDays(t *testing.T) {
+	handled, err := maybeRunPruneCommand([]string{"prune", "-retention-days", "0"})
+	if !handled {
+		t.Fatal("expected prune args to be handled")
+	}
+	if err == nil || !strings.Contains(err.Error(), "retention-days") {
+		t.Fatalf("expected retention-days validation error, got %v", err)
 	}
 }
