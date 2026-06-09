@@ -286,19 +286,21 @@ func (a *App) sendTelegramCommandMenu(ctx context.Context, token string, chatID 
 func (a *App) startTelegramCommandPull(ctx context.Context, chatID int64, windowDays int) {
 	go func() {
 		windowLabel := fmt.Sprintf("%dd", windowDays)
-		_ = a.sendTelegramTextToChat(chatID, fmt.Sprintf("已收到，开始抓取 %s", windowLabel))
+		if err := a.webds.beginRun(); err != nil {
+			_ = a.sendTelegramTextToChat(chatID, a.telegramCaptureBusyText())
+			return
+		}
 		if !a.beginTelegramBundleSend() {
+			a.webds.endRun()
 			_ = a.sendTelegramTextToChat(chatID, "已有报告发送任务进行中，请稍后再试")
 			return
 		}
 		defer a.endTelegramBundleSend()
+		defer a.webds.endRun()
 
+		_ = a.sendTelegramTextToChat(chatID, fmt.Sprintf("已收到，开始抓取 %s", windowLabel))
 		days := windowDays
-		if err := a.webds.runSync(ctx, &days); err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "already in progress") {
-				_ = a.sendTelegramTextToChat(chatID, "已有抓取任务进行中，请稍后再试")
-				return
-			}
+		if err := a.webds.runAfterStart(ctx, &days); err != nil {
 			_ = a.sendTelegramTextToChat(chatID, fmt.Sprintf("抓取 %s 失败：%s", windowLabel, template.HTMLEscapeString(shortErrorText(err))))
 			return
 		}
@@ -313,18 +315,20 @@ func (a *App) startTelegramCommandPull(ctx context.Context, chatID int64, window
 
 func (a *App) startTelegramCommandPullAll(ctx context.Context, chatID int64) {
 	go func() {
-		_ = a.sendTelegramTextToChat(chatID, "已收到，开始抓取 1d / 7d / 30d")
+		if err := a.webds.beginRun(); err != nil {
+			_ = a.sendTelegramTextToChat(chatID, a.telegramCaptureBusyText())
+			return
+		}
 		if !a.beginTelegramBundleSend() {
+			a.webds.endRun()
 			_ = a.sendTelegramTextToChat(chatID, "已有抓取或报告发送任务进行中，请稍后再试")
 			return
 		}
 		defer a.endTelegramBundleSend()
+		defer a.webds.endRun()
 
-		if err := a.webds.runSync(ctx, nil); err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "already in progress") {
-				_ = a.sendTelegramTextToChat(chatID, "已有抓取任务进行中，请稍后再试")
-				return
-			}
+		_ = a.sendTelegramTextToChat(chatID, "已收到，开始抓取 1d / 7d / 30d")
+		if err := a.webds.runAfterStart(ctx, nil); err != nil {
 			_ = a.sendTelegramTextToChat(chatID, fmt.Sprintf("抓取全部周期失败：%s", template.HTMLEscapeString(shortErrorText(err))))
 			return
 		}
@@ -635,6 +639,24 @@ func shortErrorText(err error) string {
 	}
 	r := []rune(text)
 	return string(r[:260]) + "..."
+}
+
+func (a *App) telegramCaptureBusyText() string {
+	if a == nil || a.webds == nil {
+		return "已经有抓取任务进行中，请稍后"
+	}
+	windowDays, running := a.webds.currentRunningWindowDays()
+	if !running {
+		return "已经有抓取任务进行中，请稍后"
+	}
+	switch windowDays {
+	case 1, 7, 30:
+		return fmt.Sprintf("已经有抓取%d Day任务抓取中，请稍后", windowDays)
+	case 0:
+		return "已经有抓取全部任务抓取中，请稍后"
+	default:
+		return "已经有抓取任务进行中，请稍后"
+	}
 }
 
 func isTelegramMenuCommand(text string) bool {

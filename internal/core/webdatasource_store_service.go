@@ -151,6 +151,25 @@ func (m *WebDataSourceManager) loadStatus() WebDataSourceStatus {
 	}
 }
 
+func (m *WebDataSourceManager) currentRunningWindowDays() (int, bool) {
+	m.mu.Lock()
+	running := m.running
+	m.mu.Unlock()
+	if !running {
+		return 0, false
+	}
+	var days int
+	err := m.app.db.QueryRow(`SELECT window_days
+		FROM webdatasource_runs
+		WHERE status='running' OR finished_at IS NULL OR finished_at<=0
+		ORDER BY id DESC
+		LIMIT 1`).Scan(&days)
+	if err != nil {
+		return 0, true
+	}
+	return days, true
+}
+
 func (m *WebDataSourceManager) loadLatestMap(window string) WebDataSourceMapResponse {
 	windowDays := map[string]int{"1d": 1, "7d": 7, "30d": 30}[window]
 	if windowDays == 0 {
