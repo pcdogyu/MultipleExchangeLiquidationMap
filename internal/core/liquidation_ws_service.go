@@ -15,6 +15,8 @@ import (
 
 const (
 	bybitLiquidationTopicCharLimit = 18000
+	bybitBatchRetryAttempts        = 3
+	bybitBatchRetryDelay           = 2 * time.Second
 	okxLiquidationBatchSize        = 80
 	wsKeepaliveReadTimeout         = 75 * time.Second
 	wsKeepalivePingInterval        = 20 * time.Second
@@ -516,6 +518,48 @@ func (a *App) syncBybitAllLiquidations(ctx context.Context) {
 }
 
 func (a *App) runBybitLiquidationBatch(ctx context.Context, category string, topics []string) (err error) {
+	return a.retryBybitLiquidationBatch(ctx, category, topics, func(retryAttempt int) error {
+		return a.runBybitLiquidationBatchOnce(ctx, category, topics)
+	})
+}
+
+func (a *App) retryBybitLiquidationBatch(ctx context.Context, category string, topics []string, runner func(retryAttempt int) error) error {
+	var lastErr error
+	for retryAttempt := 0; retryAttempt <= bybitBatchRetryAttempts; retryAttempt++ {
+		if retryAttempt > 0 {
+			if a.debug {
+				log.Printf("bybit batched liquidation ws retry %d/%d starting: category=%s topics=%d last_err=%v",
+					retryAttempt, bybitBatchRetryAttempts, category, len(topics), lastErr)
+			}
+			timer := time.NewTimer(bybitBatchRetryDelay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil
+			case <-timer.C:
+			}
+		}
+		err := runner(retryAttempt)
+		if err == nil {
+			if retryAttempt > 0 && a.debug {
+				log.Printf("bybit batched liquidation ws retry succeeded on attempt %d/%d: category=%s topics=%d",
+					retryAttempt, bybitBatchRetryAttempts, category, len(topics))
+			}
+			return nil
+		}
+		if ctx.Err() != nil {
+			return err
+		}
+		lastErr = err
+	}
+	if a.debug {
+		log.Printf("bybit batched liquidation ws retry failed after %d attempts: category=%s topics=%d err=%v",
+			bybitBatchRetryAttempts, category, len(topics), lastErr)
+	}
+	return lastErr
+}
+
+func (a *App) runBybitLiquidationBatchOnce(ctx context.Context, category string, topics []string) (err error) {
 	wsURL := "wss://stream.bybit.com/v5/public/" + strings.ToLower(strings.TrimSpace(category))
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {

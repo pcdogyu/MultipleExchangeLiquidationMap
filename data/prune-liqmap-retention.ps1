@@ -14,9 +14,22 @@ if (!(Test-Path -LiteralPath $DbPath)) {
     throw "Database not found: $DbPath"
 }
 
-$python = Get-Command python -ErrorAction SilentlyContinue
-if (-not $python) {
-    throw "python was not found in PATH. This script uses Python's built-in sqlite3 module."
+$pythonCommand = $null
+$pythonArgs = @()
+foreach ($candidate in @(
+    @{ Name = "python"; Args = @() },
+    @{ Name = "py"; Args = @("-3") },
+    @{ Name = "python3"; Args = @() }
+)) {
+    $cmd = Get-Command $candidate.Name -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) {
+        $pythonCommand = $cmd.Source
+        $pythonArgs = $candidate.Args
+        break
+    }
+}
+if (-not $pythonCommand) {
+    throw "No usable Python launcher was found. Tried: python, py -3, python3. This script uses Python's built-in sqlite3 module."
 }
 
 $config = @{
@@ -106,7 +119,7 @@ print(f"size_after_bytes={after_size}")
 '@
 
 try {
-    $pythonScript | & $python.Source -
+    $pythonScript | & $pythonCommand @pythonArgs -
 }
 finally {
     Remove-Item Env:LIQMAP_RETENTION_CONFIG -ErrorAction SilentlyContinue
