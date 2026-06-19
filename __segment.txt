@@ -1,0 +1,24 @@
+﻿	if err := m.runLoggedStep(session.taskCtx, progress, "抓取 zr_0 canvas", func() (string, error) {
+		var canvasInfo struct {
+			DomID  string `json:"domId"`
+			Width  int    `json:"width"`
+			Height int    `json:"height"`
+		}
+		err := chromedp.Run(session.taskCtx, chromedp.Evaluate(`(() => {
+			const canvas = document.querySelector('canvas[data-zr-dom-id="zr_0"]');
+			if (!canvas) return {domId:'', width:0, height:0};
+			return {
+				domId: canvas.getAttribute('data-zr-dom-id') || '',
+				width: Number(canvas.width || 0),
+				height: Number(canvas.height || 0)
+			};
+		})()`, &canvasInfo))
+		if err != nil {
+			return "", err
+		}
+		if canvasInfo.DomID != "zr_0" || canvasInfo.Width <= 0 || canvasInfo.Height <= 0 {
+			return "", errors.New("coinglass zr_0 canvas not found")
+		}
+		return fmt.Sprintf("data-zr-dom-id=%q size=%dx%d", canvasInfo.DomID, canvasInfo.Width, canvasInfo.Height), nil
+	}); err != nil {
+		session.close()
