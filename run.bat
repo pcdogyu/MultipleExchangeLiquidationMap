@@ -62,12 +62,11 @@ move /y "%NEW_EXE%" "%EXE%" >nul
 if errorlevel 1 goto fail
 
 :start
+call :loadLocalEnv
+call :resolvePaths
 if not exist log mkdir log
 
-echo Database:
-echo   DB path: %DB_PATH%
-echo   DB file: %DB_FILE%
-echo   DB dir: %DB_DIR%
+call :printDatabaseInfo
 echo Version:
 echo   Branch: %VERSION_BRANCH%
 echo   Commit short: %VERSION_COMMIT%
@@ -97,6 +96,27 @@ rem If this host cannot reach api.telegram.org directly, point this to a private
 rem set "TELEGRAM_API_BASE_URL=https://your-telegram-bot-api.example.com"
 rem Set TELEGRAM_COMMAND_POLLER_ENABLED=0 on any secondary host that should not consume bot commands via getUpdates.
 rem Set BUILD=1 to run tests before launching.
+exit /b 0
+
+:loadLocalEnv
+set "LOCAL_ENV=config\local.env"
+if not exist "%LOCAL_ENV%" exit /b 0
+for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%LOCAL_ENV%") do (
+  if not "%%A"=="" if not defined %%A set "%%A=%%~B"
+)
+exit /b 0
+
+:printDatabaseInfo
+echo Database:
+if defined DATABASE_URL (
+  echo   Dialect: PostgreSQL
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$raw=$env:DATABASE_URL; try { $u=[Uri]$raw; $port=$u.Port; if ($port -lt 0) { $port=5432 }; $db=[Uri]::UnescapeDataString($u.AbsolutePath.TrimStart('/')); $user=''; if ($u.UserInfo) { $user=[Uri]::UnescapeDataString(($u.UserInfo -split ':',2)[0]) }; Write-Host ('  Host: {0}' -f $u.Host); Write-Host ('  Port: {0}' -f $port); Write-Host ('  Database: {0}' -f $db); if ($user) { Write-Host ('  User: {0}' -f $user) }; if ($u.Query) { Write-Host ('  Options: {0}' -f $u.Query.TrimStart('?')) } } catch { Write-Host ('  URL: {0}' -f ($raw -replace '://([^:/@]+):[^@]+@','://$1:xxxxx@')) }"
+  exit /b 0
+)
+echo   Dialect: SQLite
+echo   DB path: %DB_PATH%
+echo   DB file: %DB_FILE%
+echo   DB dir: %DB_DIR%
 exit /b 0
 
 :pullLatestCode

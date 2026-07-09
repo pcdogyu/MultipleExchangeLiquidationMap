@@ -43,9 +43,11 @@ func Run() {
 	dbPath := liqmap.Getenv("DB_PATH", liqmap.DefaultDBPath)
 	addr := serverAddrFromEnv()
 	log.Printf("version info: branch=%s commit=%s commit_time=%s", versionEnv("VERSION_BRANCH"), versionEnv("VERSION_COMMIT"), versionEnv("VERSION_COMMIT_TIME"))
-	if dir := filepath.Dir(dbPath); dir != "." && dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			log.Fatal(err)
+	if strings.TrimSpace(os.Getenv("DATABASE_URL")) == "" {
+		if dir := filepath.Dir(dbPath); dir != "." && dir != "" {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				log.Fatal(err)
+			}
 		}
 	}
 
@@ -54,8 +56,13 @@ func Run() {
 		log.Fatal(err)
 	}
 	defer db.Close()
+	if db.IsPostgres() {
+		log.Printf("database: dialect=postgres url=%s", dbplatform.RedactDatabaseURL(os.Getenv("DATABASE_URL")))
+	} else if debug {
+		log.Printf("database: dialect=sqlite db_path=%s", dbPath)
+	}
 	if debug {
-		log.Printf("debug enabled: db_dialect=%s db_path=%s addr=%s symbol=%s", db.Dialect(), dbPath, addr, liqmap.DefaultSymbol)
+		log.Printf("debug enabled: db_dialect=%s addr=%s symbol=%s", db.Dialect(), addr, liqmap.DefaultSymbol)
 	}
 
 	if err := dbplatform.Configure(db); err != nil {

@@ -107,3 +107,23 @@ func TestPostgresSchemaUsesPostgresIdentityTypes(t *testing.T) {
 		}
 	}
 }
+
+func TestRedactDatabaseURLMasksPassword(t *testing.T) {
+	raw := "postgres://admin:AdminAdmin@10.15.0.19:5432/ethliquidation?sslmode=disable"
+	got := RedactDatabaseURL(raw)
+	if strings.Contains(got, "AdminAdmin") {
+		t.Fatalf("expected password to be redacted, got %q", got)
+	}
+	for _, want := range []string{"postgres://admin:xxxxx@10.15.0.19:5432/ethliquidation", "sslmode=disable"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected redacted url to contain %q, got %q", want, got)
+		}
+	}
+}
+
+func TestRedactDatabaseURLKeepsPasswordlessUser(t *testing.T) {
+	raw := "postgres://admin@10.15.0.19:5432/ethliquidation"
+	if got := RedactDatabaseURL(raw); got != raw {
+		t.Fatalf("expected passwordless url to stay unchanged, got %q", got)
+	}
+}

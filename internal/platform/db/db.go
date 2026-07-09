@@ -85,6 +85,27 @@ func OpenPostgres(dsn string) (*DB, error) {
 	return &DB{DB: sqlDB, dialect: DialectPostgres}, nil
 }
 
+func RedactDatabaseURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	username := u.User.Username()
+	if username == "" {
+		return raw
+	}
+	if _, hasPassword := u.User.Password(); hasPassword {
+		u.User = url.UserPassword(username, "xxxxx")
+	} else {
+		u.User = url.User(username)
+	}
+	return u.String()
+}
+
 func WrapSQLite(sqlDB *sql.DB) *DB {
 	return &DB{DB: sqlDB, dialect: DialectSQLite}
 }

@@ -103,7 +103,7 @@ func main() {
 		}
 	}
 
-	log.Printf("migrating sqlite=%s -> postgres=%s", *source, maskDatabaseURL(*target))
+	log.Printf("migrating sqlite=%s -> postgres=%s", *source, dbplatform.RedactDatabaseURL(*target))
 	for _, table := range tables {
 		sourceCount, targetCount, err := migrateTable(context.Background(), src, dst, pgxConn, table)
 		if err != nil {
@@ -295,17 +295,6 @@ func identList(values []string) string {
 
 func quoteLiteral(v string) string {
 	return `'` + strings.ReplaceAll(v, `'`, `''`) + `'`
-}
-
-func maskDatabaseURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
-		return raw
-	}
-	if username := u.User.Username(); username != "" {
-		u.User = url.UserPassword(username, "<redacted>")
-	}
-	return u.String()
 }
 
 func getenv(key, fallback string) string {
