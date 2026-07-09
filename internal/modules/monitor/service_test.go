@@ -20,3 +20,18 @@ func TestHandlePageRedirectsToDefaultDays(t *testing.T) {
 		t.Fatalf("expected redirect to /monitor?days=30, got %q", got)
 	}
 }
+
+func TestHandlePageDisablesCache(t *testing.T) {
+	svc := newService()
+
+	req := httptest.NewRequest(http.MethodGet, "/monitor?days=30", nil)
+	rec := httptest.NewRecorder()
+	svc.handlePage(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got == "" {
+		t.Fatal("expected Cache-Control header")
+	}
+}
