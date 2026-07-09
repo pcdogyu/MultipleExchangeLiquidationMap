@@ -300,7 +300,7 @@ func (a *App) startTelegramCommandPull(ctx context.Context, chatID int64, window
 
 		_ = a.sendTelegramTextToChat(chatID, fmt.Sprintf("已收到，开始抓取 %s", windowLabel))
 		days := windowDays
-		if err := a.webds.runAfterStart(ctx, &days); err != nil {
+		if err := a.webds.runTelegramCommand(ctx, &days); err != nil {
 			_ = a.sendTelegramTextToChat(chatID, fmt.Sprintf("抓取 %s 失败：%s", windowLabel, template.HTMLEscapeString(shortErrorText(err))))
 			return
 		}
@@ -328,7 +328,7 @@ func (a *App) startTelegramCommandPullAll(ctx context.Context, chatID int64) {
 		defer a.webds.endRun()
 
 		_ = a.sendTelegramTextToChat(chatID, "已收到，开始抓取 1d / 7d / 30d")
-		if err := a.webds.runAfterStart(ctx, nil); err != nil {
+		if err := a.webds.runTelegramCommand(ctx, nil); err != nil {
 			_ = a.sendTelegramTextToChat(chatID, fmt.Sprintf("抓取全部周期失败：%s", template.HTMLEscapeString(shortErrorText(err))))
 			return
 		}

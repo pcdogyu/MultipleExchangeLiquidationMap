@@ -46,6 +46,18 @@ type WebDataSourceManager struct {
 	stepStartedAt time.Time
 }
 
+type webDataSourceRunOptions struct {
+	background bool
+	source     string
+}
+
+func (opts webDataSourceRunOptions) modeLabel() string {
+	if opts.background {
+		return "server-background"
+	}
+	return "visible"
+}
+
 type WebDataSourceSettings struct {
 	Enabled            bool   `json:"enabled"`
 	IntervalMin        int    `json:"interval_min"`
@@ -253,6 +265,13 @@ func (m *WebDataSourceManager) runSync(parent context.Context, windowDays *int) 
 	return m.runAfterStart(parent, windowDays)
 }
 
+func (m *WebDataSourceManager) runTelegramCommand(parent context.Context, windowDays *int) error {
+	return m.runAfterStartWithOptions(parent, windowDays, webDataSourceRunOptions{
+		background: true,
+		source:     "telegram-command",
+	})
+}
+
 func (m *WebDataSourceManager) beginRun() error {
 	m.mu.Lock()
 	if m.running {
@@ -272,6 +291,10 @@ func (m *WebDataSourceManager) endRun() {
 }
 
 func (m *WebDataSourceManager) runAfterStart(parent context.Context, windowDays *int) error {
+	return m.runAfterStartWithOptions(parent, windowDays, webDataSourceRunOptions{})
+}
+
+func (m *WebDataSourceManager) runAfterStartWithOptions(parent context.Context, windowDays *int, opts webDataSourceRunOptions) error {
 	cfg := m.loadSettings()
 	timeout := time.Duration(cfg.TimeoutSec) * time.Second
 	if timeout <= 0 {
@@ -279,7 +302,7 @@ func (m *WebDataSourceManager) runAfterStart(parent context.Context, windowDays 
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
-	return m.runOnce(ctx, windowDays)
+	return m.runOnce(ctx, windowDays, opts)
 }
 
 func (m *WebDataSourceManager) triggerInit(parent context.Context) (bool, error) {
@@ -370,7 +393,7 @@ func (m *WebDataSourceManager) insertPoints(snapshotID int64, windowDays int, po
 	})
 }
 
-func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) error {
+func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int, opts webDataSourceRunOptions) error {
 	started := time.Now().UnixMilli()
 	_ = m.setSetting("last_run_started_ts", strconv.FormatInt(started, 10))
 	_ = m.setSetting("last_run_status", "running")
@@ -400,7 +423,11 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) err
 		manager:   m,
 	}
 	m.syncProgressClock(progress.startedAt, progress.stepSince, progress.action)
-	m.appendStepLog("Start capture task", "info", fmt.Sprintf("windows=%v", windows))
+	source := strings.TrimSpace(opts.source)
+	if source == "" {
+		source = "webdatasource"
+	}
+	m.appendStepLog("Start capture task", "info", fmt.Sprintf("windows=%v | mode=%s | source=%s", windows, opts.modeLabel(), source))
 	stopProgressLogger := m.startProgressLogger(ctx, progress)
 	defer stopProgressLogger()
 
@@ -414,7 +441,7 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) err
 	m.appendStepLog("Prepare Runtime Profile", "success", fmt.Sprintf("source=%s | runtime=%s", cfg.ProfileDir, captureProfileDir))
 
 	progress.setAction("Launch Chrome and open Coinglass")
-	session, err := m.newCaptureSessionV4(ctx, chromePath, captureProfileDir, progress)
+	session, err := m.newCaptureSessionV4(ctx, chromePath, captureProfileDir, progress, opts)
 	if err != nil {
 		m.appendStepLog("Init Coinglass capture session", "failed", err.Error())
 		m.finishRunState("failed", err.Error(), 0)
@@ -735,19 +762,26 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 }
 
 func webDataSourceChromeOptions(chromePath, profileDir string, startMinimized bool) []chromedp.ExecAllocatorOption {
+	windowPosition := "80,80"
+	if startMinimized {
+		windowPosition = "-32000,-32000"
+	}
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(chromePath),
 		chromedp.Flag("headless", false),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("no-default-browser-check", true),
+		chromedp.Flag("disable-session-crashed-bubble", true),
+		chromedp.Flag("hide-crash-restore-bubble", true),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
 		chromedp.UserDataDir(profileDir),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.Flag("window-position", "80,80"),
+		chromedp.Flag("window-position", windowPosition),
 		chromedp.WindowSize(1440, 900),
 	)
 	if startMinimized {
 		opts = append(opts,
 			chromedp.Flag("start-minimized", true),
-			chromedp.Flag("window-position", "-32000,-32000"),
 		)
 	}
 	return opts
@@ -2803,18 +2837,11 @@ func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePa
 
 */
 
-func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePath, profileDir string, progress *webDataSourceProgress) (*webDataSourceSession, error) {
+func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePath, profileDir string, progress *webDataSourceProgress, runOpts webDataSourceRunOptions) (*webDataSourceSession, error) {
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
 		return nil, err
 	}
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(chromePath),
-		chromedp.Flag("headless", false),
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
-		chromedp.UserDataDir(profileDir),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.WindowSize(1440, 900),
-	)
+	opts := webDataSourceChromeOptions(chromePath, profileDir, runOpts.background)
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
 	taskCtx, cancelTask := chromedp.NewContext(allocCtx)
 	session := &webDataSourceSession{
@@ -2825,7 +2852,17 @@ func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePa
 		},
 	}
 
-	m.appendStepLog("Launch Chrome Window", "success", "browser launched in visible mode")
+	if runOpts.background {
+		detail := "browser launched in server background mode"
+		if err := minimizeBrowserWindow(session.taskCtx); err != nil {
+			detail += fmt.Sprintf(" | minimize skipped: %v", err)
+		} else {
+			detail += " | minimized"
+		}
+		m.appendStepLog("Launch Chrome Window", "success", detail)
+	} else {
+		m.appendStepLog("Launch Chrome Window", "success", "browser launched in visible mode")
+	}
 
 	findTargetPanelJS := webDataSourceFindTargetPanelJS()
 	findPeriodRootJS := webDataSourceFindPeriodRootJS(findTargetPanelJS)

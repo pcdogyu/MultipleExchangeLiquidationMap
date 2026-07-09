@@ -22,6 +22,34 @@ func TestTelegramPullAllCommandParsing(t *testing.T) {
 	}
 }
 
+func TestTelegramPullWindowCommandParsing(t *testing.T) {
+	cases := []struct {
+		text string
+		want int
+	}{
+		{"/pull1d", 1},
+		{"/pull1d@HY_claw_2026_bot", 1},
+		{"pull1d", 1},
+		{"/pull 1", 1},
+		{"/pull 1d", 1},
+		{"/pull7d", 7},
+		{"/pull 7d", 7},
+		{"/pull30d", 30},
+		{"/pull 30d", 30},
+	}
+	for _, tc := range cases {
+		got, ok := parseTelegramPullWindow(tc.text)
+		if !ok || got != tc.want {
+			t.Fatalf("parseTelegramPullWindow(%q) = %d, %t; want %d, true", tc.text, got, ok, tc.want)
+		}
+	}
+	for _, text := range []string{"/pull2d", "/pull 2d", "/pullall", "hello"} {
+		if got, ok := parseTelegramPullWindow(text); ok {
+			t.Fatalf("parseTelegramPullWindow(%q) = %d, true; want false", text, got)
+		}
+	}
+}
+
 func TestTelegramCommandMenuIncludesPullAll(t *testing.T) {
 	var body string
 	app := newTelegramRequestTestApp(t, telegramRoundTripFunc(func(req *http.Request) (*http.Response, error) {
