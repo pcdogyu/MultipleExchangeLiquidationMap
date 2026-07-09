@@ -340,6 +340,21 @@ function buildHeatBandsFromModel(model,anchorPrice){
   });
 }
 
+function buildHeatBandsFromDashboard(d){
+  const rows=Array.isArray(d&&d.bands)?d.bands:[];
+  return rows.filter(function(row){
+    return row&&Number(row.band)>0;
+  }).map(function(row){
+    return {
+      band:Number(row.band),
+      up_price:Number(row.up_price||0),
+      up_notional_usd:Number(row.up_notional_usd||0),
+      down_price:Number(row.down_price||0),
+      down_notional_usd:Number(row.down_notional_usd||0)
+    };
+  });
+}
+
 function buildHeatBandsFromWebMap(map,anchorPrice){
   if(!map||!map.has_data||!Array.isArray(map.points)||!map.points.length) return [];
   const cp=roundMonitorPrice1((map&&map.current_price)||anchorPrice);
@@ -464,7 +479,9 @@ function renderHeatReport(d){
   if(!wrap) return;
   const anchorPrice=Number(d.current_price||0);
   const webBands=buildHeatBandsFromWebMap(monitorWebMap,anchorPrice);
-  const bands=webBands.length?webBands:buildHeatBandsFromModel(monitorLiqMapData,anchorPrice);
+  const modelBands=buildHeatBandsFromModel(monitorLiqMapData,anchorPrice);
+  const dashboardBands=buildHeatBandsFromDashboard(d);
+  const bands=webBands.length?webBands:(modelBands.length?modelBands:dashboardBands);
   if(!bands.length){
     wrap.innerHTML='<div class="hint">暂无数据</div>';
     return;
@@ -570,7 +587,9 @@ function renderHeatReport(d){
   if(!wrap) return;
   const anchorPrice=Number(d.current_price||0);
   const webBands=buildHeatBandsFromWebMap(monitorWebMap,anchorPrice);
-  const bands=webBands.length?webBands:buildHeatBandsFromModel(monitorLiqMapData,anchorPrice);
+  const modelBands=buildHeatBandsFromModel(monitorLiqMapData,anchorPrice);
+  const dashboardBands=buildHeatBandsFromDashboard(d);
+  const bands=webBands.length?webBands:(modelBands.length?modelBands:dashboardBands);
   if(!bands.length){
     wrap.innerHTML='<div class="hint">暂无数据</div>';
     return;
@@ -641,26 +660,17 @@ async function load(opts){
     const step=Number((cfg&&cfg.PriceStep)||(cfg&&cfg.price_step)||5);
     const range=Number((cfg&&cfg.PriceRange)||(cfg&&cfg.price_range)||400);
     const queryDays='days='+encodeURIComponent(String(loadDays));
-    const responses=await Promise.all([
-      fetch('/api/dashboard?'+queryDays),
-      fetch('/api/model/liquidation-map?'+queryDays+'&bucket_min='+bucket+'&price_step='+step+'&price_range='+range)
-    ]);
-    const dashResp=responses[0], mapResp=responses[1];
+    const dashResp=await fetch('/api/dashboard?'+queryDays);
     if(!dashResp.ok) throw new Error('load dashboard failed: '+dashResp.status);
-    if(!mapResp.ok) throw new Error('load model map failed: '+mapResp.status);
     const d=await dashResp.json();
-    const mapData=await mapResp.json().catch(function(){return null;});
     if(seq!==monitorLoadSeq) return false;
-    monitorLiqMapData=mapData;
+    monitorLiqMapData=null;
+    monitorWebMap=null;
     currentDays=normalizeWindowDays(d&&d.window_days);
     if(currentDays==null) currentDays=loadDays;
-    const webWindow=windowKeyForDays(currentDays);
-    monitorWebMap=webWindow?await fetch('/api/webdatasource/map?window='+encodeURIComponent(webWindow)).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}):null;
-    const fetchedCurrentPrice=getMonitorFetchedCurrentPrice();
-    const monitorDisplayPrice=fetchedCurrentPrice>0?fetchedCurrentPrice:resolveMonitorDisplayPrice(d&&d.current_price);
+    const monitorDisplayPrice=resolveMonitorDisplayPrice(d&&d.current_price);
     if(monitorDisplayPrice>0){
       d.current_price=monitorDisplayPrice;
-      if(monitorLiqMapData&&!(roundMonitorPrice1(monitorLiqMapData.current_price)>0)) monitorLiqMapData.current_price=monitorDisplayPrice;
     }
     renderActive();
     const heroTime=document.getElementById('heroTime');
@@ -676,6 +686,22 @@ async function load(opts){
     const wrap=document.getElementById('heatReport');
     const heatReady=!!(wrap&&(wrap.querySelector('table')||String(wrap.textContent||'').trim().length>0));
     updateMonitorLoadState({pending:false,done:true,days:currentDays,error:'',heatReady:heatReady,seq:seq,generatedAt:Number(d.generated_at||0)});
+    const webWindow=windowKeyForDays(currentDays);
+    const mapPromise=fetch('/api/model/liquidation-map?'+queryDays+'&bucket_min='+bucket+'&price_step='+step+'&price_range='+range).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+    const webPromise=webWindow?fetch('/api/webdatasource/map?window='+encodeURIComponent(webWindow)).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}):Promise.resolve(null);
+    Promise.all([mapPromise,webPromise]).then(function(results){
+      if(seq!==monitorLoadSeq) return;
+      monitorLiqMapData=results[0];
+      monitorWebMap=results[1];
+      const fetchedCurrentPrice=getMonitorFetchedCurrentPrice();
+      if(fetchedCurrentPrice>0) d.current_price=fetchedCurrentPrice;
+      if(monitorLiqMapData&&!(roundMonitorPrice1(monitorLiqMapData.current_price)>0)&&Number(d.current_price)>0) monitorLiqMapData.current_price=d.current_price;
+      renderHeatReport(d);
+      renderCore(d);
+      const wrap=document.getElementById('heatReport');
+      const heatReady=!!(wrap&&(wrap.querySelector('table')||String(wrap.textContent||'').trim().length>0));
+      updateMonitorLoadState({pending:false,done:true,days:currentDays,error:'',heatReady:heatReady,seq:seq,generatedAt:Number(d.generated_at||0)});
+    }).catch(function(){});
     return true;
   }catch(err){
     if(seq!==monitorLoadSeq) return false;
