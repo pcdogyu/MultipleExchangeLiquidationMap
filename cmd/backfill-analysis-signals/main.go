@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"flag"
 	"log"
 
@@ -16,7 +15,7 @@ func main() {
 	flag.Parse()
 
 	dbPath := liqmap.Getenv("DB_PATH", liqmap.DefaultDBPath)
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := dbplatform.Open(dbPath)
 	if err != nil {
 		log.Fatal(err)
 	}

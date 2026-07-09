@@ -3,6 +3,8 @@ package liqmap
 import (
 	"strings"
 	"time"
+
+	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
 )
 
 func (a *App) listPriceWallEvents(page, limit, minutes int, side, mode string) (any, error) {
@@ -99,7 +101,7 @@ func (a *App) recordPriceWallEvent(req PriceWallEvent) error {
 	if req.EventTS <= 0 {
 		req.EventTS = time.Now().UnixMilli()
 	}
-	_, err := a.db.Exec(`INSERT INTO price_wall_events(side, price, peak_notional_usd, duration_ms, event_ts, mode, inserted_ts)
+	_, err := dbplatform.ExecWithBusyRetry(a.db, `INSERT INTO price_wall_events(side, price, peak_notional_usd, duration_ms, event_ts, mode, inserted_ts)
 		VALUES(?, ?, ?, ?, ?, ?, ?)`,
 		req.Side, req.Price, req.Peak, req.DurationMS, req.EventTS, req.Mode, time.Now().UnixMilli())
 	return err

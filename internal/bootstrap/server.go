@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -49,7 +48,7 @@ func Run() {
 		}
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := dbplatform.Open(dbPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -154,7 +153,7 @@ func maybeRunPruneCommand(args []string) (bool, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", *dbPath)
+	db, err := dbplatform.Open(*dbPath)
 	if err != nil {
 		return true, err
 	}

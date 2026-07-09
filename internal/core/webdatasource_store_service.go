@@ -10,11 +10,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
 )
 
 func (m *WebDataSourceManager) cleanupStaleRunningRuns(reason string) {
 	now := time.Now().UnixMilli()
-	result, err := m.app.db.Exec(`UPDATE webdatasource_runs
+	result, err := dbplatform.ExecWithBusyRetry(m.app.db, `UPDATE webdatasource_runs
 		SET status='failed',
 			error_message=?,
 			finished_at=CASE WHEN finished_at IS NULL OR finished_at<=0 THEN ? ELSE finished_at END
@@ -42,7 +44,7 @@ func (m *WebDataSourceManager) getSetting(key string) string {
 }
 
 func (m *WebDataSourceManager) setSetting(key, value string) error {
-	_, err := m.app.db.Exec(`INSERT INTO webdatasource_settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	_, err := dbplatform.ExecWithBusyRetry(m.app.db, `INSERT INTO webdatasource_settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
 }
 

@@ -2,35 +2,83 @@ package db
 
 import (
 	"database/sql"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
 
-func isSQLiteBusy(err error) bool {
+const defaultSQLiteBusyTimeoutMS = 30000
+
+func SQLiteDSN(dbPath string) string {
+	dbPath = strings.TrimSpace(dbPath)
+	if dbPath == "" {
+		return dbPath
+	}
+	q := url.Values{}
+	q.Add("_pragma", "busy_timeout="+strconv.Itoa(defaultSQLiteBusyTimeoutMS))
+	q.Add("_pragma", "journal_mode(WAL)")
+	q.Add("_pragma", "synchronous(NORMAL)")
+	sep := "?"
+	if strings.Contains(dbPath, "?") {
+		sep = "&"
+	}
+	return dbPath + sep + q.Encode()
+}
+
+func Open(dbPath string) (*sql.DB, error) {
+	return sql.Open("sqlite", SQLiteDSN(dbPath))
+}
+
+func IsSQLiteBusy(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "sqlite_busy")
+	return strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "database table is locked") ||
+		strings.Contains(msg, "sqlite_busy") ||
+		strings.Contains(msg, "sqlite_locked")
 }
 
-func execWithBusyRetry(db *sql.DB, stmt string, args ...any) error {
+func WithBusyRetry(fn func() error) error {
 	var err error
-	for attempt := 0; attempt < 6; attempt++ {
-		_, err = db.Exec(stmt, args...)
-		if !isSQLiteBusy(err) {
+	for attempt := 0; attempt < 8; attempt++ {
+		err = fn()
+		if !IsSQLiteBusy(err) {
 			return err
 		}
-		time.Sleep(time.Duration(150*(attempt+1)) * time.Millisecond)
+		time.Sleep(time.Duration(250*(attempt+1)) * time.Millisecond)
 	}
 	return err
 }
 
+func ExecWithBusyRetry(db *sql.DB, stmt string, args ...any) (sql.Result, error) {
+	var res sql.Result
+	err := WithBusyRetry(func() error {
+		var execErr error
+		res, execErr = db.Exec(stmt, args...)
+		return execErr
+	})
+	return res, err
+}
+
+func execWithBusyRetry(db *sql.DB, stmt string, args ...any) error {
+	_, err := ExecWithBusyRetry(db, stmt, args...)
+	return err
+}
+
 func Configure(db *sql.DB) error {
-	db.SetMaxOpenConns(8)
+	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
 	db.SetConnMaxLifetime(0)
-	return execWithBusyRetry(db, `PRAGMA busy_timeout=5000;`)
+	if err := execWithBusyRetry(db, `PRAGMA busy_timeout=`+strconv.Itoa(defaultSQLiteBusyTimeoutMS)+`;`); err != nil {
+		return err
+	}
+	if err := execWithBusyRetry(db, `PRAGMA journal_mode=WAL;`); err != nil {
+		return err
+	}
+	return execWithBusyRetry(db, `PRAGMA synchronous=NORMAL;`)
 }
 
 func Init(db *sql.DB) error {
@@ -261,6 +309,5 @@ func ensureColumn(db *sql.DB, table, col, typ string) error {
 			return nil
 		}
 	}
-	_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + col + ` ` + typ)
-	return err
+	return execWithBusyRetry(db, `ALTER TABLE `+table+` ADD COLUMN `+col+` `+typ)
 }

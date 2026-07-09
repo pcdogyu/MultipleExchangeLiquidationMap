@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
 )
 
 const (
@@ -291,7 +293,7 @@ func (a *App) saveMarketInfoCache(resp MarketInfoResponse, status, errorMessage 
 		return err
 	}
 	refreshedAt := time.Now().UnixMilli()
-	_, err = a.db.Exec(`INSERT INTO market_info_snapshots(
+	_, err = dbplatform.ExecWithBusyRetry(a.db, `INSERT INTO market_info_snapshots(
 			exchange, symbol, period, limit_count, generated_at, refreshed_at, status, error_message, payload_json
 		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(exchange, symbol, period, limit_count) DO UPDATE SET

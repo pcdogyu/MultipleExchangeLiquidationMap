@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
 )
 
 const analysisSignalVerifyHorizonMin = 5
@@ -1926,7 +1928,7 @@ func (a *App) AnalysisBacktestLiquidationSignalReset(hours int) (AnalysisBacktes
 	if hours <= 0 {
 		hours = 24
 	}
-	res, err := a.db.Exec(`DELETE FROM analysis_liquidation_backtest_signals WHERE symbol=?`, defaultSymbol)
+	res, err := dbplatform.ExecWithBusyRetry(a.db, `DELETE FROM analysis_liquidation_backtest_signals WHERE symbol=?`, defaultSymbol)
 	if err != nil {
 		return AnalysisBacktestLiquidationSignalMutationResponse{}, err
 	}

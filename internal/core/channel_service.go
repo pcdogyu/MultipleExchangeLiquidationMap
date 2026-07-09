@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
 )
 
 const (
@@ -528,7 +530,7 @@ func (a *App) recordTelegramSendHistory(sendMode string, groupIndex int, groupNa
 	if status == "" {
 		status = "unknown"
 	}
-	_, err := a.db.Exec(`INSERT INTO telegram_send_history(sent_at, send_mode, group_index, group_name, status, error_text)
+	_, err := dbplatform.ExecWithBusyRetry(a.db, `INSERT INTO telegram_send_history(sent_at, send_mode, group_index, group_name, status, error_text)
 		VALUES(?, ?, ?, ?, ?, ?)`,
 		time.Now().UnixMilli(),
 		sendMode,

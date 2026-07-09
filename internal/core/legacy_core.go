@@ -29,6 +29,8 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/gorilla/websocket"
 
+	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -248,7 +250,7 @@ func (a *App) getSettingFloat(key string, fallback float64) float64 {
 }
 
 func (a *App) setSetting(key, value string) error {
-	_, err := a.db.Exec(`INSERT INTO app_settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	_, err := dbplatform.ExecWithBusyRetry(a.db, `INSERT INTO app_settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
 }
 
@@ -282,10 +284,10 @@ func (a *App) saveModelMapSnapshot(symbol string, windowDays int, configRev int6
 	if err != nil {
 		return
 	}
-	_, _ = a.db.Exec(`INSERT INTO model_liqmap_snapshots(symbol, window_days, config_rev, generated_at, payload_json)
+	_, _ = dbplatform.ExecWithBusyRetry(a.db, `INSERT INTO model_liqmap_snapshots(symbol, window_days, config_rev, generated_at, payload_json)
 		VALUES(?, ?, ?, ?, ?)`, symbol, windowDays, configRev, genAt, string(b))
 	cutoff := time.Now().Add(-6 * time.Hour).UnixMilli()
-	_, _ = a.db.Exec(`DELETE FROM model_liqmap_snapshots
+	_, _ = dbplatform.ExecWithBusyRetry(a.db, `DELETE FROM model_liqmap_snapshots
 		WHERE symbol=? AND window_days=? AND config_rev=? AND generated_at<?`, symbol, windowDays, configRev, cutoff)
 }
 
@@ -1414,14 +1416,14 @@ func (a *App) insertOISnapshot(s Snapshot) error {
 	if s.MarkPrice <= 0 || s.OIValueUSD <= 0 {
 		return nil
 	}
-	_, err := a.db.Exec(`INSERT INTO oi_snapshots(exchange, symbol, mark_price, oi_value_usd, funding_rate, long_short_ratio, updated_ts)
+	_, err := dbplatform.ExecWithBusyRetry(a.db, `INSERT INTO oi_snapshots(exchange, symbol, mark_price, oi_value_usd, funding_rate, long_short_ratio, updated_ts)
 		VALUES(?, ?, ?, ?, ?, ?, ?)`,
 		strings.ToLower(strings.TrimSpace(s.Exchange)), s.Symbol, s.MarkPrice, s.OIValueUSD, s.FundingRate, nullableFloat(s.LongShortRatio), s.UpdatedTS)
 	return err
 }
 
 func (a *App) upsertMarketState(s Snapshot) error {
-	_, err := a.db.Exec(`INSERT INTO market_state(exchange, symbol, mark_price, oi_qty, oi_value_usd, funding_rate, long_short_ratio, updated_ts)
+	_, err := dbplatform.ExecWithBusyRetry(a.db, `INSERT INTO market_state(exchange, symbol, mark_price, oi_qty, oi_value_usd, funding_rate, long_short_ratio, updated_ts)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(exchange, symbol) DO UPDATE SET
 			mark_price=excluded.mark_price,
@@ -4049,7 +4051,7 @@ func (a *App) insertLiquidationEvent(exchange, symbol, side, rawSide string, pri
 	if normSide == "" {
 		normSide = normalizeLiquidationSide(rawSide)
 	}
-	_, _ = a.db.Exec(`INSERT OR IGNORE INTO liquidation_events(exchange, symbol, side, raw_side, qty, price, mark_price, notional_usd, event_ts, inserted_ts)
+	_, _ = dbplatform.ExecWithBusyRetry(a.db, `INSERT OR IGNORE INTO liquidation_events(exchange, symbol, side, raw_side, qty, price, mark_price, notional_usd, event_ts, inserted_ts)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		exchange, symbol, normSide, rawSide, qty, price, markPrice, notional, eventTS, time.Now().UnixMilli())
 }

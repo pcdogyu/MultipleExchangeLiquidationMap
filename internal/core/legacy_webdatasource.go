@@ -20,6 +20,8 @@ import (
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+
+	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
 )
 
 const (
@@ -320,7 +322,7 @@ func (m *WebDataSourceManager) finishRunState(status, errMsg string, records int
 
 func (m *WebDataSourceManager) insertRun(windowDays int, status, errMsg string, records int) (int64, error) {
 	now := time.Now().UnixMilli()
-	res, err := m.app.db.Exec(`INSERT INTO webdatasource_runs(started_at, finished_at, status, window_days, error_message, records_count, source_meta_json) VALUES(?, ?, ?, ?, ?, ?, '')`,
+	res, err := dbplatform.ExecWithBusyRetry(m.app.db, `INSERT INTO webdatasource_runs(started_at, finished_at, status, window_days, error_message, records_count, source_meta_json) VALUES(?, ?, ?, ?, ?, ?, '')`,
 		now, 0, status, windowDays, errMsg, records)
 	if err != nil {
 		return 0, err
@@ -330,7 +332,7 @@ func (m *WebDataSourceManager) insertRun(windowDays int, status, errMsg string, 
 
 func (m *WebDataSourceManager) updateRun(id int64, status, errMsg string, records int) error {
 	now := time.Now().UnixMilli()
-	_, err := m.app.db.Exec(`UPDATE webdatasource_runs SET finished_at=?, status=?, error_message=?, records_count=? WHERE id=?`,
+	_, err := dbplatform.ExecWithBusyRetry(m.app.db, `UPDATE webdatasource_runs SET finished_at=?, status=?, error_message=?, records_count=? WHERE id=?`,
 		now, status, errMsg, records, id)
 	return err
 }
@@ -338,7 +340,7 @@ func (m *WebDataSourceManager) updateRun(id int64, status, errMsg string, record
 func (m *WebDataSourceManager) insertSnapshot(windowDays int, rangeLow, rangeHigh float64, payload map[string]any) (int64, error) {
 	now := time.Now().UnixMilli()
 	raw, _ := json.Marshal(payload)
-	res, err := m.app.db.Exec(`INSERT INTO webdatasource_snapshots(symbol, window_days, captured_at, range_low, range_high, payload_json) VALUES(?, ?, ?, ?, ?, ?)`,
+	res, err := dbplatform.ExecWithBusyRetry(m.app.db, `INSERT INTO webdatasource_snapshots(symbol, window_days, captured_at, range_low, range_high, payload_json) VALUES(?, ?, ?, ?, ?, ?)`,
 		"ETH", windowDays, now, rangeLow, rangeHigh, string(raw))
 	if err != nil {
 		return 0, err
@@ -347,23 +349,25 @@ func (m *WebDataSourceManager) insertSnapshot(windowDays int, rangeLow, rangeHig
 }
 
 func (m *WebDataSourceManager) insertPoints(snapshotID int64, windowDays int, points []WebDataSourcePoint) error {
-	tx, err := m.app.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	stmt, err := tx.Prepare(`INSERT INTO webdatasource_points(snapshot_id, symbol, window_days, side, exchange, price, liq_value, captured_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	now := time.Now().UnixMilli()
-	for _, pt := range points {
-		if _, err := stmt.Exec(snapshotID, "ETH", windowDays, pt.Side, pt.Exchange, pt.Price, pt.LiqValue, now); err != nil {
+	return dbplatform.WithBusyRetry(func() error {
+		tx, err := m.app.db.Begin()
+		if err != nil {
 			return err
 		}
-	}
-	return tx.Commit()
+		defer tx.Rollback()
+		stmt, err := tx.Prepare(`INSERT INTO webdatasource_points(snapshot_id, symbol, window_days, side, exchange, price, liq_value, captured_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+		now := time.Now().UnixMilli()
+		for _, pt := range points {
+			if _, err := stmt.Exec(snapshotID, "ETH", windowDays, pt.Side, pt.Exchange, pt.Price, pt.LiqValue, now); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
+	})
 }
 
 func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) error {
@@ -454,7 +458,7 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int) err
 						recordsThisRun = len(points)
 						totalRecords += len(points)
 						metaJSON, _ := json.Marshal(meta)
-						_, _ = m.app.db.Exec(`UPDATE webdatasource_runs SET source_meta_json=? WHERE id=?`, string(metaJSON), runID)
+						_, _ = dbplatform.ExecWithBusyRetry(m.app.db, `UPDATE webdatasource_runs SET source_meta_json=? WHERE id=?`, string(metaJSON), runID)
 						_ = m.updateRun(runID, "success", "", len(points))
 						m.appendStepLog("Save capture result", "success", fmt.Sprintf("%d day | %d points | attempt %d/%d", days, len(points), attempt, defaultWebDataSourceMaxAttempts))
 						attemptErr = nil
