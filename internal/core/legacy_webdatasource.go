@@ -787,7 +787,7 @@ func webDataSourceFindTargetPanelJS() string {
 			return ['1', '7', '30'].includes(value);
 		};
 		const inputs = Array.from(document.querySelectorAll('input.MuiAutocomplete-input[role="combobox"]'))
-			.filter(input => ['BTC', 'ETH'].includes(String(input.value || '').trim()));
+			.filter(input => input.offsetParent !== null);
 		for (const input of inputs) {
 			let container = input.parentElement;
 			for (let depth = 0; depth < 12 && container; depth++) {
