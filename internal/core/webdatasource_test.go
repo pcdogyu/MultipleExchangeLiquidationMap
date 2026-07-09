@@ -21,6 +21,34 @@ func TestWebDataSourcePayloadCurrentPrice(t *testing.T) {
 	}
 }
 
+func TestIsCoinglassETHSymbolValueAcceptsPairDisplayNames(t *testing.T) {
+	accepted := []string{
+		"ETH",
+		"ETHUSDT",
+		"ETH/USDT",
+		"Binance ETH/USDT 永续",
+		"Binance ETH-USDT Perpetual",
+	}
+	for _, value := range accepted {
+		if !isCoinglassETHSymbolValue(value) {
+			t.Fatalf("expected %q to be accepted as ETH", value)
+		}
+	}
+
+	rejected := []string{
+		"",
+		"BTC",
+		"BTCUSDT",
+		"Binance BTC/USDT 永续",
+		"ETHBTC",
+	}
+	for _, value := range rejected {
+		if isCoinglassETHSymbolValue(value) {
+			t.Fatalf("expected %q to be rejected as ETH", value)
+		}
+	}
+}
+
 func TestWebDataSourceUpgradeControlDoesNotNavigateToConfig(t *testing.T) {
 	body := WebDataSourceHTML()
 

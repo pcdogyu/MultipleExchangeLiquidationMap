@@ -816,6 +816,27 @@ func webDataSourceFindPeriodRootJS(findTargetPanelJS string) string {
 	})()`
 }
 
+func isCoinglassETHSymbolValue(raw string) bool {
+	value := strings.ToUpper(strings.TrimSpace(raw))
+	if value == "" {
+		return false
+	}
+	if value == "ETH" || value == "ETHUSDT" {
+		return true
+	}
+	tokens := strings.FieldsFunc(value, func(r rune) bool {
+		return !(r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '/' || r == '-')
+	})
+	for _, token := range tokens {
+		token = strings.TrimSpace(token)
+		compact := strings.NewReplacer("/", "", "-", "").Replace(token)
+		if token == "ETH" || compact == "ETHUSDT" {
+			return true
+		}
+	}
+	return false
+}
+
 func webDataSourceExtractChartPayloadJS(findTargetPanelJS string) string {
 	return `(() => {
 		const panel = ` + findTargetPanelJS + `;
@@ -2735,6 +2756,13 @@ func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePa
 			const root = input ? input.closest('.MuiAutocomplete-root') : null;
 			const buttons = root ? Array.from(root.querySelectorAll('button')).filter(btn => btn.offsetParent !== null) : [];
 			const btn = buttons.find(btn => String(btn.className || '').includes('MuiAutocomplete-popupIndicator')) || buttons[0] || null;
+			const isVisible = el => {
+				if (!el) return false;
+				const style = window.getComputedStyle(el);
+				if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || '1') === 0) return false;
+				const rect = el.getBoundingClientRect();
+				return rect.width > 0 && rect.height > 0;
+			};
 			if (!input) return {opened:false, current:'', visibleOpts:0};
 			input.focus();
 			const target = btn || input;
@@ -2743,8 +2771,8 @@ func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePa
 			}
 			input.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowDown', code:'ArrowDown', bubbles:true}));
 			input.dispatchEvent(new KeyboardEvent('keyup', {key:'ArrowDown', code:'ArrowDown', bubbles:true}));
-			const optionSel = '[role="option"], [role="menuitem"], .MuiOption-root, .MuiMenuItem-root, li[class*="Option"], li[class*="option"]';
-			const visibleOpts = Array.from(document.querySelectorAll(optionSel)).filter(node => node.offsetParent !== null).length;
+			const optionSel = '[role="option"], [role="menuitem"], .MuiOption-root, .MuiMenuItem-root, .MuiAutocomplete-option, li[class*="Option"], li[class*="option"], li[id*="-option-"]';
+			const visibleOpts = Array.from(document.querySelectorAll(optionSel)).filter(isVisible).length;
 			return {
 				opened: true,
 				current: String(input.value || '').trim(),
@@ -2764,11 +2792,12 @@ func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePa
 	}
 
 	if err := m.runLoggedStep(session.taskCtx, progress, "Select ETH", func() (string, error) {
-		err := chromedp.Run(session.taskCtx,
-			chromedp.Evaluate(`(() => {
+		var inputReady bool
+		err := chromedp.Run(session.taskCtx, chromedp.Evaluate(`(() => {
 				const panel = `+findTargetPanelJS+`;
 				const input = panel ? panel.querySelector('input.MuiAutocomplete-input[role="combobox"]') : null;
 				if (!input) return false;
+				input.scrollIntoView({block:'center', inline:'center'});
 				input.focus();
 				input.select();
 				const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -2777,47 +2806,124 @@ func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePa
 				input.dispatchEvent(new Event('input', {bubbles:true}));
 				input.dispatchEvent(new Event('change', {bubbles:true}));
 				return true;
-			})()`, nil),
+			})()`, &inputReady))
+		if err != nil {
+			return "", err
+		}
+		if !inputReady {
+			return "", errors.New("coinglass symbol input not found")
+		}
+		err = chromedp.Run(session.taskCtx,
 			chromedp.ActionFunc(func(ctx context.Context) error {
 				return input.InsertText("ETH").Do(ctx)
 			}),
-			chromedp.Sleep(600*time.Millisecond),
+			chromedp.Sleep(900*time.Millisecond),
 		)
 		if err != nil {
 			return "", err
 		}
 		var picked struct {
-			PickedText string `json:"pickedText"`
-			InputValue string `json:"inputValue"`
+			PickedText     string `json:"pickedText"`
+			InputValue     string `json:"inputValue"`
+			VisibleOptions int    `json:"visibleOptions"`
+			Debug          string `json:"debug"`
 		}
-		deadline := time.Now().Add(8 * time.Second)
+		selectedTarget := false
+		deadline := time.Now().Add(10 * time.Second)
 		for {
 			err = chromedp.Run(session.taskCtx, chromedp.Evaluate(`(() => {
 				const panel = `+findTargetPanelJS+`;
 				const input = panel ? panel.querySelector('input.MuiAutocomplete-input[role="combobox"]') : null;
-				const optionSel = '[role="option"], [role="menuitem"], .MuiOption-root, .MuiMenuItem-root, li[class*="Option"], li[class*="option"]';
-				const visible = Array.from(document.querySelectorAll(optionSel)).filter(el => el.offsetParent !== null);
+				const root = input ? input.closest('.MuiAutocomplete-root') : null;
+				const optionSel = '[role="option"], [role="menuitem"], .MuiOption-root, .MuiMenuItem-root, .MuiAutocomplete-option, li[class*="Option"], li[class*="option"], li[id*="-option-"]';
+				const isVisible = el => {
+					if (!el) return false;
+					const style = window.getComputedStyle(el);
+					if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || '1') === 0) return false;
+					const rect = el.getBoundingClientRect();
+					return rect.width > 0 && rect.height > 0;
+				};
 				const norm = s => String(s || '').trim().toUpperCase();
-				let hit = visible.find(el => norm(el.textContent) === 'ETH') || null;
-				if (!hit) hit = visible.find(el => norm(el.textContent).startsWith('ETH')) || null;
+				const compact = s => norm(s).replace(/[^A-Z0-9]/g, '');
+				const tokens = s => norm(s).split(/[^A-Z0-9/-]+/).filter(Boolean);
+				const hasSymbol = (s, base) => tokens(s).some(token => token === base || token.replace(/[/-]/g, '') === base + 'USDT');
+				const isETH = s => {
+					const up = norm(s);
+					return !!up && (up === 'ETH' || compact(s) === 'ETHUSDT' || hasSymbol(s, 'ETH'));
+				};
+				const score = s => {
+					const up = norm(s);
+					const cmp = compact(s);
+					if (!isETH(s) || up === 'BTC' || cmp === 'BTCUSDT' || hasSymbol(s, 'BTC')) return 0;
+					if (cmp === 'ETHUSDT' || tokens(s).some(token => token.replace(/[/-]/g, '') === 'ETHUSDT')) return 4;
+					if (up === 'ETH') return 3;
+					if (cmp.includes('ETHUSDT')) return 2;
+					return 1;
+				};
+				const collectVisible = () => {
+					const popupId = input ? String(input.getAttribute('aria-controls') || '').trim() : '';
+					const popupRoot = popupId ? document.getElementById(popupId) : null;
+					const pool = popupRoot ? Array.from(popupRoot.querySelectorAll(optionSel)) : Array.from(document.querySelectorAll(optionSel));
+					return {popupId, visible: pool.filter(isVisible)};
+				};
+				let collected = collectVisible();
+				let popupId = collected.popupId;
+				let visible = collected.visible;
+				if (input && visible.length === 0) {
+					input.focus();
+					const buttons = root ? Array.from(root.querySelectorAll('button')).filter(isVisible) : [];
+					const btn = buttons.find(btn => String(btn.className || '').includes('MuiAutocomplete-popupIndicator')) || buttons[0] || null;
+					const target = btn || input;
+					for (const type of ['pointerdown', 'mousedown', 'mouseup', 'click']) {
+						target.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
+					}
+					input.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowDown', code:'ArrowDown', bubbles:true}));
+					input.dispatchEvent(new KeyboardEvent('keyup', {key:'ArrowDown', code:'ArrowDown', bubbles:true}));
+					collected = collectVisible();
+					popupId = collected.popupId;
+					visible = collected.visible;
+				}
+				const candidates = visible.map(el => ({
+					el,
+					rawText: String(el.textContent || '').trim(),
+					value: String(el.getAttribute('data-value') || el.getAttribute('value') || '').trim()
+				})).map(item => ({
+					...item,
+					score: Math.max(score(item.rawText), score(item.value))
+				})).filter(item => item.score > 0).sort((a, b) => b.score - a.score);
+				let hit = candidates.length ? candidates[0].el : null;
+				let pickedText = candidates.length ? (candidates[0].rawText || candidates[0].value || '') : '';
 				if (hit) {
 					hit.scrollIntoView({block:'nearest'});
 					for (const type of ['pointerdown', 'mousedown', 'mouseup', 'click']) {
 						hit.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
 					}
 				} else if (input) {
+					input.focus();
+					input.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowDown', code:'ArrowDown', bubbles:true}));
+					input.dispatchEvent(new KeyboardEvent('keyup', {key:'ArrowDown', code:'ArrowDown', bubbles:true}));
 					input.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', code:'Enter', bubbles:true}));
 					input.dispatchEvent(new KeyboardEvent('keyup', {key:'Enter', code:'Enter', bubbles:true}));
 				}
+				const debug = 'popup=' + (popupId || '(none)') + ' options=' + visible.slice(0, 8).map(el => String(el.textContent || '').trim()).filter(Boolean).join(' | ');
 				return {
-					pickedText: hit ? String(hit.textContent || '').trim() : '',
-					inputValue: input ? String(input.value || '').trim() : ''
+					pickedText,
+					inputValue: input ? String(input.value || '').trim() : '',
+					visibleOptions: visible.length,
+					debug
 				};
 			})()`, &picked))
 			if err != nil {
 				return "", err
 			}
-			if strings.EqualFold(strings.TrimSpace(picked.InputValue), "ETH") || time.Now().After(deadline) {
+			if isCoinglassETHSymbolValue(picked.PickedText) {
+				selectedTarget = true
+			}
+			currentValue := strings.TrimSpace(picked.InputValue)
+			if isCoinglassETHSymbolValue(currentValue) && (selectedTarget || !strings.EqualFold(currentValue, "ETH")) {
+				break
+			}
+			if time.Now().After(deadline) {
 				break
 			}
 			if err := sleepWithContext(session.taskCtx, 250*time.Millisecond); err != nil {
@@ -2826,7 +2932,7 @@ func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePa
 		}
 		finalValue := strings.TrimSpace(picked.InputValue)
 		verifyDeadline := time.Now().Add(4 * time.Second)
-		for !strings.EqualFold(finalValue, "ETH") && time.Now().Before(verifyDeadline) {
+		for !(isCoinglassETHSymbolValue(finalValue) && (selectedTarget || !strings.EqualFold(finalValue, "ETH"))) && time.Now().Before(verifyDeadline) {
 			if err := sleepWithContext(session.taskCtx, 200*time.Millisecond); err != nil {
 				return "", err
 			}
@@ -2839,8 +2945,12 @@ func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePa
 				return "", err
 			}
 		}
-		if !strings.EqualFold(strings.TrimSpace(finalValue), "ETH") {
-			return "", fmt.Errorf("coinglass selected unexpected symbol %q", finalValue)
+		if !(isCoinglassETHSymbolValue(finalValue) && (selectedTarget || !strings.EqualFold(finalValue, "ETH"))) {
+			detail := strings.TrimSpace(picked.Debug)
+			if detail == "" {
+				detail = fmt.Sprintf("visibleOptions=%d", picked.VisibleOptions)
+			}
+			return "", fmt.Errorf("coinglass selected unexpected symbol %q | %s", finalValue, detail)
 		}
 		return fmt.Sprintf("picked=%q current=%q", picked.PickedText, finalValue), nil
 	}); err != nil {
@@ -2869,7 +2979,7 @@ func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePa
 		if err != nil {
 			return "", err
 		}
-		if !strings.EqualFold(strings.TrimSpace(chartInfo.InputValue), "ETH") || strings.TrimSpace(chartInfo.PeriodValue) == "" || strings.TrimSpace(chartInfo.ChartClass) == "" {
+		if !isCoinglassETHSymbolValue(chartInfo.InputValue) || strings.TrimSpace(chartInfo.PeriodValue) == "" || strings.TrimSpace(chartInfo.ChartClass) == "" {
 			return "", errors.New("coinglass ETH chart panel not ready")
 		}
 		return fmt.Sprintf("symbol=%q period=%q chart=%q", chartInfo.InputValue, chartInfo.PeriodValue, chartInfo.ChartClass), nil
