@@ -840,28 +840,113 @@ func isCoinglassETHSymbolValue(raw string) bool {
 func webDataSourceExtractChartPayloadJS(findTargetPanelJS string) string {
 	return `(() => {
 		const panel = ` + findTargetPanelJS + `;
-		if (!panel || !window.echarts) return null;
+		if (!panel) return null;
 		const chartRoot = panel.querySelector('.echarts-for-react');
 		if (!chartRoot) return null;
-		const targets = [
-			chartRoot,
-			chartRoot.querySelector('div'),
-			chartRoot.querySelector('canvas')
-		].filter(Boolean);
+		const debug = {
+			reason: '',
+			targets: 0,
+			optionFrom: '',
+			series: 0,
+			dataSeries: 0,
+			points: 0,
+			currentPrice: 0,
+			sampleSeries: []
+		};
+		const targets = [chartRoot].concat(Array.from(chartRoot.querySelectorAll('*'))).filter(Boolean);
+		debug.targets = targets.length;
 		let inst = null;
-		for (const target of targets) {
-			try {
-				inst = window.echarts.getInstanceByDom(target);
-			} catch (_) {}
-			if (inst) break;
+		let option = null;
+		if (window.echarts && typeof window.echarts.getInstanceByDom === 'function') {
+			for (const target of targets) {
+				try {
+					inst = window.echarts.getInstanceByDom(target);
+				} catch (_) {}
+				if (inst && typeof inst.getOption === 'function') {
+					option = inst.getOption();
+					debug.optionFrom = 'window.echarts';
+					break;
+				}
+			}
 		}
-		if (!inst || typeof inst.getOption !== 'function') return null;
-		const option = inst.getOption();
-		if (!option || !Array.isArray(option.series)) return null;
+		const isObject = value => value && (typeof value === 'object' || typeof value === 'function');
+		const isOption = value => isObject(value) && Array.isArray(value.series);
+		const optionFromCandidate = value => {
+			if (!isObject(value)) return null;
+			try {
+				if (typeof value.getOption === 'function') {
+					const got = value.getOption();
+					if (isOption(got)) return got;
+				}
+			} catch (_) {}
+			const keys = ['option', '_option'];
+			for (const key of keys) {
+				try {
+					if (isOption(value[key])) return value[key];
+				} catch (_) {}
+			}
+			const propKeys = ['props', 'memoizedProps', 'pendingProps', 'state', 'memoizedState'];
+			for (const key of propKeys) {
+				try {
+					const child = value[key];
+					if (isObject(child)) {
+						if (isOption(child.option)) return child.option;
+						if (isOption(child.echartsOption)) return child.echartsOption;
+					}
+				} catch (_) {}
+			}
+			return null;
+		};
+		if (!isOption(option)) {
+			const queue = [];
+			const seen = new WeakSet();
+			const push = (value, depth) => {
+				if (!isObject(value) || depth > 8 || queue.length > 12000) return;
+				if (seen.has(value)) return;
+				seen.add(value);
+				queue.push({value, depth});
+			};
+			for (const target of targets) {
+				push(target, 0);
+				try {
+					for (const key of Object.getOwnPropertyNames(target)) {
+						if (key.toLowerCase().includes('react') || key.toLowerCase().includes('echart')) {
+							push(target[key], 0);
+						}
+					}
+				} catch (_) {}
+			}
+			for (let i = 0; i < queue.length; i++) {
+				const item = queue[i];
+				const found = optionFromCandidate(item.value);
+				if (isOption(found)) {
+					option = found;
+					debug.optionFrom = 'object-graph';
+					break;
+				}
+				if (item.depth >= 8) continue;
+				let keys = [];
+				try {
+					keys = Object.getOwnPropertyNames(item.value);
+				} catch (_) {}
+				for (const key of keys) {
+					if (key === 'parentNode' || key === 'ownerDocument' || key === 'documentElement' || key === 'body' || key === 'window') continue;
+					try {
+						push(item.value[key], item.depth + 1);
+					} catch (_) {}
+				}
+			}
+		}
+		if (!isOption(option)) {
+			debug.reason = 'echarts option not found';
+			return {source:'echarts', rangeLow:0, rangeHigh:0, long:[], short:[], debug};
+		}
+		debug.series = option.series.length;
 		const toNumber = value => {
 			if (typeof value === 'number' && Number.isFinite(value)) return value;
 			if (typeof value === 'string') {
-				const cleaned = value.replace(/,/g, '').trim();
+				const match = value.replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+				const cleaned = match ? match[0] : '';
 				const num = Number(cleaned);
 				return Number.isFinite(num) ? num : 0;
 			}
@@ -879,6 +964,22 @@ func webDataSourceExtractChartPayloadJS(findTargetPanelJS string) string {
 		};
 		pushAxis(option.xAxis);
 		const axisData = axisArrays.find(arr => Array.isArray(arr) && arr.length) || [];
+		const datasets = (Array.isArray(option.dataset) ? option.dataset : [option.dataset]).filter(Boolean);
+		const datasetForSeries = series => {
+			const idx = Number(series && series.datasetIndex);
+			const dataset = Number.isInteger(idx) && datasets[idx] ? datasets[idx] : datasets[0];
+			if (!dataset) return [];
+			const source = dataset.source || dataset.data;
+			return Array.isArray(source) ? source : [];
+		};
+		const stripDatasetHeader = source => {
+			if (!Array.isArray(source) || !source.length) return source || [];
+			const first = source[0];
+			if (Array.isArray(first) && first.some(cell => typeof cell === 'string' && !Number.isFinite(Number(cell)))) {
+				return source.slice(1);
+			}
+			return source;
+		};
 		const inferExchange = name => {
 			const labels = ['Binance', 'OKX', 'Bybit', 'Bitget', 'Gate', 'MEXC', 'HTX', 'KuCoin', 'Deribit', 'BitMEX', 'Hyperliquid'];
 			for (const label of labels) {
@@ -888,15 +989,77 @@ func webDataSourceExtractChartPayloadJS(findTargetPanelJS string) string {
 			}
 			return String(name || 'UNKNOWN').trim() || 'UNKNOWN';
 		};
-		const extractPoint = (item, idx) => {
+		const input = panel.querySelector('input.MuiAutocomplete-input[role="combobox"]');
+		const selectedExchange = input ? inferExchange(input.value) : '';
+		const numericIndexes = row => {
+			const indexes = [];
+			if (!Array.isArray(row)) return indexes;
+			for (let i = 0; i < row.length; i++) {
+				if (toNumber(row[i]) !== 0) indexes.push(i);
+			}
+			return indexes;
+		};
+		const encodedIndex = (series, key, fallback) => {
+			const enc = series && series.encode ? series.encode[key] : null;
+			if (typeof enc === 'number') return enc;
+			if (Array.isArray(enc) && typeof enc[0] === 'number') return enc[0];
+			return fallback;
+		};
+		const findCurrentPrice = () => {
+			let best = 0;
+			const seen = new WeakSet();
+			const walk = (node, key, depth) => {
+				if (best > 0 || depth > 7 || node == null) return;
+				if (typeof node === 'number') {
+					const lk = String(key || '').toLowerCase();
+					if ((lk.includes('current') || lk.includes('last') || lk.includes('mark')) && node > 0) best = node;
+					return;
+				}
+				if (typeof node === 'string') {
+					const text = node.replace(/,/g, '');
+					if (text.includes('当前价格') || text.toLowerCase().includes('current')) {
+						const match = text.match(/(\d+(?:\.\d+)?)/);
+						if (match) best = Number(match[1]) || 0;
+					}
+					return;
+				}
+				if (!isObject(node) || seen.has(node)) return;
+				seen.add(node);
+				if (Array.isArray(node)) {
+					for (let i = 0; i < node.length; i++) walk(node[i], key, depth + 1);
+					return;
+				}
+				if (node.xAxis != null && toNumber(node.xAxis) > 0 && String(node.name || '').includes('当前')) {
+					best = toNumber(node.xAxis);
+					return;
+				}
+				if (Array.isArray(node.coord) && toNumber(node.coord[0]) > 0 && String(node.name || '').includes('当前')) {
+					best = toNumber(node.coord[0]);
+					return;
+				}
+				for (const childKey of Object.keys(node)) walk(node[childKey], childKey, depth + 1);
+			};
+			walk(option, '', 0);
+			return best;
+		};
+		const currentPrice = findCurrentPrice();
+		debug.currentPrice = currentPrice;
+		const extractPoint = (item, idx, series) => {
 			if (Array.isArray(item)) {
-				const price = toNumber(item[0]);
-				const value = toNumber(item[item.length - 1]);
+				const xIdx = encodedIndex(series, 'x', 0);
+				let yIdx = encodedIndex(series, 'y', 1);
+				const nums = numericIndexes(item);
+				if (!(yIdx >= 0) || yIdx === xIdx || !(toNumber(item[yIdx]) > 0)) {
+					yIdx = nums.find(i => i !== xIdx && toNumber(item[i]) > 0) ?? 1;
+				}
+				let price = toNumber(item[xIdx]);
+				if (!(price > 0)) price = toNumber(axisData[idx]);
+				const value = toNumber(item[yIdx]);
 				return {price, value};
 			}
 			if (item && typeof item === 'object') {
 				if (Array.isArray(item.value)) {
-					return {price: toNumber(item.value[0]), value: toNumber(item.value[item.value.length - 1])};
+					return extractPoint(item.value, idx, series);
 				}
 				const price = toNumber(item.price ?? item.x ?? axisData[idx]);
 				const value = toNumber(item.value ?? item.y ?? item.amount ?? item.notional);
@@ -913,21 +1076,28 @@ func webDataSourceExtractChartPayloadJS(findTargetPanelJS string) string {
 			seriesMeta: []
 		};
 		for (const series of option.series) {
-			if (!series || !Array.isArray(series.data) || !series.data.length) continue;
+			if (!series) continue;
+			let seriesData = Array.isArray(series.data) && series.data.length ? series.data : stripDatasetHeader(datasetForSeries(series));
+			if (!Array.isArray(seriesData) || !seriesData.length) continue;
 			const name = String(series.name || '').trim();
 			const lower = name.toLowerCase();
 			const aggregate = lower.includes('cumulative') || lower.includes('total') || name.includes('累计') || name.includes('总');
 			let explicitSide = '';
 			if (lower.includes('long') || name.includes('多')) explicitSide = 'long';
 			if (lower.includes('short') || name.includes('空')) explicitSide = 'short';
-			const exchange = inferExchange(name);
+			const exchange = selectedExchange || inferExchange(name);
 			let nonZero = 0;
-			for (let idx = 0; idx < series.data.length; idx++) {
-				const parsed = extractPoint(series.data[idx], idx);
+			for (let idx = 0; idx < seriesData.length; idx++) {
+				const parsed = extractPoint(seriesData[idx], idx, series);
 				const price = parsed.price;
 				const rawValue = parsed.value;
 				if (!(price > 0) || !(Math.abs(rawValue) > 0)) continue;
-				const side = explicitSide || (rawValue >= 0 ? 'long' : 'short');
+				let side = explicitSide;
+				if (!side && currentPrice > 0) {
+					if (price < currentPrice) side = 'long';
+					if (price > currentPrice) side = 'short';
+				}
+				if (!side) side = rawValue >= 0 ? 'long' : 'short';
 				const point = {
 					price,
 					value: Math.abs(rawValue),
@@ -943,14 +1113,24 @@ func webDataSourceExtractChartPayloadJS(findTargetPanelJS string) string {
 				exchange,
 				side: explicitSide || 'signed',
 				aggregate,
-				dataLen: series.data.length,
+				type: String(series.type || ''),
+				dataLen: seriesData.length,
 				nonZero
 			});
+			debug.sampleSeries.push({name, type:String(series.type || ''), dataLen:seriesData.length, nonZero, aggregate});
+			if (nonZero > 0) debug.dataSeries++;
 		}
 		const prices = payload.long.concat(payload.short).map(point => Number(point.price || 0)).filter(price => price > 0);
-		if (!prices.length) return null;
+		debug.points = prices.length;
+		if (!prices.length) {
+			debug.reason = 'no price/value points extracted';
+			payload.debug = debug;
+			return payload;
+		}
 		payload.rangeLow = Math.min(...prices);
 		payload.rangeHigh = Math.max(...prices);
+		if (currentPrice > 0) payload.lastPrice = currentPrice;
+		payload.debug = debug;
 		return payload;
 	})()`
 }
@@ -3319,6 +3499,7 @@ func (m *WebDataSourceManager) captureWindowV2(session *webDataSourceSession, pr
 		fallbackPointCount := 0
 		var fallbackReadyAt time.Time
 		lastHookSignature := ""
+		lastChartDebug := ""
 		for time.Now().Before(deadline) {
 			var hookData map[string]any
 			if err := chromedp.Run(session.taskCtx, chromedp.Evaluate(`window._liqData`, &hookData)); err == nil && len(hookData) > 0 {
@@ -3370,6 +3551,11 @@ func (m *WebDataSourceManager) captureWindowV2(session *webDataSourceSession, pr
 						meta.HookHits = len(logs)
 						return fmt.Sprintf("source=%s hookHits=%d points=%d range=[%.2f, %.2f]", meta.Source, meta.HookHits, chartPointCount, meta.RangeLow, meta.RangeHigh), nil
 					}
+					if debugInfo, ok := chartData["debug"]; ok {
+						if rawDebug, err := json.Marshal(debugInfo); err == nil {
+							lastChartDebug = compactConsoleLogText(string(rawDebug), 600)
+						}
+					}
 				}
 			}
 
@@ -3382,7 +3568,13 @@ func (m *WebDataSourceManager) captureWindowV2(session *webDataSourceSession, pr
 			meta = fallbackMeta
 			return fmt.Sprintf("source=%s hookHits=%d points=%d range=[%.2f, %.2f]", meta.Source, meta.HookHits, fallbackPointCount, meta.RangeLow, meta.RangeHigh), nil
 		}
-		return "", errors.New("timed out waiting for coinglass payload or chart data")
+		var logs []any
+		_ = chromedp.Run(session.taskCtx, chromedp.Evaluate(`window._liqLog || []`, &logs))
+		detail := fmt.Sprintf("hookHits=%d", len(logs))
+		if lastChartDebug != "" {
+			detail += " chartDebug=" + lastChartDebug
+		}
+		return "", fmt.Errorf("timed out waiting for coinglass payload or chart data | %s", detail)
 	}); err != nil {
 		return nil, capturedPayloadMeta{}, err
 	}

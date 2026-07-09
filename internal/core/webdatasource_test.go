@@ -49,6 +49,32 @@ func TestIsCoinglassETHSymbolValueAcceptsPairDisplayNames(t *testing.T) {
 	}
 }
 
+func TestNormalizeWebDataSourcePayloadAcceptsChartFallbackPayload(t *testing.T) {
+	payload := map[string]any{
+		"source":    "echarts",
+		"lastPrice": 1752.0,
+		"rangeLow":  1740.0,
+		"rangeHigh": 1765.0,
+		"long": []any{
+			map[string]any{"exchange": "Binance", "price": 1748.5, "value": 1200000.0},
+		},
+		"short": []any{
+			map[string]any{"exchange": "Binance", "price": 1758.5, "value": 2300000.0},
+		},
+	}
+
+	points, low, high := normalizeWebDataSourcePayload(payload)
+	if low != 1740.0 || high != 1765.0 {
+		t.Fatalf("expected range [1740,1765], got [%v,%v]", low, high)
+	}
+	if len(points) != 2 {
+		t.Fatalf("expected 2 chart fallback points, got %d", len(points))
+	}
+	if points[0].Side != "long" || points[1].Side != "short" {
+		t.Fatalf("expected long then short points, got %+v", points)
+	}
+}
+
 func TestWebDataSourceUpgradeControlDoesNotNavigateToConfig(t *testing.T) {
 	body := WebDataSourceHTML()
 
