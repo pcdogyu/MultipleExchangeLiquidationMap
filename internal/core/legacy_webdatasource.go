@@ -2764,48 +2764,69 @@ func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePa
 	}
 
 	if err := m.runLoggedStep(session.taskCtx, progress, "Select ETH", func() (string, error) {
-		if err := sleepWithContext(session.taskCtx, 300*time.Millisecond); err != nil {
+		err := chromedp.Run(session.taskCtx,
+			chromedp.Evaluate(`(() => {
+				const panel = `+findTargetPanelJS+`;
+				const input = panel ? panel.querySelector('input.MuiAutocomplete-input[role="combobox"]') : null;
+				if (!input) return false;
+				input.focus();
+				input.select();
+				const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+				if (setter) setter.call(input, '');
+				else input.value = '';
+				input.dispatchEvent(new Event('input', {bubbles:true}));
+				input.dispatchEvent(new Event('change', {bubbles:true}));
+				return true;
+			})()`, nil),
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				return input.InsertText("ETH").Do(ctx)
+			}),
+			chromedp.Sleep(600*time.Millisecond),
+		)
+		if err != nil {
 			return "", err
 		}
 		var picked struct {
 			PickedText string `json:"pickedText"`
 			InputValue string `json:"inputValue"`
 		}
-		err := chromedp.Run(session.taskCtx, chromedp.Evaluate(`(() => {
-			const all = Array.from(document.querySelectorAll('[role="option"], [role="menuitem"], .MuiOption-root, .MuiMenuItem-root, li[class*="Option"], li[class*="option"]'));
-			const visible = all.filter(el => el.offsetParent !== null);
-			const norm = s => String(s || '').trim().toUpperCase();
-			let hit = null;
-			const btcIdx = visible.findIndex(el => norm(el.textContent) === 'BTC');
-			if (btcIdx >= 0 && visible[btcIdx + 1] && norm(visible[btcIdx + 1].textContent) === 'ETH') {
-				hit = visible[btcIdx + 1];
+		deadline := time.Now().Add(8 * time.Second)
+		for {
+			err = chromedp.Run(session.taskCtx, chromedp.Evaluate(`(() => {
+				const panel = `+findTargetPanelJS+`;
+				const input = panel ? panel.querySelector('input.MuiAutocomplete-input[role="combobox"]') : null;
+				const optionSel = '[role="option"], [role="menuitem"], .MuiOption-root, .MuiMenuItem-root, li[class*="Option"], li[class*="option"]';
+				const visible = Array.from(document.querySelectorAll(optionSel)).filter(el => el.offsetParent !== null);
+				const norm = s => String(s || '').trim().toUpperCase();
+				let hit = visible.find(el => norm(el.textContent) === 'ETH') || null;
+				if (!hit) hit = visible.find(el => norm(el.textContent).startsWith('ETH')) || null;
+				if (hit) {
+					hit.scrollIntoView({block:'nearest'});
+					for (const type of ['pointerdown', 'mousedown', 'mouseup', 'click']) {
+						hit.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
+					}
+				} else if (input) {
+					input.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', code:'Enter', bubbles:true}));
+					input.dispatchEvent(new KeyboardEvent('keyup', {key:'Enter', code:'Enter', bubbles:true}));
+				}
+				return {
+					pickedText: hit ? String(hit.textContent || '').trim() : '',
+					inputValue: input ? String(input.value || '').trim() : ''
+				};
+			})()`, &picked))
+			if err != nil {
+				return "", err
 			}
-			if (!hit) {
-				const exact = visible.filter(el => norm(el.textContent) === 'ETH');
-				if (exact.length >= 2) hit = exact[1];
-				if (!hit && exact.length == 1) hit = exact[0];
+			if strings.EqualFold(strings.TrimSpace(picked.InputValue), "ETH") || time.Now().After(deadline) {
+				break
 			}
-			if (!hit) {
-				hit = visible.find(el => norm(el.textContent).includes('ETH')) || null;
+			if err := sleepWithContext(session.taskCtx, 250*time.Millisecond); err != nil {
+				return "", err
 			}
-			if (!hit) return {pickedText:'', inputValue:''};
-			hit.scrollIntoView({block:'nearest'});
-			for (const type of ['pointerdown', 'mousedown', 'mouseup', 'click']) {
-				hit.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
-			}
-			const panel = `+findTargetPanelJS+`;
-			const input = panel ? panel.querySelector('input.MuiAutocomplete-input[role="combobox"]') : null;
-			return {
-				pickedText: String(hit.textContent || '').trim(),
-				inputValue: input ? String(input.value || '').trim() : ''
-			};
-		})()`, &picked))
-		if err != nil {
-			return "", err
 		}
 		finalValue := strings.TrimSpace(picked.InputValue)
-		deadline := time.Now().Add(4 * time.Second)
-		for !strings.EqualFold(finalValue, "ETH") && time.Now().Before(deadline) {
+		verifyDeadline := time.Now().Add(4 * time.Second)
+		for !strings.EqualFold(finalValue, "ETH") && time.Now().Before(verifyDeadline) {
 			if err := sleepWithContext(session.taskCtx, 200*time.Millisecond); err != nil {
 				return "", err
 			}

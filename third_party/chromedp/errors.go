@@ -63,5 +63,7 @@ func isIgnorableUnmarshalError(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "unknown IPAddressSpace value: Loopback")
+	return strings.Contains(msg, "unknown IPAddressSpace value: Loopback") ||
+		strings.Contains(msg, "unknown ClientNavigationReason value: initialFrameNavigation") ||
+		strings.Contains(msg, "unknown Subtype value: trustedtype")
 }
