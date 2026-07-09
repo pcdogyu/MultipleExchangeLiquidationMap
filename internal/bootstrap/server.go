@@ -89,7 +89,7 @@ func Run() {
 		_ = srv.Shutdown(shutCtx)
 	}()
 
-	log.Printf("dashboard listening on http://127.0.0.1%s", addr)
+	log.Printf("dashboard listening on %s", dashboardListenURL(addr))
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
@@ -109,6 +109,17 @@ func serverAddrFromEnv() string {
 		}
 	}
 	return liqmap.DefaultServerAddr
+}
+
+func dashboardListenURL(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		addr = liqmap.DefaultServerAddr
+	}
+	if strings.HasPrefix(addr, ":") {
+		return "http://0.0.0.0" + addr
+	}
+	return "http://" + addr
 }
 
 func versionEnv(key string) string {

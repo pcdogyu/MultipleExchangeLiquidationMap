@@ -82,6 +82,7 @@ exit /b 0
 :initVars
 set "DEBUG=1"
 set "DEBUG_LOG=log/server.log"
+set "APP_ADDR=0.0.0.0:80"
 set "APP_PORT=80"
 set "DB_PATH=data\liqmap.db"
 set "DB_FILE="

@@ -30,6 +30,21 @@ func TestServerAddrFromEnvPrefersAppAddr(t *testing.T) {
 	}
 }
 
+func TestServerAddrFromEnvUsesWildcardAppAddr(t *testing.T) {
+	t.Setenv("APP_ADDR", "0.0.0.0:80")
+	t.Setenv("APP_PORT", "8890")
+
+	if got := serverAddrFromEnv(); got != "0.0.0.0:80" {
+		t.Fatalf("expected wildcard app addr, got %q", got)
+	}
+}
+
+func TestDashboardListenURLFormatsWildcardPort(t *testing.T) {
+	if got := dashboardListenURL(":80"); got != "http://0.0.0.0:80" {
+		t.Fatalf("expected wildcard listen URL, got %q", got)
+	}
+}
+
 func TestMaybeRunPruneCommandIgnoresNonPruneArgs(t *testing.T) {
 	handled, err := maybeRunPruneCommand([]string{"serve"})
 	if handled {
