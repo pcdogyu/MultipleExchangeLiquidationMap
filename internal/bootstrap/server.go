@@ -17,6 +17,7 @@ import (
 	"multipleexchangeliquidationmap/internal/app"
 	liqmap "multipleexchangeliquidationmap/internal/core"
 	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
+	"multipleexchangeliquidationmap/internal/platform/envfile"
 
 	_ "modernc.org/sqlite"
 )
@@ -29,6 +30,9 @@ func Run() {
 		return
 	}
 
+	if err := envfile.Load("config/local.env"); err != nil {
+		log.Fatal(err)
+	}
 	debug := liqmap.Getenv("DEBUG", "") != ""
 	cleanupLogging, err := liqmap.SetupLogging(debug)
 	if err != nil {
@@ -39,9 +43,6 @@ func Run() {
 	dbPath := liqmap.Getenv("DB_PATH", liqmap.DefaultDBPath)
 	addr := serverAddrFromEnv()
 	log.Printf("version info: branch=%s commit=%s commit_time=%s", versionEnv("VERSION_BRANCH"), versionEnv("VERSION_COMMIT"), versionEnv("VERSION_COMMIT_TIME"))
-	if debug {
-		log.Printf("debug enabled: db_path=%s addr=%s symbol=%s", dbPath, addr, liqmap.DefaultSymbol)
-	}
 	if dir := filepath.Dir(dbPath); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			log.Fatal(err)
@@ -53,6 +54,9 @@ func Run() {
 		log.Fatal(err)
 	}
 	defer db.Close()
+	if debug {
+		log.Printf("debug enabled: db_dialect=%s db_path=%s addr=%s symbol=%s", db.Dialect(), dbPath, addr, liqmap.DefaultSymbol)
+	}
 
 	if err := dbplatform.Configure(db); err != nil {
 		log.Fatal(err)
@@ -138,6 +142,9 @@ func maybeRunPruneCommand(args []string) (bool, error) {
 
 	fs := flag.NewFlagSet("prune", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
+	if err := envfile.Load("config/local.env"); err != nil {
+		return true, err
+	}
 	retentionDays := fs.Int("retention-days", 14, "retain the most recent N days of data")
 	skipVacuum := fs.Bool("skip-vacuum", false, "skip VACUUM after pruning")
 	dbPath := fs.String("db-path", liqmap.Getenv("DB_PATH", liqmap.DefaultDBPath), "sqlite database path")
@@ -166,9 +173,13 @@ func maybeRunPruneCommand(args []string) (bool, error) {
 		return true, err
 	}
 
-	beforeInfo, err := os.Stat(*dbPath)
-	if err != nil {
-		return true, err
+	var beforeSize int64
+	if !db.IsPostgres() {
+		beforeInfo, err := os.Stat(*dbPath)
+		if err != nil {
+			return true, err
+		}
+		beforeSize = beforeInfo.Size()
 	}
 	retention := time.Duration(*retentionDays) * 24 * time.Hour
 	summary, err := dbplatform.CleanupExpiredData(db, time.Now(), retention)
@@ -180,20 +191,25 @@ func maybeRunPruneCommand(args []string) (bool, error) {
 			return true, err
 		}
 	}
-	afterInfo, err := os.Stat(*dbPath)
-	if err != nil {
-		return true, err
+	var afterSize int64
+	if !db.IsPostgres() {
+		afterInfo, err := os.Stat(*dbPath)
+		if err != nil {
+			return true, err
+		}
+		afterSize = afterInfo.Size()
 	}
 
 	fmt.Printf("db_path=%s\n", *dbPath)
+	fmt.Printf("db_dialect=%s\n", db.Dialect())
 	fmt.Printf("retention_days=%d\n", *retentionDays)
 	fmt.Printf("cutoff_ms=%d\n", summary.CutoffMS)
 	fmt.Printf("deleted_total=%d\n", summary.DeletedRows)
 	if details := summary.DetailString(); details != "" {
 		fmt.Printf("details=%s\n", details)
 	}
-	fmt.Printf("size_before_bytes=%d\n", beforeInfo.Size())
-	fmt.Printf("size_after_bytes=%d\n", afterInfo.Size())
+	fmt.Printf("size_before_bytes=%d\n", beforeSize)
+	fmt.Printf("size_after_bytes=%d\n", afterSize)
 	fmt.Printf("vacuum=%t\n", !*skipVacuum)
 	return true, nil
 }

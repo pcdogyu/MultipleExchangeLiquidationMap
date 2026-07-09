@@ -1,14 +1,15 @@
 package liqmap
 
 import (
-	"database/sql"
 	"strings"
 	"testing"
 	"time"
+
+	dbpkg "multipleexchangeliquidationmap/internal/platform/db"
 )
 
 func TestBuildLiquidationPatternQuestionAttachmentOmitsScreenshotPrefix(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := dbpkg.OpenSQLite(":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

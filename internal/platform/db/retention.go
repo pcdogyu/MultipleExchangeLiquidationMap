@@ -1,7 +1,6 @@
 package db
 
 import (
-	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
@@ -40,7 +39,7 @@ func (s CleanupSummary) DetailString() string {
 	return strings.Join(parts, ", ")
 }
 
-func CleanupExpiredData(db *sql.DB, now time.Time, retention time.Duration) (CleanupSummary, error) {
+func CleanupExpiredData(db *DB, now time.Time, retention time.Duration) (CleanupSummary, error) {
 	if retention <= 0 {
 		retention = DefaultRetentionWindow
 	}
@@ -103,7 +102,10 @@ func CleanupExpiredData(db *sql.DB, now time.Time, retention time.Duration) (Cle
 	return summary, nil
 }
 
-func VacuumAndCheckpoint(db *sql.DB) error {
+func VacuumAndCheckpoint(db *DB) error {
+	if db.IsPostgres() {
+		return execWithBusyRetry(db, `VACUUM ANALYZE;`)
+	}
 	if err := execWithBusyRetry(db, `PRAGMA journal_mode=DELETE;`); err != nil {
 		return err
 	}

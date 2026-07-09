@@ -1,7 +1,6 @@
 package liqmap
 
 import (
-	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
@@ -183,7 +182,7 @@ func TestDoTelegramRequestReportsAttemptsAfterRetryExhausted(t *testing.T) {
 
 func newTelegramRequestTestApp(t *testing.T, transport http.RoundTripper) *App {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := dbpkg.OpenSQLite(":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

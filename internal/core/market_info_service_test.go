@@ -1,7 +1,6 @@
 package liqmap
 
 import (
-	"database/sql"
 	"io"
 	"net/http"
 	"strings"
@@ -9,8 +8,6 @@ import (
 	"time"
 
 	dbpkg "multipleexchangeliquidationmap/internal/platform/db"
-
-	_ "modernc.org/sqlite"
 )
 
 func TestBuildMarketInfoWindowsClassifiesNetLongIncrease(t *testing.T) {
@@ -139,7 +136,7 @@ func TestFetchBinanceMarketInfoCurrentUsesFuturesBookTickerEndpoint(t *testing.T
 }
 
 func TestMarketInfoUsesFreshSQLiteCache(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := dbpkg.OpenSQLite(":memory:")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

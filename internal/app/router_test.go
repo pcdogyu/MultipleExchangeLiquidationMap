@@ -1,7 +1,6 @@
 package app_test
 
 import (
-	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -10,15 +9,13 @@ import (
 	"multipleexchangeliquidationmap/internal/app"
 	liqmap "multipleexchangeliquidationmap/internal/core"
 	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
-
-	_ "modernc.org/sqlite"
 )
 
 func newTestRouter(t *testing.T) *http.ServeMux {
 	t.Helper()
 
 	dbPath := filepath.Join(t.TempDir(), "router-test.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := dbplatform.OpenSQLite(dbPath)
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

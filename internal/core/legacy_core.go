@@ -54,7 +54,7 @@ const (
 var bandSizes = []int{10, 20, 30, 40, 50, 60, 80, 100, 125, 150, 175, 200, 250, 300, 350, 400}
 
 type App struct {
-	db                  *sql.DB
+	db                  *dbplatform.DB
 	httpClient          *http.Client
 	ob                  *OrderBookHub
 	webds               *WebDataSourceManager
@@ -4051,8 +4051,9 @@ func (a *App) insertLiquidationEvent(exchange, symbol, side, rawSide string, pri
 	if normSide == "" {
 		normSide = normalizeLiquidationSide(rawSide)
 	}
-	_, _ = dbplatform.ExecWithBusyRetry(a.db, `INSERT OR IGNORE INTO liquidation_events(exchange, symbol, side, raw_side, qty, price, mark_price, notional_usd, event_ts, inserted_ts)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, _ = dbplatform.ExecWithBusyRetry(a.db, `INSERT INTO liquidation_events(exchange, symbol, side, raw_side, qty, price, mark_price, notional_usd, event_ts, inserted_ts)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT DO NOTHING`,
 		exchange, symbol, normSide, rawSide, qty, price, markPrice, notional, eventTS, time.Now().UnixMilli())
 }
 

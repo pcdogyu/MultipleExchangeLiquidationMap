@@ -6,6 +6,7 @@ data/*.db-shm
 data/*.db-wal
 multipleexchangeliquidationmap.exe
 server.exe
+migrate-sqlite-postgres.exe
 .gocache/
 debug*
 server.log
@@ -30,3 +31,4 @@ coinglass_profile_runtime_*/
 playload/
 webdatasource_exports/
 .vscode/
+config/local.env

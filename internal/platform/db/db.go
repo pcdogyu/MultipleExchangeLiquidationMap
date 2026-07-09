@@ -3,12 +3,48 @@ package db
 import (
 	"database/sql"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "modernc.org/sqlite"
 )
 
 const defaultSQLiteBusyTimeoutMS = 30000
+
+type Dialect string
+
+const (
+	DialectSQLite   Dialect = "sqlite"
+	DialectPostgres Dialect = "postgres"
+)
+
+type DB struct {
+	*sql.DB
+	dialect Dialect
+}
+
+type Tx struct {
+	tx      *sql.Tx
+	dialect Dialect
+}
+
+type Stmt struct {
+	stmt *sql.Stmt
+}
+
+func (db *DB) Dialect() Dialect {
+	if db == nil || db.dialect == "" {
+		return DialectSQLite
+	}
+	return db.dialect
+}
+
+func (db *DB) IsPostgres() bool {
+	return db != nil && db.Dialect() == DialectPostgres
+}
 
 func SQLiteDSN(dbPath string) string {
 	dbPath = strings.TrimSpace(dbPath)
@@ -26,8 +62,216 @@ func SQLiteDSN(dbPath string) string {
 	return dbPath + sep + q.Encode()
 }
 
-func Open(dbPath string) (*sql.DB, error) {
-	return sql.Open("sqlite", SQLiteDSN(dbPath))
+func Open(dbPath string) (*DB, error) {
+	if dsn := strings.TrimSpace(os.Getenv("DATABASE_URL")); dsn != "" {
+		return OpenPostgres(dsn)
+	}
+	return OpenSQLite(dbPath)
+}
+
+func OpenSQLite(dbPath string) (*DB, error) {
+	sqlDB, err := sql.Open("sqlite", SQLiteDSN(dbPath))
+	if err != nil {
+		return nil, err
+	}
+	return &DB{DB: sqlDB, dialect: DialectSQLite}, nil
+}
+
+func OpenPostgres(dsn string) (*DB, error) {
+	sqlDB, err := sql.Open("pgx", strings.TrimSpace(dsn))
+	if err != nil {
+		return nil, err
+	}
+	return &DB{DB: sqlDB, dialect: DialectPostgres}, nil
+}
+
+func WrapSQLite(sqlDB *sql.DB) *DB {
+	return &DB{DB: sqlDB, dialect: DialectSQLite}
+}
+
+func WrapPostgres(sqlDB *sql.DB) *DB {
+	return &DB{DB: sqlDB, dialect: DialectPostgres}
+}
+
+func (db *DB) Exec(query string, args ...any) (sql.Result, error) {
+	return db.DB.Exec(db.rebind(query), args...)
+}
+
+func (db *DB) Query(query string, args ...any) (*sql.Rows, error) {
+	return db.DB.Query(db.rebind(query), args...)
+}
+
+func (db *DB) QueryRow(query string, args ...any) *sql.Row {
+	return db.DB.QueryRow(db.rebind(query), args...)
+}
+
+func (db *DB) Begin() (*Tx, error) {
+	tx, err := db.DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	return &Tx{tx: tx, dialect: db.Dialect()}, nil
+}
+
+func (db *DB) InsertID(query string, args ...any) (int64, error) {
+	var id int64
+	if db.IsPostgres() {
+		query = strings.TrimSpace(strings.TrimSuffix(query, ";")) + " RETURNING id"
+		err := WithBusyRetry(func() error {
+			return db.QueryRow(query, args...).Scan(&id)
+		})
+		return id, err
+	}
+	err := WithBusyRetry(func() error {
+		res, execErr := db.Exec(query, args...)
+		if execErr != nil {
+			return execErr
+		}
+		var idErr error
+		id, idErr = res.LastInsertId()
+		return idErr
+	})
+	return id, err
+}
+
+func (db *DB) rebind(query string) string {
+	if db.IsPostgres() {
+		return RebindPostgres(query)
+	}
+	return query
+}
+
+func (tx *Tx) Exec(query string, args ...any) (sql.Result, error) {
+	return tx.tx.Exec(rebindForDialect(tx.dialect, query), args...)
+}
+
+func (tx *Tx) Query(query string, args ...any) (*sql.Rows, error) {
+	return tx.tx.Query(rebindForDialect(tx.dialect, query), args...)
+}
+
+func (tx *Tx) QueryRow(query string, args ...any) *sql.Row {
+	return tx.tx.QueryRow(rebindForDialect(tx.dialect, query), args...)
+}
+
+func (tx *Tx) Prepare(query string) (*Stmt, error) {
+	stmt, err := tx.tx.Prepare(rebindForDialect(tx.dialect, query))
+	if err != nil {
+		return nil, err
+	}
+	return &Stmt{stmt: stmt}, nil
+}
+
+func (tx *Tx) Commit() error {
+	return tx.tx.Commit()
+}
+
+func (tx *Tx) Rollback() error {
+	return tx.tx.Rollback()
+}
+
+func (stmt *Stmt) Exec(args ...any) (sql.Result, error) {
+	return stmt.stmt.Exec(args...)
+}
+
+func (stmt *Stmt) Query(args ...any) (*sql.Rows, error) {
+	return stmt.stmt.Query(args...)
+}
+
+func (stmt *Stmt) QueryRow(args ...any) *sql.Row {
+	return stmt.stmt.QueryRow(args...)
+}
+
+func (stmt *Stmt) Close() error {
+	return stmt.stmt.Close()
+}
+
+func rebindForDialect(dialect Dialect, query string) string {
+	if dialect == DialectPostgres {
+		return RebindPostgres(query)
+	}
+	return query
+}
+
+func RebindPostgres(query string) string {
+	var b strings.Builder
+	b.Grow(len(query) + 8)
+	arg := 1
+	inSingle := false
+	inDouble := false
+	inLineComment := false
+	inBlockComment := false
+	for i := 0; i < len(query); i++ {
+		ch := query[i]
+		next := byte(0)
+		if i+1 < len(query) {
+			next = query[i+1]
+		}
+		if inLineComment {
+			b.WriteByte(ch)
+			if ch == '\n' {
+				inLineComment = false
+			}
+			continue
+		}
+		if inBlockComment {
+			b.WriteByte(ch)
+			if ch == '*' && next == '/' {
+				i++
+				b.WriteByte('/')
+				inBlockComment = false
+			}
+			continue
+		}
+		if inSingle {
+			b.WriteByte(ch)
+			if ch == '\'' {
+				if next == '\'' {
+					i++
+					b.WriteByte(next)
+					continue
+				}
+				inSingle = false
+			}
+			continue
+		}
+		if inDouble {
+			b.WriteByte(ch)
+			if ch == '"' {
+				if next == '"' {
+					i++
+					b.WriteByte(next)
+					continue
+				}
+				inDouble = false
+			}
+			continue
+		}
+		switch {
+		case ch == '-' && next == '-':
+			inLineComment = true
+			b.WriteByte(ch)
+			i++
+			b.WriteByte(next)
+		case ch == '/' && next == '*':
+			inBlockComment = true
+			b.WriteByte(ch)
+			i++
+			b.WriteByte(next)
+		case ch == '\'':
+			inSingle = true
+			b.WriteByte(ch)
+		case ch == '"':
+			inDouble = true
+			b.WriteByte(ch)
+		case ch == '?':
+			b.WriteByte('$')
+			b.WriteString(strconv.Itoa(arg))
+			arg++
+		default:
+			b.WriteByte(ch)
+		}
+	}
+	return b.String()
 }
 
 func IsSQLiteBusy(err error) bool {
@@ -53,7 +297,7 @@ func WithBusyRetry(fn func() error) error {
 	return err
 }
 
-func ExecWithBusyRetry(db *sql.DB, stmt string, args ...any) (sql.Result, error) {
+func ExecWithBusyRetry(db *DB, stmt string, args ...any) (sql.Result, error) {
 	var res sql.Result
 	err := WithBusyRetry(func() error {
 		var execErr error
@@ -63,12 +307,18 @@ func ExecWithBusyRetry(db *sql.DB, stmt string, args ...any) (sql.Result, error)
 	return res, err
 }
 
-func execWithBusyRetry(db *sql.DB, stmt string, args ...any) error {
+func execWithBusyRetry(db *DB, stmt string, args ...any) error {
 	_, err := ExecWithBusyRetry(db, stmt, args...)
 	return err
 }
 
-func Configure(db *sql.DB) error {
+func Configure(db *DB) error {
+	if db.IsPostgres() {
+		db.SetMaxOpenConns(16)
+		db.SetMaxIdleConns(8)
+		db.SetConnMaxLifetime(30 * time.Minute)
+		return db.Ping()
+	}
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
 	db.SetConnMaxLifetime(0)
@@ -81,8 +331,34 @@ func Configure(db *sql.DB) error {
 	return execWithBusyRetry(db, `PRAGMA synchronous=NORMAL;`)
 }
 
-func Init(db *sql.DB) error {
-	stmts := []string{
+func Init(db *DB) error {
+	stmts := sqliteSchemaStatements()
+	if db.IsPostgres() {
+		stmts = postgresSchemaStatements()
+	}
+	for _, stmt := range stmts {
+		if err := execWithBusyRetry(db, stmt); err != nil {
+			return err
+		}
+	}
+	_ = execWithBusyRetry(db, `UPDATE analysis_direction_signals
+		SET verify_horizon_min=5
+		WHERE verify_horizon_min IS NULL OR verify_horizon_min<>5`)
+	_ = ensureColumn(db, "analysis_direction_signals", "confidence", "REAL NOT NULL DEFAULT 0")
+	_ = ensureColumn(db, "analysis_liquidation_backtest_signals", "signal_action", "TEXT NOT NULL DEFAULT ''")
+	_ = ensureColumn(db, "analysis_liquidation_backtest_signals", "signal_side", "TEXT NOT NULL DEFAULT ''")
+	_ = ensureColumn(db, "analysis_liquidation_backtest_signals", "signal_label", "TEXT NOT NULL DEFAULT ''")
+	_ = execWithBusyRetry(db, `DELETE FROM analysis_liquidation_backtest_signals WHERE signal_action='' OR signal_side='';`)
+	_ = execWithBusyRetry(db, `DROP INDEX IF EXISTS idx_analysis_liq_backtest_signals_uniq;`)
+	_ = execWithBusyRetry(db, `CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_liq_backtest_signals_uniq
+		ON analysis_liquidation_backtest_signals(symbol, signal_ts, signal_side, signal_action);`)
+	_ = ensureColumn(db, "market_state", "long_short_ratio", "REAL")
+	_ = ensureColumn(db, "oi_snapshots", "long_short_ratio", "REAL")
+	return nil
+}
+
+func sqliteSchemaStatements() []string {
+	return []string{
 		`PRAGMA journal_mode=WAL;`,
 		`CREATE TABLE IF NOT EXISTS market_state (
 			exchange TEXT NOT NULL,
@@ -269,28 +545,37 @@ func Init(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_analysis_liq_backtest_signals_symbol_ts
 			ON analysis_liquidation_backtest_signals(symbol, signal_ts DESC);`,
 	}
-	for _, stmt := range stmts {
-		if err := execWithBusyRetry(db, stmt); err != nil {
-			return err
-		}
-	}
-	_ = execWithBusyRetry(db, `UPDATE analysis_direction_signals
-		SET verify_horizon_min=5
-		WHERE verify_horizon_min IS NULL OR verify_horizon_min<>5`)
-	_ = ensureColumn(db, "analysis_direction_signals", "confidence", "REAL NOT NULL DEFAULT 0")
-	_ = ensureColumn(db, "analysis_liquidation_backtest_signals", "signal_action", "TEXT NOT NULL DEFAULT ''")
-	_ = ensureColumn(db, "analysis_liquidation_backtest_signals", "signal_side", "TEXT NOT NULL DEFAULT ''")
-	_ = ensureColumn(db, "analysis_liquidation_backtest_signals", "signal_label", "TEXT NOT NULL DEFAULT ''")
-	_ = execWithBusyRetry(db, `DELETE FROM analysis_liquidation_backtest_signals WHERE signal_action='' OR signal_side='';`)
-	_ = execWithBusyRetry(db, `DROP INDEX IF EXISTS idx_analysis_liq_backtest_signals_uniq;`)
-	_ = execWithBusyRetry(db, `CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_liq_backtest_signals_uniq
-		ON analysis_liquidation_backtest_signals(symbol, signal_ts, signal_side, signal_action);`)
-	_ = ensureColumn(db, "market_state", "long_short_ratio", "REAL")
-	_ = ensureColumn(db, "oi_snapshots", "long_short_ratio", "REAL")
-	return nil
 }
 
-func ensureColumn(db *sql.DB, table, col, typ string) error {
+func postgresSchemaStatements() []string {
+	out := make([]string, 0, len(sqliteSchemaStatements()))
+	for _, stmt := range sqliteSchemaStatements() {
+		if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(stmt)), "PRAGMA ") {
+			continue
+		}
+		stmt = strings.ReplaceAll(stmt, "INTEGER PRIMARY KEY AUTOINCREMENT", "BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY")
+		stmt = strings.ReplaceAll(stmt, " INTEGER", " BIGINT")
+		stmt = strings.ReplaceAll(stmt, " REAL", " DOUBLE PRECISION")
+		out = append(out, stmt)
+	}
+	return out
+}
+
+func ensureColumn(db *DB, table, col, typ string) error {
+	if db.IsPostgres() {
+		var exists bool
+		err := db.QueryRow(`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema='public' AND table_name=? AND column_name=?
+		)`, table, col).Scan(&exists)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return nil
+		}
+		return execWithBusyRetry(db, `ALTER TABLE `+table+` ADD COLUMN `+col+` `+postgresColumnType(typ))
+	}
 	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
 		return err
@@ -310,4 +595,9 @@ func ensureColumn(db *sql.DB, table, col, typ string) error {
 		}
 	}
 	return execWithBusyRetry(db, `ALTER TABLE `+table+` ADD COLUMN `+col+` `+typ)
+}
+
+func postgresColumnType(typ string) string {
+	typ = strings.ReplaceAll(typ, "REAL", "DOUBLE PRECISION")
+	return typ
 }

@@ -322,12 +322,12 @@ func (m *WebDataSourceManager) finishRunState(status, errMsg string, records int
 
 func (m *WebDataSourceManager) insertRun(windowDays int, status, errMsg string, records int) (int64, error) {
 	now := time.Now().UnixMilli()
-	res, err := dbplatform.ExecWithBusyRetry(m.app.db, `INSERT INTO webdatasource_runs(started_at, finished_at, status, window_days, error_message, records_count, source_meta_json) VALUES(?, ?, ?, ?, ?, ?, '')`,
+	id, err := m.app.db.InsertID(`INSERT INTO webdatasource_runs(started_at, finished_at, status, window_days, error_message, records_count, source_meta_json) VALUES(?, ?, ?, ?, ?, ?, '')`,
 		now, 0, status, windowDays, errMsg, records)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 func (m *WebDataSourceManager) updateRun(id int64, status, errMsg string, records int) error {
@@ -340,12 +340,12 @@ func (m *WebDataSourceManager) updateRun(id int64, status, errMsg string, record
 func (m *WebDataSourceManager) insertSnapshot(windowDays int, rangeLow, rangeHigh float64, payload map[string]any) (int64, error) {
 	now := time.Now().UnixMilli()
 	raw, _ := json.Marshal(payload)
-	res, err := dbplatform.ExecWithBusyRetry(m.app.db, `INSERT INTO webdatasource_snapshots(symbol, window_days, captured_at, range_low, range_high, payload_json) VALUES(?, ?, ?, ?, ?, ?)`,
+	id, err := m.app.db.InsertID(`INSERT INTO webdatasource_snapshots(symbol, window_days, captured_at, range_low, range_high, payload_json) VALUES(?, ?, ?, ?, ?, ?)`,
 		"ETH", windowDays, now, rangeLow, rangeHigh, string(raw))
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 func (m *WebDataSourceManager) insertPoints(snapshotID int64, windowDays int, points []WebDataSourcePoint) error {

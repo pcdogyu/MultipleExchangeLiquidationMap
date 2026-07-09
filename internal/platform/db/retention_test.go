@@ -1,17 +1,14 @@
 package db
 
 import (
-	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
-
-	_ "modernc.org/sqlite"
 )
 
 func TestCleanupExpiredDataRemovesOldRowsAndKeepsRecentRows(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "retention.db")
-	conn, err := sql.Open("sqlite", dbPath)
+	conn, err := OpenSQLite(dbPath)
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

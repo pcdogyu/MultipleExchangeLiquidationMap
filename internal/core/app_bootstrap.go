@@ -4,9 +4,12 @@ import (
 	"database/sql"
 	"net/http"
 	"time"
+
+	dbplatform "multipleexchangeliquidationmap/internal/platform/db"
 )
 
-func NewApp(db *sql.DB, debug bool) *App {
+func NewApp(rawDB any, debug bool) *App {
+	db := normalizeAppDB(rawDB)
 	app := &App{
 		db: db,
 		httpClient: &http.Client{
@@ -27,4 +30,15 @@ func NewApp(db *sql.DB, debug bool) *App {
 	}
 	app.webds = newWebDataSourceManager(app)
 	return app
+}
+
+func normalizeAppDB(rawDB any) *dbplatform.DB {
+	switch db := rawDB.(type) {
+	case *dbplatform.DB:
+		return db
+	case *sql.DB:
+		return dbplatform.WrapSQLite(db)
+	default:
+		return nil
+	}
 }

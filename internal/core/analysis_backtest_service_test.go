@@ -1,7 +1,6 @@
 package liqmap
 
 import (
-	"database/sql"
 	"fmt"
 	"io"
 	"math"
@@ -13,8 +12,6 @@ import (
 	"time"
 
 	dbpkg "multipleexchangeliquidationmap/internal/platform/db"
-
-	_ "modernc.org/sqlite"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -475,9 +472,9 @@ func TestLiquidationBandSyncSecondFactorRequiresBothBandsAligned(t *testing.T) {
 	}
 }
 
-func newAnalysisBacktestMemoryDB(t *testing.T) *sql.DB {
+func newAnalysisBacktestMemoryDB(t *testing.T) *dbpkg.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := dbpkg.OpenSQLite(":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -491,7 +488,7 @@ func newAnalysisBacktestMemoryDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func insertAnalysisBandSyncSnapshotForTest(t *testing.T, db *sql.DB, capturedAt int64, currentPrice float64, points []WebDataSourcePoint) {
+func insertAnalysisBandSyncSnapshotForTest(t *testing.T, db *dbpkg.DB, capturedAt int64, currentPrice float64, points []WebDataSourcePoint) {
 	t.Helper()
 	payload := fmt.Sprintf(`{"currentPrice":%.1f}`, currentPrice)
 	res, err := db.Exec(`INSERT INTO webdatasource_snapshots(symbol, window_days, captured_at, range_low, range_high, payload_json)

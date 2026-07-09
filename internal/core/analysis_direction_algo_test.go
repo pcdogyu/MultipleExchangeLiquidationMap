@@ -1,7 +1,6 @@
 package liqmap
 
 import (
-	"database/sql"
 	"fmt"
 	"math"
 	"strings"
@@ -9,8 +8,6 @@ import (
 	"time"
 
 	dbpkg "multipleexchangeliquidationmap/internal/platform/db"
-
-	_ "modernc.org/sqlite"
 )
 
 func makeAnalysisDirectionSnapshot(days int, currentPrice float64, points ...WebDataSourcePoint) analysisDirectionSnapshot {
@@ -207,7 +204,7 @@ func TestBuildAnalysisDirectionDecisionExtremePointIsClamped(t *testing.T) {
 }
 
 func TestRecordAnalysisDirectionSignalPersistsNewAlgorithmSignal(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := dbpkg.OpenSQLite(":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
