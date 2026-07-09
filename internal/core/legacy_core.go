@@ -2464,6 +2464,14 @@ func (a *App) buildBacktestSummary(symbol string, horizonMin int, fitHours, fitM
 	return out
 }
 
+func quickAnalysisBacktestSummary(horizonMin int) AnalysisBacktest {
+	return AnalysisBacktest{
+		HorizonMin: horizonMin,
+		Source:     "回测页",
+		Summary:    "日内分析已跳过实时回测扫描，详细命中统计请查看单因子回测或清算回测页面。",
+	}
+}
+
 func (a *App) buildExchangeCards(symbol string, states []MarketState, nowTS int64) []ExchangeAnalysisCard {
 	exchanges := []string{"binance", "okx", "bybit"}
 	recentByEx := a.sumLiquidationNotionalByExchangeSince(symbol, nowTS-int64(time.Hour/time.Millisecond))
@@ -2570,7 +2578,7 @@ func (a *App) buildAnalysisSnapshot() (AnalysisSnapshot, error) {
 				dash.CurrentPrice, factorShort, factorLong, dash.Analytics.DominantExchange, dash.Analytics.Alert.Level,
 			),
 		}
-		backtest := a.buildBacktestSummary(defaultSymbol, 60, 24, 25)
+		backtest := quickAnalysisBacktestSummary(60)
 
 		return AnalysisSnapshot{
 			Symbol:        dash.Symbol,
@@ -2680,7 +2688,7 @@ func (a *App) buildAnalysisSnapshot() (AnalysisSnapshot, error) {
 			dash.CurrentPrice, shortRiskScore, longRiskScore, dash.Analytics.DominantExchange, dash.Analytics.Alert.Level,
 		),
 	}
-	backtest := a.buildBacktestSummary(defaultSymbol, 60, 24, 25)
+	backtest := quickAnalysisBacktestSummary(60)
 
 	return AnalysisSnapshot{
 		Symbol:        dash.Symbol,
