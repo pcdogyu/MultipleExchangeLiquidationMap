@@ -104,6 +104,18 @@ function fetchMonitorJSON(url,timeoutMs){
   }).finally(function(){clearTimeout(timer);});
 }
 
+function monitorFallbackAfter(timeoutMs,value){
+  return new Promise(function(resolve){
+    setTimeout(function(){resolve(value);},Math.max(100,Number(timeoutMs)||1000));
+  });
+}
+
+function monitorRejectAfter(timeoutMs,message){
+  return new Promise(function(resolve,reject){
+    setTimeout(function(){reject(new Error(message||'load timeout'));},Math.max(100,Number(timeoutMs)||1000));
+  });
+}
+
 window.addEventListener('error',function(event){
   const msg=String((event&&event.message)||'page error');
   updateMonitorLoadState({pending:false,done:true,error:msg,heatReady:false});
@@ -664,12 +676,17 @@ async function load(opts){
   const loadDays=requestedDays!=null?requestedDays:(normalizeWindowDays(currentDays)!=null?currentDays:1);
   updateMonitorLoadState({pending:true,done:false,days:loadDays,error:'',heatReady:false,seq:seq});
   try{
-    const cfg=await fetchMonitorJSON('/api/model-config',5000).catch(function(){return null;});
+    const queryDays='days='+encodeURIComponent(String(loadDays));
+    const cfgPromise=fetchMonitorJSON('/api/model-config',5000).catch(function(){return null;});
+    const dashboardPromise=Promise.race([
+      fetchMonitorJSON('/api/dashboard?'+queryDays,12000),
+      monitorRejectAfter(14000,'dashboard timeout')
+    ]);
+    const d=await dashboardPromise;
+    const cfg=await Promise.race([cfgPromise,monitorFallbackAfter(1500,null)]);
     const bucket=Number((cfg&&cfg.BucketMin)||(cfg&&cfg.bucket_min)||5);
     const step=Number((cfg&&cfg.PriceStep)||(cfg&&cfg.price_step)||5);
     const range=Number((cfg&&cfg.PriceRange)||(cfg&&cfg.price_range)||400);
-    const queryDays='days='+encodeURIComponent(String(loadDays));
-    const d=await fetchMonitorJSON('/api/dashboard?'+queryDays,12000);
     if(seq!==monitorLoadSeq) return false;
     monitorLiqMapData=null;
     monitorWebMap=null;

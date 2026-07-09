@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -38,6 +39,23 @@ func TestKnownPagesExposeTemplateAndPreferredFiles(t *testing.T) {
 	}
 	if got := len(Liquidations().Preferred); got < 1 {
 		t.Fatalf("expected Liquidations preferred files, got %d", got)
+	}
+}
+
+func TestMonitorPageDoesNotBlockDashboardOnModelConfig(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", Monitor().Preferred[0]))
+	if err != nil {
+		t.Fatalf("read monitor page: %v", err)
+	}
+	html := string(body)
+
+	dashboardIdx := strings.Index(html, "const dashboardPromise=Promise.race")
+	cfgAwaitIdx := strings.Index(html, "const cfg=await Promise.race")
+	if dashboardIdx < 0 || cfgAwaitIdx < 0 {
+		t.Fatalf("expected monitor page to race dashboard and model config requests")
+	}
+	if dashboardIdx > cfgAwaitIdx {
+		t.Fatalf("dashboard request should be started before awaiting model config")
 	}
 }
 

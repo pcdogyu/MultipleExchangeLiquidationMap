@@ -27,8 +27,8 @@ func execWithBusyRetry(db *sql.DB, stmt string, args ...any) error {
 }
 
 func Configure(db *sql.DB) error {
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(8)
+	db.SetMaxIdleConns(4)
 	db.SetConnMaxLifetime(0)
 	return execWithBusyRetry(db, `PRAGMA busy_timeout=5000;`)
 }
