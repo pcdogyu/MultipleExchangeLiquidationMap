@@ -409,17 +409,23 @@ func (a *App) sendTelegramThirtyDayBundleLocked(isTest bool) error {
 	}
 
 	if settings.Group4Enabled {
-		analysisImage, err := a.captureAnalysisScreenshotJPEG()
-		if err != nil {
-			msg := fmt.Sprintf("截图失败: %v", err)
-			a.recordTelegramSendHistory(sendMode, 4, "analysis-image", "failed", msg)
-			errs = append(errs, msg)
-		} else if err := a.sendTelegramPhoto("", analysisImage); err != nil {
-			msg := fmt.Sprintf("发送失败: %v", err)
+		if _, err := loadAnalysisSnapshot(); err != nil {
+			msg := fmt.Sprintf("生成日内分析失败: %v", err)
 			a.recordTelegramSendHistory(sendMode, 4, "analysis-image", "failed", msg)
 			errs = append(errs, msg)
 		} else {
-			a.recordTelegramSendHistory(sendMode, 4, "analysis-image", "success", "")
+			analysisImage, err := a.captureAnalysisScreenshotJPEG()
+			if err != nil {
+				msg := fmt.Sprintf("截图失败: %v", err)
+				a.recordTelegramSendHistory(sendMode, 4, "analysis-image", "failed", msg)
+				errs = append(errs, msg)
+			} else if err := a.sendTelegramPhoto("", analysisImage); err != nil {
+				msg := fmt.Sprintf("发送失败: %v", err)
+				a.recordTelegramSendHistory(sendMode, 4, "analysis-image", "failed", msg)
+				errs = append(errs, msg)
+			} else {
+				a.recordTelegramSendHistory(sendMode, 4, "analysis-image", "success", "")
+			}
 		}
 	}
 
@@ -1042,14 +1048,14 @@ func captureCanvasJPEGWithScale(pageURL, selector string, width, height int, dev
 }
 
 func (a *App) captureMonitorScreenshotJPEG(windowDays int) ([]byte, error) {
-	pageURL := fmt.Sprintf("http://127.0.0.1%s/monitor?capture=1", defaultServerAddr)
+	pageURL := capturePageURL("/monitor?capture=1")
 	prepare := fmt.Sprintf(`(async()=>{ if (typeof setTheme==='function') setTheme('light'); if (typeof setWindow==='function') { await setWindow(%d); } return true; })()`, windowDays)
 	wait := fmt.Sprintf(`(function(){ const btn=document.querySelector('.btns button[data-days=%q]'); const wrap=document.getElementById('heatReport'); const state=window.__monitorLoadState||{}; if(!btn || !btn.classList.contains('active') || !wrap) return false; if(state.pending) return false; if(!state.done) return false; if(Number(state.days||-1)!==%d) return false; if(state.error) return false; const table=wrap.querySelector('table'); const hint=(wrap.textContent||'').trim(); return !!(state.heatReady || table || hint.length>0); })()`, strconv.Itoa(windowDays), windowDays)
 	return captureElementJPEG(pageURL, "#heatReport", 1440, 1200, prepare, wait)
 }
 
 func (a *App) captureWebDataSourceScreenshotJPEG(window string) ([]byte, error) {
-	pageURL := fmt.Sprintf("http://127.0.0.1%s/webdatasource", defaultServerAddr)
+	pageURL := capturePageURL("/webdatasource")
 	quotedWindow := strconv.Quote(window)
 	prepare := `(async()=>{
 		const targetWindow=` + quotedWindow + `;
@@ -1096,7 +1102,7 @@ func (a *App) captureWebDataSourceScreenshotJPEG(window string) ([]byte, error) 
 }
 
 func (a *App) captureAnalysisScreenshotJPEG() ([]byte, error) {
-	pageURL := fmt.Sprintf("http://127.0.0.1%s/analysis?capture=1", defaultServerAddr)
+	pageURL := capturePageURL("/analysis?capture=1")
 	prepare := `(async()=>{ window.__analysisCaptureStartedAt=Date.now(); window.scrollTo(0,0); return true; })()`
 	wait := `(function(){
 		const wrap=document.getElementById('analysisCapture');

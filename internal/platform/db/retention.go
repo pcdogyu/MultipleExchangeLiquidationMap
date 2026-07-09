@@ -10,7 +10,7 @@ import (
 
 const (
 	DefaultRetentionWindow = 14 * 24 * time.Hour
-	DefaultCleanupInterval = 8 * time.Hour
+	DefaultCleanupInterval = 12 * time.Hour
 )
 
 type CleanupSummary struct {

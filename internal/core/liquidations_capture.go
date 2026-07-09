@@ -1,9 +1,7 @@
 package liqmap
 
-import "fmt"
-
 func (a *App) captureLiquidationsStructureScreenshotJPEG() ([]byte, error) {
-	pageURL := fmt.Sprintf("http://127.0.0.1%s/liquidations", defaultServerAddr)
+	pageURL := capturePageURL("/liquidations")
 	prepare := `(async()=>{ if(typeof setTheme==='function') setTheme('light'); window.scrollTo(0,0); return true; })()`
 	wait := `(function(){
 		const grid=document.getElementById('periodGrid');
