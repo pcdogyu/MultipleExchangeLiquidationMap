@@ -95,6 +95,15 @@ function updateMonitorLoadState(patch){
   return monitorLoadState;
 }
 
+function fetchMonitorJSON(url,timeoutMs){
+  const controller=new AbortController();
+  const timer=setTimeout(function(){controller.abort();},Math.max(1000,Number(timeoutMs)||10000));
+  return fetch(url,{signal:controller.signal}).then(function(r){
+    if(!r.ok) throw new Error('load '+url+' failed: '+r.status);
+    return r.json();
+  }).finally(function(){clearTimeout(timer);});
+}
+
 window.addEventListener('error',function(event){
   const msg=String((event&&event.message)||'page error');
   updateMonitorLoadState({pending:false,done:true,error:msg,heatReady:false});
@@ -655,14 +664,12 @@ async function load(opts){
   const loadDays=requestedDays!=null?requestedDays:(normalizeWindowDays(currentDays)!=null?currentDays:1);
   updateMonitorLoadState({pending:true,done:false,days:loadDays,error:'',heatReady:false,seq:seq});
   try{
-    const cfg=await fetch('/api/model-config').then(function(r){return r.json();}).catch(function(){return null;});
+    const cfg=await fetchMonitorJSON('/api/model-config',5000).catch(function(){return null;});
     const bucket=Number((cfg&&cfg.BucketMin)||(cfg&&cfg.bucket_min)||5);
     const step=Number((cfg&&cfg.PriceStep)||(cfg&&cfg.price_step)||5);
     const range=Number((cfg&&cfg.PriceRange)||(cfg&&cfg.price_range)||400);
     const queryDays='days='+encodeURIComponent(String(loadDays));
-    const dashResp=await fetch('/api/dashboard?'+queryDays);
-    if(!dashResp.ok) throw new Error('load dashboard failed: '+dashResp.status);
-    const d=await dashResp.json();
+    const d=await fetchMonitorJSON('/api/dashboard?'+queryDays,12000);
     if(seq!==monitorLoadSeq) return false;
     monitorLiqMapData=null;
     monitorWebMap=null;
@@ -687,8 +694,8 @@ async function load(opts){
     const heatReady=!!(wrap&&(wrap.querySelector('table')||String(wrap.textContent||'').trim().length>0));
     updateMonitorLoadState({pending:false,done:true,days:currentDays,error:'',heatReady:heatReady,seq:seq,generatedAt:Number(d.generated_at||0)});
     const webWindow=windowKeyForDays(currentDays);
-    const mapPromise=fetch('/api/model/liquidation-map?'+queryDays+'&bucket_min='+bucket+'&price_step='+step+'&price_range='+range).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
-    const webPromise=webWindow?fetch('/api/webdatasource/map?window='+encodeURIComponent(webWindow)).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}):Promise.resolve(null);
+    const mapPromise=fetchMonitorJSON('/api/model/liquidation-map?'+queryDays+'&bucket_min='+bucket+'&price_step='+step+'&price_range='+range,12000).catch(function(){return null;});
+    const webPromise=webWindow?fetchMonitorJSON('/api/webdatasource/map?window='+encodeURIComponent(webWindow),12000).catch(function(){return null;}):Promise.resolve(null);
     Promise.all([mapPromise,webPromise]).then(function(results){
       if(seq!==monitorLoadSeq) return;
       monitorLiqMapData=results[0];
@@ -770,7 +777,10 @@ document.addEventListener('keydown',function(e){
   if(e.key==='3') setWindow(30).catch(function(){});
 });
 if(!monitorCaptureMode){
-  setInterval(function(){load().catch(function(){});},5000);
+  setInterval(function(){
+    if(monitorLoadState&&monitorLoadState.pending) return;
+    load().catch(function(){});
+  },30000);
 }
 const preferredMonitorDays=loadRequestedWindowDays();
 if(preferredMonitorDays!=null&&preferredMonitorDays!==currentDays){
