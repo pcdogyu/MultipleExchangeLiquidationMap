@@ -431,7 +431,7 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int, opt
 	stopProgressLogger := m.startProgressLogger(ctx, progress)
 	defer stopProgressLogger()
 
-	captureProfileDir, cleanupProfile, err := m.prepareCaptureProfile(cfg.ProfileDir)
+	captureProfileDir, cleanupProfile, err := m.prepareCaptureProfile(ctx, cfg.ProfileDir)
 	if err != nil {
 		m.appendStepLog("Prepare Runtime Profile", "failed", err.Error())
 		m.finishRunState("failed", err.Error(), 0)
@@ -1247,10 +1247,13 @@ func detectChromePath() string {
 	return ""
 }
 
-func (m *WebDataSourceManager) prepareCaptureProfile(sourceDir string) (string, func(), error) {
+func (m *WebDataSourceManager) prepareCaptureProfile(ctx context.Context, sourceDir string) (string, func(), error) {
 	sourceDir = strings.TrimSpace(sourceDir)
 	if sourceDir == "" {
 		return "", nil, errors.New("webdatasource profile directory is empty")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", nil, err
 	}
 	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
 		return "", nil, err
@@ -1266,7 +1269,7 @@ func (m *WebDataSourceManager) prepareCaptureProfile(sourceDir string) (string, 
 	cleanup := func() {
 		m.cleanupRuntimeProfile(runtimeDir)
 	}
-	if err := cloneChromeProfileForCapture(sourceDir, runtimeDir); err != nil {
+	if err := cloneChromeProfileForCapture(ctx, sourceDir, runtimeDir); err != nil {
 		cleanup()
 		return "", nil, err
 	}
@@ -1326,7 +1329,10 @@ func (m *WebDataSourceManager) cleanupStaleRuntimeProfiles() {
 	}
 }
 
-func cloneChromeProfileForCapture(sourceDir, targetDir string) error {
+func cloneChromeProfileForCapture(ctx context.Context, sourceDir, targetDir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(sourceDir)
 	if err != nil {
 		return err
@@ -1339,6 +1345,9 @@ func cloneChromeProfileForCapture(sourceDir, targetDir string) error {
 		"first run":    true,
 	}
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		name := entry.Name()
 		nameKey := strings.ToLower(strings.TrimSpace(name))
 		if !keepTopLevel[nameKey] || isTransientChromeProfileEntry(nameKey) {
@@ -1347,20 +1356,23 @@ func cloneChromeProfileForCapture(sourceDir, targetDir string) error {
 		srcPath := filepath.Join(sourceDir, name)
 		dstPath := filepath.Join(targetDir, name)
 		if entry.IsDir() {
-			if err := copyChromeProfileDir(srcPath, dstPath); err != nil {
+			if err := copyChromeProfileDir(ctx, srcPath, dstPath); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := copyFile(srcPath, dstPath); err != nil {
+		if err := copyFile(ctx, srcPath, dstPath); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func copyChromeProfileDir(sourceDir, targetDir string) error {
+func copyChromeProfileDir(ctx context.Context, sourceDir, targetDir string) error {
 	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -1382,7 +1394,7 @@ func copyChromeProfileDir(sourceDir, targetDir string) error {
 		if info.IsDir() {
 			return os.MkdirAll(dstPath, 0o755)
 		}
-		return copyFile(path, dstPath)
+		return copyFile(ctx, path, dstPath)
 	})
 }
 
@@ -1391,14 +1403,18 @@ func isTransientChromeProfileEntry(name string) bool {
 	case "lockfile", "singletonlock", "singletoncookie", "singletonsocket", "devtoolsactiveport",
 		"cache", "code cache", "gpucache", "grshadercache", "shadercache",
 		"browsermetrics", "deferredbrowsermetrics", "crashpad", "component_crx_cache",
-		"extensions_crx_cache", "dawngraphitecache", "dawnwebgpucache":
+		"extensions_crx_cache", "dawngraphitecache", "dawnwebgpucache",
+		"blob_storage", "cache storage", "service worker":
 		return true
 	default:
 		return false
 	}
 }
 
-func copyFile(sourcePath, targetPath string) error {
+func copyFile(ctx context.Context, sourcePath, targetPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	sourceFile, err := os.Open(sourcePath)
 	if err != nil {
 		return err
@@ -1415,10 +1431,37 @@ func copyFile(sourcePath, targetPath string) error {
 	if err != nil {
 		return err
 	}
-	defer targetFile.Close()
-	if _, err := io.Copy(targetFile, sourceFile); err != nil {
+	closed := false
+	defer func() {
+		if !closed {
+			_ = targetFile.Close()
+		}
+	}()
+	buf := make([]byte, 256*1024)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		n, readErr := sourceFile.Read(buf)
+		if n > 0 {
+			if _, err := targetFile.Write(buf[:n]); err != nil {
+				return err
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return readErr
+		}
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := targetFile.Close(); err != nil {
+		return err
+	}
+	closed = true
 	return nil
 }
 

@@ -1,6 +1,9 @@
 package liqmap
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -116,5 +119,60 @@ func TestWebDataSourceScheduleFallbackIntervalIsSixtyMinutes(t *testing.T) {
 	next := time.UnixMilli(nextScheduledWebDataSourceCaptureTSForInterval(now, 0))
 	if next.Hour() != 18 || next.Minute() != 0 {
 		t.Fatalf("expected fallback next slot at 18:00, got %s", next.Format("15:04:05"))
+	}
+}
+
+func TestCloneChromeProfileForCaptureSkipsHeavyCacheDirs(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "coinglass_profile")
+	target := filepath.Join(root, "runtime")
+	if err := os.MkdirAll(filepath.Join(source, "Default", "Cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(source, "Default", "Service Worker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(source, "Default", "Local Storage"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "Local State"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "Default", "Cache", "big.bin"), []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "Default", "Service Worker", "cache.bin"), []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "Default", "Local Storage", "login"), []byte("token"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cloneChromeProfileForCapture(context.Background(), source, target); err != nil {
+		t.Fatalf("cloneChromeProfileForCapture: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "Default", "Local Storage", "login")); err != nil {
+		t.Fatalf("expected local storage to be copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "Default", "Cache", "big.bin")); !os.IsNotExist(err) {
+		t.Fatalf("expected cache file to be skipped, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "Default", "Service Worker", "cache.bin")); !os.IsNotExist(err) {
+		t.Fatalf("expected service worker cache to be skipped, stat err=%v", err)
+	}
+}
+
+func TestCloneChromeProfileForCaptureHonorsCanceledContext(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "coinglass_profile")
+	target := filepath.Join(root, "runtime")
+	if err := os.MkdirAll(filepath.Join(source, "Default"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := cloneChromeProfileForCapture(ctx, source, target); err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
