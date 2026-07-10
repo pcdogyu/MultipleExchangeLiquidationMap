@@ -472,6 +472,8 @@ func (m *WebDataSourceManager) runOnce(ctx context.Context, windowDays *int, opt
 				}
 				if len(points) == 0 {
 					err = errors.New("coinglass payload parsed 0 points")
+				} else if rangeErr := validateWebDataSourceETHPayloadRange(rangeLow, rangeHigh); rangeErr != nil {
+					err = rangeErr
 				} else {
 					snapshotID, snapErr := m.insertSnapshot(days, rangeLow, rangeHigh, payload)
 					if snapErr != nil {
@@ -862,17 +864,32 @@ func isCoinglassETHSymbolValue(raw string) bool {
 	if value == "ETH" || value == "ETHUSDT" {
 		return true
 	}
+	hasETH := false
 	tokens := strings.FieldsFunc(value, func(r rune) bool {
 		return !(r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '/' || r == '-')
 	})
 	for _, token := range tokens {
 		token = strings.TrimSpace(token)
 		compact := strings.NewReplacer("/", "", "-", "").Replace(token)
+		if token == "BTC" || compact == "BTCUSDT" {
+			return false
+		}
 		if token == "ETH" || compact == "ETHUSDT" {
-			return true
+			hasETH = true
 		}
 	}
-	return false
+	return hasETH
+}
+
+func validateWebDataSourceETHPayloadRange(rangeLow, rangeHigh float64) error {
+	const maxExpectedETHUSDTPrice = 20000.0
+	if rangeLow <= 0 || rangeHigh <= 0 {
+		return nil
+	}
+	if rangeLow > maxExpectedETHUSDTPrice || rangeHigh > maxExpectedETHUSDTPrice {
+		return fmt.Errorf("coinglass payload price range looks non-ETH: [%.2f, %.2f]", rangeLow, rangeHigh)
+	}
+	return nil
 }
 
 func webDataSourceExtractChartPayloadJS(findTargetPanelJS string) string {
@@ -3078,9 +3095,24 @@ func (m *WebDataSourceManager) newCaptureSessionV4(ctx context.Context, chromePa
 			return "", errors.New("coinglass symbol input not found")
 		}
 		err = chromedp.Run(session.taskCtx,
-			chromedp.ActionFunc(func(ctx context.Context) error {
-				return input.InsertText("ETH").Do(ctx)
-			}),
+			chromedp.Evaluate(`(() => {
+				const panel = `+findTargetPanelJS+`;
+				const input = panel ? panel.querySelector('input.MuiAutocomplete-input[role="combobox"]') : null;
+				if (!input) return false;
+				input.focus();
+				const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+				if (setter) setter.call(input, '');
+				else input.value = '';
+				input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'deleteContentBackward', data:null}));
+				input.dispatchEvent(new Event('change', {bubbles:true}));
+				if (setter) setter.call(input, 'ETH');
+				else input.value = 'ETH';
+				input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:'ETH'}));
+				input.dispatchEvent(new Event('change', {bubbles:true}));
+				input.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowDown', code:'ArrowDown', bubbles:true}));
+				input.dispatchEvent(new KeyboardEvent('keyup', {key:'ArrowDown', code:'ArrowDown', bubbles:true}));
+				return true;
+			})()`, &inputReady),
 			chromedp.Sleep(900*time.Millisecond),
 		)
 		if err != nil {

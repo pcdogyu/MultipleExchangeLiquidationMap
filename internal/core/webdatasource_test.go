@@ -43,12 +43,22 @@ func TestIsCoinglassETHSymbolValueAcceptsPairDisplayNames(t *testing.T) {
 		"BTC",
 		"BTCUSDT",
 		"Binance BTC/USDT 永续",
+		"Binance BTC/USDT 永续 ETH",
 		"ETHBTC",
 	}
 	for _, value := range rejected {
 		if isCoinglassETHSymbolValue(value) {
 			t.Fatalf("expected %q to be rejected as ETH", value)
 		}
+	}
+}
+
+func TestValidateWebDataSourceETHPayloadRangeRejectsBTCPrices(t *testing.T) {
+	if err := validateWebDataSourceETHPayloadRange(1565.9, 1933.8); err != nil {
+		t.Fatalf("expected ETH price range to pass, got %v", err)
+	}
+	if err := validateWebDataSourceETHPayloadRange(56611, 69670); err == nil {
+		t.Fatal("expected BTC-like price range to be rejected")
 	}
 }
 
