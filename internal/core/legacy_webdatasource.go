@@ -901,6 +901,7 @@ func webDataSourceExtractChartPayloadJS(findTargetPanelJS string) string {
 		const debug = {
 			reason: '',
 			targets: 0,
+			payloadFrom: '',
 			optionFrom: '',
 			series: 0,
 			dataSeries: 0,
@@ -909,9 +910,15 @@ func webDataSourceExtractChartPayloadJS(findTargetPanelJS string) string {
 			sampleSeries: []
 		};
 		const targets = [chartRoot].concat(Array.from(chartRoot.querySelectorAll('*'))).filter(Boolean);
+		let owner = chartRoot.parentElement;
+		for (let depth = 0; owner && depth < 12; depth++, owner = owner.parentElement) {
+			targets.push(owner);
+			if (owner === panel) break;
+		}
 		debug.targets = targets.length;
 		let inst = null;
 		let option = null;
+		let reactPayload = null;
 		if (window.echarts && typeof window.echarts.getInstanceByDom === 'function') {
 			for (const target of targets) {
 				try {
@@ -926,6 +933,34 @@ func webDataSourceExtractChartPayloadJS(findTargetPanelJS string) string {
 		}
 		const isObject = value => value && (typeof value === 'object' || typeof value === 'function');
 		const isOption = value => isObject(value) && Array.isArray(value.series);
+		const isLiquidationPayload = value => {
+			if (!isObject(value) || !isObject(value.liqMapV2)) return false;
+			try {
+				return Object.keys(value.liqMapV2).length > 0;
+			} catch (_) {
+				return false;
+			}
+		};
+		const payloadFromCandidate = value => {
+			if (!isObject(value)) return null;
+			const candidates = [value];
+			for (const key of ['data', 'state', 'props', 'memoizedProps', 'pendingProps', 'memoizedState']) {
+				try {
+					const child = value[key];
+					if (!isObject(child)) continue;
+					candidates.push(child);
+					if (isObject(child.data)) candidates.push(child.data);
+				} catch (_) {}
+			}
+			try {
+				if (isObject(value.stateNode)) {
+					candidates.push(value.stateNode);
+					if (isObject(value.stateNode.state)) candidates.push(value.stateNode.state);
+					if (isObject(value.stateNode.state && value.stateNode.state.data)) candidates.push(value.stateNode.state.data);
+				}
+			} catch (_) {}
+			return candidates.find(isLiquidationPayload) || null;
+		};
 		const optionFromCandidate = value => {
 			if (!isObject(value)) return null;
 			try {
@@ -952,6 +987,40 @@ func webDataSourceExtractChartPayloadJS(findTargetPanelJS string) string {
 			}
 			return null;
 		};
+		for (const target of targets) {
+			let keys = [];
+			try {
+				keys = Object.getOwnPropertyNames(target).filter(key => {
+					const lower = key.toLowerCase();
+					return lower.includes('reactfiber') || lower.includes('reactinternalinstance') || lower.includes('reactprops');
+				});
+			} catch (_) {}
+			for (const key of keys) {
+				let fiber = null;
+				try { fiber = target[key]; } catch (_) {}
+				for (let depth = 0; fiber && depth < 40; depth++) {
+					if (!reactPayload) reactPayload = payloadFromCandidate(fiber);
+					if (!isOption(option)) {
+						const found = optionFromCandidate(fiber);
+						if (isOption(found)) {
+							option = found;
+							debug.optionFrom = 'react-owner';
+						}
+					}
+					if (reactPayload && isOption(option)) break;
+					try { fiber = fiber.return || null; } catch (_) { fiber = null; }
+				}
+				if (reactPayload && isOption(option)) break;
+			}
+			if (reactPayload && isOption(option)) break;
+		}
+		if (reactPayload) {
+			debug.payloadFrom = 'react-owner';
+			const payload = Object.assign({}, reactPayload);
+			payload.source = 'react-state';
+			payload.debug = debug;
+			return payload;
+		}
 		if (!isOption(option)) {
 			const queue = [];
 			const seen = new WeakSet();

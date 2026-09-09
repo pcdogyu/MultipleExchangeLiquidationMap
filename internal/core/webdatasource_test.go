@@ -88,6 +88,21 @@ func TestNormalizeWebDataSourcePayloadAcceptsChartFallbackPayload(t *testing.T) 
 	}
 }
 
+func TestWebDataSourceChartFallbackSearchesReactOwnerState(t *testing.T) {
+	script := webDataSourceExtractChartPayloadJS(webDataSourceFindTargetPanelJS())
+	for _, marker := range []string{
+		"payloadFromCandidate",
+		"reactfiber",
+		"fiber.return",
+		"react-owner",
+		"react-state",
+	} {
+		if !strings.Contains(script, marker) {
+			t.Fatalf("expected chart fallback script to include %q", marker)
+		}
+	}
+}
+
 func TestWebDataSourceUpgradeControlDoesNotNavigateToConfig(t *testing.T) {
 	body := WebDataSourceHTML()
 
