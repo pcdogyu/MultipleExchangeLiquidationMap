@@ -183,6 +183,39 @@ func TestHandleUpgradePullQueuesWork(t *testing.T) {
 	}
 }
 
+func TestHandleWindowsUpgradePullStartsDetachedWrapper(t *testing.T) {
+	withRuntimeGOOS(t, "windows")
+	t.Setenv("TEMP", t.TempDir())
+	var started bool
+	m := &Manager{
+		start: func(name string, args ...string) error {
+			started = true
+			if name != "cmd" {
+				t.Fatalf("expected cmd starter, got %s", name)
+			}
+			joined := strings.Join(args, " ")
+			if !strings.Contains(joined, "start") || !strings.Contains(joined, "liqmap-upgrade-run.bat") {
+				t.Fatalf("unexpected detached upgrade command: %v", args)
+			}
+			return nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/upgrade/pull", nil)
+	rec := httptest.NewRecorder()
+	m.HandleUpgradePull(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !started {
+		t.Fatal("expected detached Windows upgrade wrapper to start")
+	}
+	if !strings.Contains(rec.Body.String(), "upgrade queued") {
+		t.Fatalf("expected queued response, got %q", rec.Body.String())
+	}
+}
+
 func TestHandleLogsFiltersAndPaginates(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "server.log")
 	content := strings.Join([]string{

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -26,6 +27,7 @@ var (
 type Manager struct {
 	debug bool
 	run   func(name string, args ...string) ([]byte, error)
+	start func(name string, args ...string) error
 	async func(fn func())
 }
 
@@ -34,6 +36,13 @@ func New(debug bool) *Manager {
 		debug: debug,
 		run: func(name string, args ...string) ([]byte, error) {
 			return exec.Command(name, args...).CombinedOutput()
+		},
+		start: func(name string, args ...string) error {
+			cmd := exec.Command(name, args...)
+			if err := cmd.Start(); err != nil {
+				return err
+			}
+			return cmd.Process.Release()
 		},
 		async: func(fn func()) {
 			go fn()
@@ -253,8 +262,10 @@ func (m *Manager) queueWindowsUpgrade() error {
 	if err := os.WriteFile(wrapperPath, []byte(script), 0o644); err != nil {
 		return err
 	}
-	_, err = m.run("cmd", "/d", "/s", "/c", "start", "\"\"", "/min", wrapperPath)
-	return err
+	if m.start == nil {
+		return errors.New("detached process starter is not configured")
+	}
+	return m.start("cmd", "/d", "/s", "/c", "start", "\"\"", "/min", wrapperPath)
 }
 
 func (m *Manager) handleWindowsUpgradeProgress(w http.ResponseWriter) {
