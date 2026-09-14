@@ -27,7 +27,7 @@ import (
 const (
 	defaultWebDataSourceIntervalMin  = 60
 	defaultWebDataSourceTimeoutSec   = 60
-	defaultWebDataSourceInitLoginSec = 90
+	defaultWebDataSourceInitLoginSec = 300
 	defaultWebDataSourceInitTimeout  = (defaultWebDataSourceInitLoginSec + 15) * time.Second
 	defaultWebDataSourceMaxAttempts  = 3
 	webDataSourcePayloadDir          = "playload"
@@ -49,6 +49,20 @@ type WebDataSourceManager struct {
 type webDataSourceRunOptions struct {
 	background bool
 	source     string
+}
+
+type webDataSourceLoginState struct {
+	URL            string `json:"url"`
+	OnCoinglass    bool   `json:"onCoinglass"`
+	OnTarget       bool   `json:"onTarget"`
+	LoginGate      bool   `json:"loginGate"`
+	LoginButtons   int    `json:"loginButtons"`
+	ChartRoots     int    `json:"chartRoots"`
+	UnlockedCharts int    `json:"unlockedCharts"`
+}
+
+func (state webDataSourceLoginState) ready() bool {
+	return state.OnTarget && !state.LoginGate && state.UnlockedCharts > 0
 }
 
 func (opts webDataSourceRunOptions) modeLabel() string {
@@ -619,11 +633,12 @@ func (m *WebDataSourceManager) runInitSession(ctx context.Context) error {
 	}
 
 	if err := m.runLoggedStep(session.taskCtx, progress, "Wait For Manual Login", func() (string, error) {
-		m.appendStepLog("Login Tip", "info", fmt.Sprintf("Please finish Coinglass login within %d seconds; the saved profile will be reused later", defaultWebDataSourceInitLoginSec))
+		m.appendStepLog("Login Tip", "info", fmt.Sprintf("Please finish Coinglass login within %d seconds; success is reported only after the Binance charts unlock", defaultWebDataSourceInitLoginSec))
 		deadline := time.Now().Add(time.Duration(defaultWebDataSourceInitLoginSec) * time.Second)
 		if ctxDeadline, ok := session.taskCtx.Deadline(); ok && ctxDeadline.Before(deadline) {
 			deadline = ctxDeadline
 		}
+		lastState := webDataSourceLoginState{}
 		for {
 			remaining := int(time.Until(deadline).Seconds())
 			if remaining < 0 {
@@ -631,27 +646,43 @@ func (m *WebDataSourceManager) runInitSession(ctx context.Context) error {
 			}
 			progress.setAction(fmt.Sprintf("Login to Coinglass in Chrome, %d seconds remaining", remaining))
 			if time.Now().After(deadline) {
-				break
+				return "", fmt.Errorf("coinglass login was not completed: url=%q loginGate=%t loginButtons=%d chartRoots=%d unlockedCharts=%d", lastState.URL, lastState.LoginGate, lastState.LoginButtons, lastState.ChartRoots, lastState.UnlockedCharts)
+			}
+
+			var state webDataSourceLoginState
+			if err := chromedp.Run(session.taskCtx, chromedp.Evaluate(webDataSourceInspectLoginJS(), &state)); err == nil {
+				lastState = state
+				if state.ready() {
+					if err := sleepWithContext(session.taskCtx, 2*time.Second); err != nil {
+						return "", err
+					}
+					return fmt.Sprintf("verified url=%q chartRoots=%d unlockedCharts=%d", state.URL, state.ChartRoots, state.UnlockedCharts), nil
+				}
+				if state.OnCoinglass && !state.OnTarget && !state.LoginGate && state.LoginButtons == 0 {
+					if err := chromedp.Run(session.taskCtx, chromedp.Navigate("https://www.coinglass.com/zh/pro/futures/LiquidationMap")); err != nil && m.app.debug {
+						log.Printf("navigate to Coinglass liquidation map after login failed: %v", err)
+					}
+				}
 			}
 			sleepStep := 5 * time.Second
 			if time.Until(deadline) < sleepStep {
 				sleepStep = time.Until(deadline)
 			}
 			if sleepStep <= 0 {
-				break
+				return "", fmt.Errorf("coinglass login was not completed: url=%q loginGate=%t loginButtons=%d chartRoots=%d unlockedCharts=%d", lastState.URL, lastState.LoginGate, lastState.LoginButtons, lastState.ChartRoots, lastState.UnlockedCharts)
 			}
 			if err := sleepWithContext(session.taskCtx, sleepStep); err != nil {
 				return "", err
 			}
 		}
-		return "Login wait finished; profile session kept on disk", nil
 	}); err != nil {
+		m.appendStepLog("Init Session Completed", "failed", err.Error())
 		m.finishRunState("failed", err.Error(), 0)
 		return err
 	}
 
 	progress.setAction("Init Session Completed")
-	m.appendStepLog("Init Session Completed", "success", "Coinglass login session saved to the configured Profile directory")
+	m.appendStepLog("Init Session Completed", "success", "Coinglass login and unlocked Binance charts verified; session saved to the configured Profile directory")
 	m.finishRunState("success", "", 0)
 	return nil
 }
@@ -761,6 +792,35 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func webDataSourceInspectLoginJS() string {
+	return `(() => {
+		const bodyText = String(document.body ? document.body.innerText : '');
+		const normalize = value => String(value || '').replace(/\s+/g, '').toLowerCase();
+		const visible = element => {
+			if (!element) return false;
+			const style = window.getComputedStyle(element);
+			if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || '1') === 0) return false;
+			const rect = element.getBoundingClientRect();
+			return rect.width > 0 && rect.height > 0;
+		};
+		const loginLabels = new Set(['登录', '登入', 'login', 'signin', 'log in', 'sign in'].map(normalize));
+		const loginButtons = Array.from(document.querySelectorAll('button, a')).filter(element => visible(element) && loginLabels.has(normalize(element.textContent))).length;
+		const chartRoots = Array.from(document.querySelectorAll('.echarts-for-react'));
+		const protectedCharts = chartRoots.slice(0, 2);
+		const unlockedCharts = protectedCharts.filter(root => !!root.querySelector('canvas')).length;
+		const pathname = String(location.pathname || '').toLowerCase();
+		return {
+			url: String(location.href || ''),
+			onCoinglass: /(^|\.)coinglass\.com$/i.test(String(location.hostname || '')),
+			onTarget: pathname.includes('/futures/liquidationmap'),
+			loginGate: bodyText.includes('登录解锁更多内容') || /log\s*in\s*to\s*unlock/i.test(bodyText) || /sign\s*in\s*to\s*unlock/i.test(bodyText),
+			loginButtons,
+			chartRoots: chartRoots.length,
+			unlockedCharts
+		};
+	})()`
 }
 
 func webDataSourceCaptureDeadline(ctx context.Context, now time.Time, minimumWait time.Duration) time.Time {
@@ -4124,22 +4184,33 @@ func parsePointArray(node any, exchange, side string) []WebDataSourcePoint {
 }
 
 func parseLiqMapV2Payload(payload map[string]any) []WebDataSourcePoint {
-	rawData, ok := payload["data"].([]any)
-	if !ok || len(rawData) == 0 {
-		return nil
+	entries := make([]map[string]any, 0, 4)
+	if liqMap, ok := payload["liqMapV2"].(map[string]any); ok && len(liqMap) > 0 {
+		entries = append(entries, payload)
 	}
-
-	rangeLow := toFloatFromAny(payload["rangeLow"])
-	rangeHigh := toFloatFromAny(payload["rangeHigh"])
-	currentPrice := webDataSourcePayloadCurrentPrice(payload, rangeLow, rangeHigh)
-	if currentPrice <= 0 {
+	switch rawData := payload["data"].(type) {
+	case []any:
+		for _, item := range rawData {
+			if entry, ok := item.(map[string]any); ok {
+				entries = append(entries, entry)
+			}
+		}
+	case map[string]any:
+		entries = append(entries, rawData)
+	}
+	if len(entries) == 0 {
 		return nil
 	}
 
 	points := make([]WebDataSourcePoint, 0, 512)
-	for _, item := range rawData {
-		entry, ok := item.(map[string]any)
-		if !ok {
+	for _, entry := range entries {
+		rangeLow := toFloatFromAny(entry["rangeLow"])
+		rangeHigh := toFloatFromAny(entry["rangeHigh"])
+		currentPrice := webDataSourcePayloadCurrentPrice(entry, rangeLow, rangeHigh)
+		if currentPrice <= 0 {
+			currentPrice = webDataSourcePayloadCurrentPrice(payload, toFloatFromAny(payload["rangeLow"]), toFloatFromAny(payload["rangeHigh"]))
+		}
+		if currentPrice <= 0 {
 			continue
 		}
 
@@ -4281,13 +4352,24 @@ func normalizeWebDataSourcePayload(payload map[string]any) ([]WebDataSourcePoint
 	if len(points) == 0 {
 		points = extractFallbackPoints(payload)
 	}
+	points = dedupePoints(points)
+	if (rangeLow <= 0 || rangeHigh <= 0) && len(points) > 0 {
+		for _, point := range points {
+			if rangeLow <= 0 || point.Price < rangeLow {
+				rangeLow = point.Price
+			}
+			if rangeHigh <= 0 || point.Price > rangeHigh {
+				rangeHigh = point.Price
+			}
+		}
+	}
 	sort.Slice(points, func(i, j int) bool {
 		if points[i].Price == points[j].Price {
 			return points[i].LiqValue > points[j].LiqValue
 		}
 		return points[i].Price < points[j].Price
 	})
-	return dedupePoints(points), rangeLow, rangeHigh
+	return points, rangeLow, rangeHigh
 }
 
 const webDataSourceHookJS = `(() => {

@@ -88,6 +88,31 @@ func TestNormalizeWebDataSourcePayloadAcceptsChartFallbackPayload(t *testing.T) 
 	}
 }
 
+func TestNormalizeWebDataSourcePayloadAcceptsCurrentSingleInstrumentSchema(t *testing.T) {
+	payload := map[string]any{
+		"instrument": map[string]any{"exName": "Binance", "baseAsset": "ETH"},
+		"lastPrice":  2512.8,
+		"liqMapV2": map[string]any{
+			"2450.0": []any{[]any{2449.5, 10643829.59, 100.0, "h3"}},
+			"2575.0": []any{[]any{2573.6, 2617814.93, 25.0, "h1"}},
+		},
+	}
+
+	points, low, high := normalizeWebDataSourcePayload(payload)
+	if len(points) != 2 {
+		t.Fatalf("expected 2 liqMapV2 points, got %d: %+v", len(points), points)
+	}
+	if low != 2449.5 || high != 2573.6 {
+		t.Fatalf("expected derived range [2449.5,2573.6], got [%v,%v]", low, high)
+	}
+	if points[0].Exchange != "BINANCE" || points[0].Side != "long" {
+		t.Fatalf("expected Binance long below market, got %+v", points[0])
+	}
+	if points[1].Exchange != "BINANCE" || points[1].Side != "short" {
+		t.Fatalf("expected Binance short above market, got %+v", points[1])
+	}
+}
+
 func TestWebDataSourceChartFallbackSearchesReactOwnerState(t *testing.T) {
 	script := webDataSourceExtractChartPayloadJS(webDataSourceFindTargetPanelJS())
 	for _, marker := range []string{
@@ -223,5 +248,35 @@ func TestWebDataSourceCaptureDeadlineHonorsEarlierContext(t *testing.T) {
 	want := now.Add(18 * time.Second)
 	if delta := got.Sub(want); delta < -time.Millisecond || delta > time.Millisecond {
 		t.Fatalf("expected context deadline near %s, got %s", want, got)
+	}
+}
+
+func TestWebDataSourceLoginStateReadyRequiresUnlockedTargetChart(t *testing.T) {
+	tests := []struct {
+		name  string
+		state webDataSourceLoginState
+		want  bool
+	}{
+		{name: "unlocked target", state: webDataSourceLoginState{OnTarget: true, UnlockedCharts: 1}, want: true},
+		{name: "login gate", state: webDataSourceLoginState{OnTarget: true, LoginGate: true, UnlockedCharts: 1}, want: false},
+		{name: "wrong page", state: webDataSourceLoginState{OnTarget: false, UnlockedCharts: 1}, want: false},
+		{name: "protected chart missing", state: webDataSourceLoginState{OnTarget: true, UnlockedCharts: 0}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.state.ready(); got != tt.want {
+				t.Fatalf("ready()=%t, want %t for %+v", got, tt.want, tt.state)
+			}
+		})
+	}
+}
+
+func TestWebDataSourceInspectLoginJSChecksProtectedCharts(t *testing.T) {
+	script := webDataSourceInspectLoginJS()
+	for _, required := range []string{"登录解锁更多内容", ".echarts-for-react", "unlockedCharts", "/futures/liquidationmap"} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("login inspection script missing %q", required)
+		}
 	}
 }
