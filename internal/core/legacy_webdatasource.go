@@ -763,6 +763,20 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
+func webDataSourceCaptureDeadline(ctx context.Context, now time.Time, minimumWait time.Duration) time.Time {
+	deadline := now.Add((defaultWebDataSourceTimeoutSec - 2) * time.Second)
+	if ctxDeadline, ok := ctx.Deadline(); ok {
+		contextDeadline := ctxDeadline.Add(-2 * time.Second)
+		if contextDeadline.Before(deadline) {
+			deadline = contextDeadline
+		}
+	}
+	if minimumDeadline := now.Add(minimumWait); deadline.Before(minimumDeadline) {
+		deadline = minimumDeadline
+	}
+	return deadline
+}
+
 func webDataSourceChromeOptions(chromePath, profileDir string, startMinimized bool) []chromedp.ExecAllocatorOption {
 	windowPosition := "80,80"
 	if startMinimized {
@@ -3670,13 +3684,7 @@ func (m *WebDataSourceManager) captureWindowV2(session *webDataSourceSession, pr
 	var payload map[string]any
 	meta := capturedPayloadMeta{}
 	if err := m.runLoggedStep(session.taskCtx, progress, fmt.Sprintf("Capture %s payload", label), func() (string, error) {
-		deadline := time.Now().Add((defaultWebDataSourceTimeoutSec - 2) * time.Second)
-		if ctxDeadline, ok := session.taskCtx.Deadline(); ok {
-			deadline = ctxDeadline.Add(-2 * time.Second)
-		}
-		if minDeadline := time.Now().Add(8 * time.Second); deadline.Before(minDeadline) {
-			deadline = minDeadline
-		}
+		deadline := webDataSourceCaptureDeadline(session.taskCtx, time.Now(), 8*time.Second)
 		chartEligibleAt := time.Now().Add(2 * time.Second)
 		hookGrace := 1500 * time.Millisecond
 		var fallbackPayload map[string]any

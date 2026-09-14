@@ -201,3 +201,27 @@ func TestCloneChromeProfileForCaptureHonorsCanceledContext(t *testing.T) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
+
+func TestWebDataSourceCaptureDeadlineKeepsAttemptsBounded(t *testing.T) {
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	ctx, cancel := context.WithDeadline(context.Background(), now.Add(5*time.Minute))
+	defer cancel()
+
+	got := webDataSourceCaptureDeadline(ctx, now, 8*time.Second)
+	want := now.Add((defaultWebDataSourceTimeoutSec - 2) * time.Second)
+	if !got.Equal(want) {
+		t.Fatalf("expected per-attempt deadline %s, got %s", want, got)
+	}
+}
+
+func TestWebDataSourceCaptureDeadlineHonorsEarlierContext(t *testing.T) {
+	now := time.Now()
+	ctx, cancel := context.WithDeadline(context.Background(), now.Add(20*time.Second))
+	defer cancel()
+
+	got := webDataSourceCaptureDeadline(ctx, now, 8*time.Second)
+	want := now.Add(18 * time.Second)
+	if delta := got.Sub(want); delta < -time.Millisecond || delta > time.Millisecond {
+		t.Fatalf("expected context deadline near %s, got %s", want, got)
+	}
+}
