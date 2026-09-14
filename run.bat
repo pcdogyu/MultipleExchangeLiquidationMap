@@ -4,6 +4,9 @@ setlocal
 if /I "%~1"=="prune" goto prune
 if /I "%~1"=="_bootstrap" goto bootstrap
 if /I "%~1"=="_after_pull" goto afterPull
+if /I "%~1"=="_start_existing" goto startExisting
+
+cd /d "%~dp0"
 
 call :initVars
 set "BOOTSTRAP_SCRIPT=%TEMP%\multipleexchangeliquidationmap-run-bootstrap.bat"
@@ -13,6 +16,7 @@ call "%BOOTSTRAP_SCRIPT%" _bootstrap "%~f0"
 exit /b %errorlevel%
 
 :bootstrap
+cd /d "%~dp2"
 call :initVars
 call :pullLatestCode
 echo Reloading run.bat after git pull...
@@ -20,6 +24,7 @@ call "%~2" _after_pull
 exit /b %errorlevel%
 
 :afterPull
+cd /d "%~dp0"
 call :initVars
 call :loadVersionInfo
 call :resolvePaths
@@ -60,6 +65,12 @@ if exist "%EXE%" (
 )
 move /y "%NEW_EXE%" "%EXE%" >nul
 if errorlevel 1 goto fail
+
+:startExisting
+cd /d "%~dp0"
+call :initVars
+call :loadVersionInfo
+call :resolvePaths
 
 :start
 call :loadLocalEnv
@@ -154,6 +165,7 @@ for %%I in ("%DB_FILE%") do set "DB_DIR=%%~dpI"
 exit /b 0
 
 :prune
+cd /d "%~dp0"
 call :initVars
 call :resolvePaths
 set "PRUNE_ARGS=%~2 %~3 %~4 %~5 %~6 %~7 %~8 %~9"
