@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -115,11 +116,28 @@ func setupLogging(debug bool) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("open debug log %s: %w", logPath, err)
 	}
-	log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+	stdoutMode := os.FileMode(0)
+	if info, statErr := os.Stdout.Stat(); statErr == nil {
+		stdoutMode = info.Mode()
+	}
+	log.SetOutput(debugLogWriter(runtime.GOOS, stdoutMode, os.Stdout, logFile))
 	log.Printf("debug log enabled: %s", logPath)
 	return func() {
 		_ = logFile.Close()
 	}, nil
+}
+
+func debugLogWriter(goos string, stdoutMode os.FileMode, stdout, logFile io.Writer) io.Writer {
+	// A Windows process started by an older upgrade launcher can inherit an
+	// anonymous stdout pipe whose reader disappears or stops draining. The
+	// synchronous standard logger then blocks every caller (including the
+	// web-data-source timeout path). Keep console mirroring for an interactive
+	// terminal, but make the durable log file the sole sink for redirected
+	// Windows processes.
+	if goos == "windows" && stdoutMode&os.ModeCharDevice == 0 {
+		return logFile
+	}
+	return io.MultiWriter(stdout, logFile)
 }
 
 func (a *App) window() int {
